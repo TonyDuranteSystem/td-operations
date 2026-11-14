@@ -1,16 +1,16 @@
 import { NextRequest } from "next/server"
-import { requireAdminRoute, requireAdminJsonRoute } from "@/lib/auth/require-admin-route"
+import { requireBookingStaffRoute, requireBookingStaffJsonRoute } from "@/lib/auth/require-booking-staff-route"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { calendlyCtxFromEnv } from "@/lib/calendly/api"
 import { makeFreeLink } from "@/lib/booking/make-link"
 import { listLinks } from "@/lib/booking/links"
 import { BAD_BODY, currentAdmin, fail, ok, personRefFrom, readJsonObject, refuseWhileOff } from "@/lib/booking/route-helpers"
 
-/** Booking page: "Links I made" (GET) and making a new FREE link (POST). Admin only. */
+/** Booking page: "Links I made" (GET) and making a new FREE link (POST). Any staff (administrator or team). */
 export const dynamic = "force-dynamic"
 
 export async function GET() {
-  const denied = await requireAdminRoute()
+  const denied = await requireBookingStaffRoute()
   if (denied) return denied
   const r = await listLinks(supabaseAdmin, new Date())
   if ("error" in r) return fail(500, r.error)
@@ -18,7 +18,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const denied = await requireAdminJsonRoute(req)
+  const denied = await requireBookingStaffJsonRoute(req)
   if (denied) return denied
   const off = await refuseWhileOff()
   if (off) return off

@@ -1,7 +1,7 @@
 "use client"
 
 /**
- * Booking page (Stage 1b) — the screen: "Make a link" on the left, "Links I made" on the right, and the "calls need you" line underneath.
+ * Booking page, tab "Links and calls" (Stage 1b; open to any staff login since dev job a1839d8b) — the screen: "Make a link" on the left, "Links I made" on the right, and the "calls need you" line underneath.
  * "Calls to check" is a section of this page (Antonio, 14 Nov: the day-to-day work Calendar is a different page and stays as it is). The words are Antonio's, from the approved mockup. Parts that belong to later stages (the week calendar, clients' referral links, paying, a referrer) are not here.
  * A computer screen only: nothing is drawn for a phone.
  */
@@ -74,13 +74,7 @@ export function BookingWorkspace({
   return (
     <div className="mx-auto max-w-[1360px] space-y-5" data-testid="booking-page">
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            Booking <span className="ml-1 rounded-full bg-zinc-200 px-2 py-0.5 align-middle text-xs font-semibold text-zinc-700">Only you</span>
-            {off && <span className="ml-1.5 rounded-full bg-amber-200 px-2 py-0.5 align-middle text-xs font-semibold text-amber-900" data-testid="off-tag">Off</span>}
-          </h1>
-          <p className="text-sm text-zinc-600">A link for every kind of call. Only you can see this page.</p>
-        </div>
+        <p className="text-sm text-zinc-600">A link for every kind of call. Everyone on the team can see this tab.</p>
         <p className="text-sm text-zinc-600">{dateText} · times in New York</p>
       </div>
 

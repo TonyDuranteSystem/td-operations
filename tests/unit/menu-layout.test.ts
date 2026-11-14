@@ -27,7 +27,7 @@ import { isNavItemActive, onWhatsappView } from '@/lib/nav/nav-active'
 
 const PAGES = [
   'td-talk', 'home', 'research', 'notes', 'inbox', 'whatsapp', 'marketing-chat', 'portal-chats', 'team-chat', 'dev-board',
-  'storage', 'leads', 'marketing', 'contacts', 'accounts', 'tools', 'finance', 'owner', 'tax', 'calendar',
+  'storage', 'booking', 'marketing', 'contacts', 'accounts', 'tools', 'finance', 'owner', 'tax', 'calendar',
 ]
 
 const ids = (l: MenuLayout) => l.rows.flatMap(r => (r.type === 'page' ? [r.id] : r.children))
@@ -42,7 +42,7 @@ describe('standardLayout', () => {
     expect(group(l, 'g-social').name).toBe('TD Social')
     expect(group(l, 'g-social').children).toEqual(['td-talk', 'inbox', 'marketing-chat', 'whatsapp', 'team-chat', 'portal-chats'])
     expect(group(l, 'g-accounting').children).toEqual(['finance', 'owner'])
-    expect(group(l, 'g-network').children).toEqual(['leads', 'contacts', 'accounts'])
+    expect(group(l, 'g-network').children).toEqual(['booking', 'contacts', 'accounts'])
   })
   it('stands each group where its first member stood', () => {
     expect(l.rows[0].id).toBe('g-social')
@@ -62,7 +62,7 @@ describe('standardLayout', () => {
 
 describe('layoutFromLegacyOrder', () => {
   it('keeps the old order for the main list and puts each group where its earliest member was', () => {
-    const legacy = ['home', 'notes', 'leads', 'td-talk', 'tools', 'research']
+    const legacy = ['home', 'notes', 'booking', 'td-talk', 'tools', 'research']
     const l = layoutFromLegacyOrder(legacy, PAGES)
     const order = l.rows.map(r => r.id)
     // rows the old list knew come out in the OLD order: home, notes, g-network (leads), g-social (td-talk), tools, research
@@ -188,9 +188,9 @@ describe('editing', () => {
   })
   it('movePage into a group at the end, and between two pages', () => {
     const a = movePage(base, 'home', 'g-network')
-    expect(group(a, 'g-network').children).toEqual(['leads', 'contacts', 'accounts', 'home'])
-    const b = movePage(base, 'home', 'g-network', { after: 'leads' })
-    expect(group(b, 'g-network').children).toEqual(['leads', 'home', 'contacts', 'accounts'])
+    expect(group(a, 'g-network').children).toEqual(['booking', 'contacts', 'accounts', 'home'])
+    const b = movePage(base, 'home', 'g-network', { after: 'booking' })
+    expect(group(b, 'g-network').children).toEqual(['booking', 'home', 'contacts', 'accounts'])
   })
   it('movePage never loses or duplicates a page, and ignores bad targets', () => {
     expect(ids(movePage(base, 'home', 'g-network')).sort()).toEqual([...PAGES].sort())
@@ -212,7 +212,7 @@ describe('editing', () => {
   })
   it('reorder: dropping a page on a page of another container puts it before that page there', () => {
     const l = reorder(base, 'home', 'contacts')
-    expect(group(l, 'g-network').children).toEqual(['leads', 'home', 'contacts', 'accounts'])
+    expect(group(l, 'g-network').children).toEqual(['booking', 'home', 'contacts', 'accounts'])
   })
   it('reorder: dropping a page on a group puts it inside at the end', () => {
     const l = reorder(base, 'home', 'g-accounting')
@@ -229,7 +229,7 @@ describe('editing', () => {
   it("reorder: dropping a page on the group it is ALREADY in (name bar, a gap, the padding) leaves it where it is — not at the end", () => {
     expect(reorder(base, 'inbox', 'g-social')).toBe(base)
     const l = reorder(base, 'home', 'g-network') // from outside it still goes in, at the end
-    expect(group(l, 'g-network').children).toEqual(['leads', 'contacts', 'accounts', 'home'])
+    expect(group(l, 'g-network').children).toEqual(['booking', 'contacts', 'accounts', 'home'])
   })
   it('reorder with the same id changes nothing', () => {
     expect(reorder(base, 'home', 'home')).toBe(base)
@@ -306,8 +306,29 @@ describe('isNavItemActive', () => {
     expect(isNavItemActive({ id: 'calendar', href: '/new-calendar' }, '/calendar', '')).toBe(true)
     expect(isNavItemActive({ id: 'marketing', href: '/marketing-leads' }, '/marketing/chat', '')).toBe(false)
   })
+  it('the Booking item (which holds the Leads list) is lit on its own page, on a lead page and on the old Leads address — and nothing else is lit on those', () => {
+    const booking = { id: 'booking', href: '/booking' }
+    for (const path of ['/booking', '/booking/anything', '/leads', '/leads/0000-1111']) expect(isNavItemActive(booking, path, ''), path).toBe(true)
+    for (const path of ['/', '/accounts', '/bookings', '/leadsx', '/marketing-leads', '/marketing/leads']) expect(isNavItemActive(booking, path, ''), path).toBe(false)
+  })
   it('onWhatsappView is false off the inbox', () => {
     expect(onWhatsappView('/accounts', '?channel=whatsapp')).toBe(false)
+  })
+})
+
+describe('the Leads row was replaced by the Booking row (dev job a1839d8b)', () => {
+  it("a layout saved before the change still holds 'leads': that page is dropped, and Booking comes back in its standard Network group, once", () => {
+    const old: MenuLayout = { v: 1, rows: [{ type: 'page', id: 'home' }, { type: 'group', id: 'g-network', name: 'Network', children: ['leads', 'contacts', 'accounts'] }] }
+    const r = reconcileLayout(old, PAGES)
+    expect(ids(r).filter(x => x === 'leads')).toEqual([])
+    expect(group(r, 'g-network').children).toEqual(['contacts', 'accounts', 'booking'])
+    expect([...ids(r)].sort()).toEqual([...PAGES].sort())
+  })
+  it("a person who deleted the Network group gets Booking at the end of the main list (never lost)", () => {
+    const old: MenuLayout = { v: 1, rows: [{ type: 'page', id: 'home' }, { type: 'page', id: 'leads' }, { type: 'page', id: 'contacts' }] }
+    const r = reconcileLayout(old, PAGES)
+    expect(ids(r)).toContain('booking')
+    expect(ids(r)).not.toContain('leads')
   })
 })
 
@@ -317,7 +338,7 @@ describe('pickLayoutOnLoad — which layout the menu starts from', () => {
   if (!mine.ok || !mine.layout) throw new Error('setup')
   const account = movePage(mine.layout, 'home', mine.id!) // what the account has
   const edited = movePage(account, 'notes', mine.id!) // an edit made here after that
-  const legacy = ['notes', 'home', 'leads']
+  const legacy = ['notes', 'home', 'booking']
 
   it('an edit that never reached the account (failed save) wins after a reload, and is sent again', () => {
     const r = pickLayoutOnLoad({ status: 'saved', server: account, local: { layout: edited, synced: false }, legacy: null, pageIds: PAGES })

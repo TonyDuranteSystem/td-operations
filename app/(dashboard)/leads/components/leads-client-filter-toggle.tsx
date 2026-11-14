@@ -2,6 +2,7 @@
 
 import type { ReactNode } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { leadsListHref } from '@/lib/leads/leads-url'
 import { Target, UserCheck, CheckCircle2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -32,7 +33,7 @@ export function LeadsClientFilterToggle({ currentFilter, leadsCount, clientsCoun
     // A different group is a different row count — the current page number
     // may no longer exist (matches the table/kanban toggle's own reset).
     params.delete('page')
-    router.push(`/leads?${params.toString()}`)
+    router.push(leadsListHref(params))
   }
 
   const tab = (filter: ClientFilter, icon: ReactNode, label: string, count: number) => (
