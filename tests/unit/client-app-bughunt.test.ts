@@ -64,7 +64,8 @@ describe('finding 2: the Pay switch covers the Overview "View Offer" banner', ()
 describe('finding 1: the page tells the app which company it shows', () => {
   it('posts the selection to the app, and the app door still honours only the person\'s own companies', () => {
     const frame = read('components/portal/client-app-frame.tsx')
-    expect(frame).toMatch(/postMessage\(`selection:\$\{selectionQuery\}`\)/)
+    // sent through the one helper that knows both the iPhone door and the Android door (lib/portal-app/native-bridge.ts)
+    expect(frame).toMatch(/postToApp\(`selection:\$\{selectionQuery\}`\)/)
     expect(read('lib/portal-app/gate.ts')).toContain('resolveSelectedEntity')
   })
 })
