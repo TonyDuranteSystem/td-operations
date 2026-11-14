@@ -1,0 +1,13 @@
+{
+  "title": "The signed contract, on the company page",
+  "tag": "new",
+  "text": "A company's page now has a Signed contract line in Company Info, right under How they became our client. Press Open and the signed PDF shows in a floating window on top of the page. You can move it, resize it, and keep working on the page behind it. A company with no contract on record says so, and an annual renewal agreement is shown too, named as a renewal. Only the contracts that belong to this company are listed. Amounts are still corrected from the person's page.",
+  "points": [
+    "Open a company and look in Company Info, under How they became our client.",
+    "Each signed contract has a line with its name and the day it was signed, and an Open button.",
+    "Open shows the PDF in a floating window. If it cannot show it, it offers to open it in a new tab.",
+    "A company with no signed contract on record says: No signed contract in the system.",
+    "An annual renewal agreement is listed as Annual renewal agreement with its year, after the contract the client signed when they became a client."
+  ],
+  "screenshot": "account-signed-contract-link.png"
+}

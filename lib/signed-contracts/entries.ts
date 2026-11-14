@@ -46,13 +46,13 @@ export interface CorrectionRow {
 }
 
 /** The newest signing row of each offer (a retry or re-sign adds rows to the same offer). */
-export function newestPerOffer(rows: ContractRow[]): ContractRow[] {
+export function newestPerOffer<T extends { id: string; offer_token: string; created_at: string | null }>(rows: T[]): T[] {
   const sorted = [...rows].sort((a, b) => {
     const byDate = String(b.created_at ?? '').localeCompare(String(a.created_at ?? ''))
     return byDate !== 0 ? byDate : b.id.localeCompare(a.id)
   })
   const seen = new Set<string>()
-  const out: ContractRow[] = []
+  const out: T[] = []
   for (const r of sorted) {
     if (seen.has(r.offer_token)) continue
     seen.add(r.offer_token)
