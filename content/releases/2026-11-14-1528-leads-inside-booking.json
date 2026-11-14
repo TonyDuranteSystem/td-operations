@@ -1,0 +1,11 @@
+{
+  "title": "Leads now lives inside Booking",
+  "tag": "improved",
+  "text": "The Leads page has moved into the Booking page, as its first tab. Open Booking in the left menu (it is where Leads used to be) and Leads is right there: the same list, the same filters, the Existing Clients tab, the board and the lead windows. An old link or bookmark to Leads opens the same list in its new place. Booking is now open to everyone on the team, not only the administrator. Its other tab, Links and calls, is still turned off for now and says so; Leads works the same either way.",
+  "points": [
+    "Booking is in the left menu where Leads was",
+    "An old Leads link keeps its search and filters",
+    "Links and calls (Calendly links and calls to check) is still turned off"
+  ],
+  "screenshot": "booking-leads-tab.png"
+}

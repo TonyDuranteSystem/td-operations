@@ -4,6 +4,7 @@ import { useState, useEffect, useTransition } from 'react'
 import { X, Loader2, Trash2, AlertTriangle } from 'lucide-react'
 import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
+import { leadsListHref } from '@/lib/leads/leads-url'
 import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-dialog'
 import type { DryRunResult } from '@/lib/operations/destructive'
 
@@ -89,7 +90,7 @@ export function DeleteLeadDialog({ open, onClose, leadId, leadName }: DeleteLead
 
         toast.success(data.message || `${leadName} deleted`)
         onClose()
-        router.push('/leads')
+        router.push(leadsListHref())
         router.refresh()
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'An error occurred')

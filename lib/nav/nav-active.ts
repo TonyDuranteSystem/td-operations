@@ -21,6 +21,10 @@ export function isNavItemActive(item: { id: string; href: string }, pathname: st
   if (item.id === 'calendar') {
     return pathname === '/calendar' || pathname.startsWith('/calendar/') || pathname === '/new-calendar' || pathname.startsWith('/new-calendar/')
   }
+  // The Booking item holds the Leads list (its first tab) AND stays lit on a lead's own page (/leads/<id>) and on the old /leads address, so the person always sees where they are.
+  if (item.id === 'booking') {
+    return pathname === '/booking' || pathname.startsWith('/booking/') || pathname === '/leads' || pathname.startsWith('/leads/')
+  }
   const path = item.href.split(/[?#]/)[0]
   if (path === '/') return pathname === '/'
   return pathname === path || pathname.startsWith(path + '/')
