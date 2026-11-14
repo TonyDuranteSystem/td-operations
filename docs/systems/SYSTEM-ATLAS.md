@@ -103,9 +103,9 @@ _(bold = registered and firing; plain = present but not wired, e.g. a manual uti
 <!-- GENERATED:surface -->
 _Regenerated 2026-11-14 by directory scan._
 
-- CRM dashboard pages (57): `accounts` `addresses` `audit` `bofa-intake` `calendar` `captures` `cases` `catalog` `client-health` `clients` `code-tasks` `config` `contacts` `conversations` `dashboard` `dev-board` `dev-tools` `email-templates` `exceptions` `finance` `flows` `forms` `inbox` `intake` `invoice-aging` `invoice-settings` `leads` `marketing-leads` `new-calendar` `notes` `onboarding-review` `owner` `partners` `payments` `pipeline` `pipeline-overview` `portal-chats` `portal-launch` `reconciliation` `referrals` `releases` `research` `sandbox-mail` `service-catalog` `services` `storage` `storage-app` `system-health` `tasks` `tax-returns` `td-talk` `team-chat` `team-management` `tools` `trackers` `workflow-issues` `workflows`
+- CRM dashboard pages (58): `accounts` `addresses` `audit` `bofa-intake` `booking` `calendar` `captures` `cases` `catalog` `client-health` `clients` `code-tasks` `config` `contacts` `conversations` `dashboard` `dev-board` `dev-tools` `email-templates` `exceptions` `finance` `flows` `forms` `inbox` `intake` `invoice-aging` `invoice-settings` `leads` `marketing-leads` `new-calendar` `notes` `onboarding-review` `owner` `partners` `payments` `pipeline` `pipeline-overview` `portal-chats` `portal-launch` `reconciliation` `referrals` `releases` `research` `sandbox-mail` `service-catalog` `services` `storage` `storage-app` `system-health` `tasks` `tax-returns` `td-talk` `team-chat` `team-management` `tools` `trackers` `workflow-issues` `workflows`
 - Client portal pages (31): `activity` `addresses` `banks` `billing` `change-password` `chat` `company` `customers` `deadlines` `documents` `flows` `forgot-password` `form` `guide` `invoices` `login` `members` `notifications` `offer` `partner` `profile` `referrals` `reset-password` `services` `settings` `sign` `tax-documents` `tax-financials` `td-communication` `team` `wizard`
-- API route groups (103)
+- API route groups (104)
 - Code modules (100): `accounts` `ai-agent` `app` `app-mode` `archive` `audit` `auth` `billing` `bofa-intake` `booking` `booking-links` `calendly` `captures` `case-view` `catalog` `chat` `circleback` `closure` `code-tasks` `contacts` `contracts` `crm-storage` `crm-store` `cron` `crypto` `decisions` `dev-tracker` `documents` `email` `email-index` `email-store` `embed` `errors` `esign` `exceptions` `fax` `finance` `flows` `formation` `forms` `forms-hub` `harbor-compliance` `hooks` `inbox` `incoming-payments` `infra` `internal` `invoices` `itin` `job-notes` `jobs` `leads` `lease` `legal` `marketing` `mcp` `media` `members` `messaging` `nav` `new-calendar` `notes` `notifications` `oa` `offers` `open-services` `operations` `partners` `payments` `pdf` `per-record-activity` `plan-invoices` `portal` `portal-app` `portal-chats` `public-forms` `push` `release` `research` `scan` `schemas` `security` `services` `signed-contracts` `ss4` `storage` `storage-app` `supabase` `system-health` `talk` `tasks` `tax` `td-communication` `team` `theme` `todo-board` `types` `ui` `utils` `windows`
 - Database tables: 322 _(ground truth: `lib/database.types.ts`)_
 <!-- /GENERATED:surface -->
@@ -187,14 +187,14 @@ _Regenerated 2026-11-14. Every subsystem doc under `docs/systems/` (61 docs), wi
 - [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-11-09)_
 - [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-11-13)_
 - [bofa-intake.md](bofa-intake.md) — Bank Application Intake (Bank of America, one-time link) _(verified 2026-11-06)_
-- [booking.md](booking.md) — Booking page — Calendly links per audience (Stage 1a: the invisible engine) _(verified 2026-11-14)_
+- [booking.md](booking.md) — Booking page — Calendly links per audience (Stage 1a engine + Stage 1b screens) _(verified 2026-11-14)_
 - [captures.md](captures.md) — Capture / Share (screenshot tool) _(verified 2026-11-05)_
 - [client-app.md](client-app.md) — Client iPhone App (MyLLC Manager 2.0) _(verified 2026-11-14)_
 - [client-decision-requests.md](client-decision-requests.md) — Client Decision Requests _(verified 2026-10-20)_
 - [client-threads.md](client-threads.md) — Client Threads _(verified 2026-09-03)_
 - [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-11-10)_
 - [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-11-13)_
-- [dashboard-navigation.md](dashboard-navigation.md) — Dashboard Navigation (the left menu, and opening pages without leaving the current one) _(verified 2026-11-12)_
+- [dashboard-navigation.md](dashboard-navigation.md) — Dashboard Navigation (the left menu, and opening pages without leaving the current one) _(verified 2026-11-14)_
 - [dev-tracker.md](dev-tracker.md) — Dev-Tracker Board _(verified 2026-07-16)_
 - [documents.md](documents.md) — Documents & Storage _(verified 2026-11-10)_
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
@@ -209,7 +209,7 @@ _Regenerated 2026-11-14. Every subsystem doc under `docs/systems/` (61 docs), wi
 - [marketing.md](marketing.md) — TD Marketing (Rocco's and Ale's sales workspace) _(verified 2026-11-13)_
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-11-10)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-11-13)_
-- [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-11-11)_
+- [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-11-14)_
 - [offers.md](offers.md) — Offers & Contracts _(verified 2026-11-11)_
 - [onboarding.md](onboarding.md) — Onboarding _(verified 2026-11-13)_
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-22)_

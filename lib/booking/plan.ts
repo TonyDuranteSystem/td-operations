@@ -36,6 +36,11 @@ export interface LinkPlanInput {
   minutes: unknown
   payment?: { amount: unknown; currency: unknown; label?: unknown; confirmed?: boolean } | null
   referrer?: { eligible: boolean; hasCode: boolean; contactId?: string | null; code?: string | null } | null
+  /**
+   * The "attach to the first booking only" tick on the Booking page (Stage 1b). A standard 30-minute link is reusable by default; with this on, the FIRST booking
+   * closes it on our side (a later booking is saved as usual and a card asks). Any other length, a paid link and a referrer are one-time anyway.
+   */
+  firstBookingOnly?: boolean
 }
 
 export interface LinkPlan {
@@ -120,7 +125,7 @@ export function decideLinkPlan(input: LinkPlanInput): LinkPlanResult {
   if (errors.length) return { ok: false, errors }
 
   // A referrer earns a credit for whoever claims the link, so the link must close on its first booking (never the reusable standard link, even at 30 minutes).
-  const once = minutes !== STANDARD_MINUTES || payment !== null || referrer !== null
+  const once = minutes !== STANDARD_MINUTES || payment !== null || referrer !== null || input.firstBookingOnly === true
   const template: TemplateRole = input.person.state === "new" && payment === null && rule.sales_template && recorder === "lead" ? "sales" : "plain"
 
   return {

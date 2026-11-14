@@ -1,0 +1,6 @@
+{
+  "title": "The Booking page screens are built (still switched off)",
+  "tag": "behind-the-scenes",
+  "text": "The screens of the Booking page are in, hidden until it is switched on. Only you will see a Booking item in the menu: pick a person (or someone new), the kind of call and the length, check what the system will do when it is booked, then copy the link. A list shows every link you made and what happened to it, and you can stop one. A new tab on the Calendar, Calls to check, will hold the bookings the system could not settle by itself, with buttons such as Same person: link this email. A link that is not valid just takes the visitor to the normal booking page. Also fixed: a second call on the same day no longer disappears from a contact's Booked calls.",
+  "points": []
+}

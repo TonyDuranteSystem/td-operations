@@ -91,11 +91,37 @@ describe("readers are tolerant", () => {
 
 describe("what the contact page shows", () => {
   const row = (over: Partial<ContactCallRow> = {}): ContactCallRow => ({ id: "r", contact_id: "C1", account_id: null, booking_link_id: null, booked_at: null, scheduled_start: "2026-11-20T15:00:00Z", scheduled_date: "2026-11-20", calendly_event_uri: null, event_type_name: null, state: "scheduled", moved_to: null, ...over })
-  it("a booked call is hidden once a call summary exists for the same New York day", () => {
+  it("a booked call is hidden once a call summary arrives after its start", () => {
     expect(bookedCallsToShow([row()], ["2026-11-20T18:00:00Z"])).toEqual([])
     expect(bookedCallsToShow([row()], ["2026-11-19T18:00:00Z"])).toHaveLength(1)
-    expect(bookedCallsToShow([row({ scheduled_date: null })], ["2026-11-20T18:00:00Z"])).toHaveLength(1)
+    expect(bookedCallsToShow([row({ scheduled_start: null, scheduled_date: null })], ["2026-11-20T18:00:00Z"])).toHaveLength(1)
     expect(bookedCallsToShow([row()], [])).toHaveLength(1)
+  })
+  it("TWO calls on the same day: the first call's summary hides only the first (the Stage 1a bug hid both)", () => {
+    const morning = row({ id: "A", scheduled_start: "2026-11-20T15:00:00Z" })
+    const afternoon = row({ id: "B", scheduled_start: "2026-11-20T19:00:00Z" })
+    expect(bookedCallsToShow([morning, afternoon], ["2026-11-20T16:30:00Z"]).map((r) => r.id)).toEqual(["B"])
+    expect(bookedCallsToShow([morning, afternoon], ["2026-11-20T20:30:00Z"]).map((r) => r.id)).toEqual(["A"])
+    expect(bookedCallsToShow([morning, afternoon], ["2026-11-20T16:30:00Z", "2026-11-20T20:30:00Z"])).toEqual([])
+    expect(bookedCallsToShow([morning, afternoon], [])).toHaveLength(2)
+  })
+  it("one summary hides at most one call, even when two calls are close together", () => {
+    const a = row({ id: "A", scheduled_start: "2026-11-20T15:00:00Z" })
+    const b = row({ id: "B", scheduled_start: "2026-11-20T15:30:00Z" })
+    expect(bookedCallsToShow([a, b], ["2026-11-20T17:00:00Z"]).map((r) => r.id)).toEqual(["A"])
+  })
+  it("a summary far from every call (the next day, or 9 hours later) hides nothing; one a little BEFORE the planned start still matches", () => {
+    expect(bookedCallsToShow([row()], ["2026-11-21T15:00:00Z"])).toHaveLength(1)
+    expect(bookedCallsToShow([row()], ["2026-11-21T00:30:00Z"])).toHaveLength(1)
+    expect(bookedCallsToShow([row()], ["2026-11-20T14:30:00Z"])).toEqual([])
+  })
+  it("a moved or cancelled call is always shown (with its chip) and never uses up a summary", () => {
+    const moved = row({ id: "M", state: "moved", scheduled_start: "2026-11-20T15:00:00Z" })
+    const live = row({ id: "L", scheduled_start: "2026-11-20T15:30:00Z" })
+    expect(bookedCallsToShow([moved, live], ["2026-11-20T17:00:00Z"]).map((r) => r.id)).toEqual(["M"])
+  })
+  it("ignores an unreadable summary date", () => {
+    expect(bookedCallsToShow([row()], ["not a date", ""])).toHaveLength(1)
   })
   it("chips: a past call still 'scheduled' is 'Not confirmed', never 'Scheduled'", () => {
     expect(contactCallChip(row(), "2026-11-13")).toBe("Scheduled")

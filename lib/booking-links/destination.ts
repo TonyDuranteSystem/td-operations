@@ -19,6 +19,16 @@ function isCalendlyUrl(u: URL): boolean {
   return u.protocol === "https:" && u.hostname === CALENDLY_HOST && u.port === "" && u.username === "" && u.password === ""
 }
 
+/** true only for a plain https://calendly.com/... address (no other host, no credentials, no port). Used before an address is stored or followed. */
+export function isPlainCalendlyUrl(text: unknown): boolean {
+  if (typeof text !== "string") return false
+  try {
+    return isCalendlyUrl(new URL(text))
+  } catch {
+    return false
+  }
+}
+
 /** Returns the full address, or null when the stored address is not a plain https calendly.com address (the caller answers "not available", never redirects). */
 export function buildDestination(storedUrl: string | null | undefined, parts: DestinationParts): string | null {
   if (!storedUrl) return null

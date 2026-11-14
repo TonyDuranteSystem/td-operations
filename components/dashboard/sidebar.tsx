@@ -15,6 +15,7 @@ import {
   Settings,
   Calendar,
   CalendarDays,
+  CalendarPlus,
   LogOut,
   Menu,
   X,
@@ -89,6 +90,8 @@ interface SidebarProps {
   extraNavIds?: string[]
   badgeCounts?: { inbox: number; whatsapp?: number; tasks: number; portalChats?: number; teamChat?: number; talk?: number; overdueInvoices?: number; reconciliationReview?: number; commUnread?: number; marketing?: number; devBoard?: number; invoicesToRaise?: number }
   enabledFeatures?: string[]
+  /** further menu features switched on for this login (the Booking item); kept apart so the Calendar's own flag line stays as pinned */
+  moreFeatures?: string[]
   /** The signed-in login — keys this computer's own copy of the menu layout. */
   userId: string
   /** The layout saved on this login (read on the server), or null when the person has not changed the standard one. */
@@ -120,6 +123,8 @@ const defaultNavigation: NavItem[] = [
   { id: 'leads', name: 'Leads', href: '/leads', icon: Target, tooltip: 'New inquiries that haven\'t signed yet. First stage of the client journey.' },
   { id: 'marketing', name: 'Marketing', href: '/marketing-leads', icon: Megaphone, adminOnly: true, tooltip: 'TD Marketing — the master view of Rocco\'s team: leads from the ads, who is working them, what needs you today, and the Meta connection. Admin only.' },
   { id: 'intake', name: 'Intake', href: '/intake', icon: PhoneIncoming, tooltip: 'Review new Calendly bookings — create leads, link calls, or dismiss.' },
+  // Booking page (dev job 19d2654a): admin only AND only while the `booking` setting is page/live (the layout passes the 'booking' feature), so it ships hidden.
+  { id: 'booking', name: 'Booking', href: '/booking', icon: CalendarPlus, adminOnly: true, featureFlag: 'booking', tooltip: 'Make a Calendly link for a chosen person and kind of call (lead, client, partner, private), and see the links you made. Admin only.' },
   { id: 'contacts', name: 'Contacts', href: '/contacts', icon: UserCheck, tooltip: 'All people in the system. Each contact can own one or more LLCs (accounts).' },
   { id: 'accounts', name: 'Accounts', href: '/accounts', icon: Building2, tooltip: 'LLCs and companies. Each account has services, documents, invoices, and a timeline.' },
   { id: 'conversations', name: 'Conversations', href: '/conversations', icon: Tag, tooltip: 'Client threads tagged by client + topic — pull up everything for a client or a topic. Auto-tagged from #td-support.' },
@@ -174,10 +179,13 @@ export function Sidebar({
   isOwner = false,
   extraNavIds = [],
   badgeCounts,
-  enabledFeatures = [],
+  enabledFeatures: enabledFeaturesProp = [],
+  moreFeatures = [],
   initialMenuLayout = null,
   menuLayoutStatus = 'none',
 }: SidebarProps) {
+  // The Calendar's flag arrives as `enabledFeatures`, any further flag (the Booking item) as `moreFeatures`; the rows below read one merged list.
+  const enabledFeatures = [...enabledFeaturesProp, ...moreFeatures]
   const pathname = usePathname()
   // Inbox and WhatsApp are the same page told apart by the address, so the menu has to read the query too.
   const search = useSearchParams()?.toString() ?? ''

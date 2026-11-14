@@ -41,6 +41,8 @@ import type { WaitingRow } from '@/lib/incoming-payments/classify'
 import { ApplicationsToReviewTab } from '@/components/bofa-intake/applications-tab'
 import { InvoicesToRaiseTab } from '@/components/plan-invoices/invoices-to-raise-tab'
 import type { InvoicesToRaise } from '@/lib/plan-invoices/types'
+import { CallsToCheckTab } from '@/components/calls-to-check/calls-tab'
+import type { CallsTabData } from '@/lib/booking/calls-tab'
 import type { WaitingApplication } from '@/lib/bofa-intake/waiting'
 
 const BASE = '/new-calendar'
@@ -315,9 +317,19 @@ function InvoicesCount({ invoices }: { invoices: InvoicesToRaise | null }) {
   )
 }
 
+/** The number of booked calls waiting for a look, in red when there is any. Nothing when it could not be read (the tab itself then says so). */
+function CallsCount({ calls }: { calls: CallsTabData }) {
+  if (calls.count === null) return null
+  return (
+    <span className={`ml-1 rounded-full px-2 py-0.5 font-mono text-xs ${calls.count > 0 ? 'bg-red-100 text-red-700' : 'bg-zinc-100 text-zinc-600'}`} data-testid="calls-count">
+      {calls.count}
+    </span>
+  )
+}
+
 /** `model` is null on the What's New tab: that tab does not use the Open services data, so the page does not load it (and a failed
  *  Open services read can never hide the news). */
-export function NewCalendarView({ model, params, greeting, payments, applications = null, showApplications = false, invoices = null }: { model: CalendarModel | null; params: NewCalendarParams; greeting: string; payments: WaitingRow[] | null; invoices?: InvoicesToRaise | null; applications?: WaitingApplication[] | null; showApplications?: boolean }) {
+export function NewCalendarView({ model, params, greeting, payments, applications = null, showApplications = false, invoices = null, calls = null }: { model: CalendarModel | null; params: NewCalendarParams; greeting: string; payments: WaitingRow[] | null; invoices?: InvoicesToRaise | null; applications?: WaitingApplication[] | null; showApplications?: boolean; calls?: CallsTabData | null }) {
   return (
     <div className="space-y-4 p-6 lg:p-8">
       <LiveRefresh />
@@ -333,7 +345,7 @@ export function NewCalendarView({ model, params, greeting, payments, application
 
       <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
         Every open job, with its step and who the next move belongs to. <b>Open workspace</b> opens the job in a window: act there, and this list updates by itself.
-        What&apos;s New is where you tick a client&apos;s note <b>Handled</b>. Payments to confirm lists Stripe payments nobody has said what they were for. Invoices to raise lists the later parts of an offer paid in parts that are due: nothing is raised by itself, you click.{showApplications && <> Applications to review lists the bank applications clients submitted that we have not sent on yet.</>} Renewals, annual reports and Mark Filed are on the last tab.
+        What&apos;s New is where you tick a client&apos;s note <b>Handled</b>. Payments to confirm lists Stripe payments nobody has said what they were for. Invoices to raise lists the later parts of an offer paid in parts that are due: nothing is raised by itself, you click.{showApplications && <> Applications to review lists the bank applications clients submitted that we have not sent on yet.</>}{calls && <> Calls to check lists the booked calls the system could not settle by itself.</>} Renewals, annual reports and Mark Filed are on the last tab.
       </div>
 
       <nav className="flex gap-1 border-b text-sm" aria-label="Calendar pages">
@@ -382,6 +394,15 @@ export function NewCalendarView({ model, params, greeting, payments, application
             Applications to review <ApplicationsCount applications={applications} />
           </Link>
         ))}
+        {calls && (params.tab === 'calls' ? (
+          <span className="-mb-px border-b-2 border-blue-600 px-3 py-2 font-semibold text-foreground" aria-current="page">
+            Calls to check <CallsCount calls={calls} />
+          </span>
+        ) : (
+          <Link href={hrefFor(withTab(params, 'calls'))} prefetch={false} className="-mb-px border-b-2 border-transparent px-3 py-2 text-zinc-600 hover:text-foreground">
+            Calls to check <CallsCount calls={calls} />
+          </Link>
+        ))}
         <Link href="/calendar" prefetch={false} className="-mb-px border-b-2 border-transparent px-3 py-2 text-zinc-600 hover:text-foreground">
           Renewals &amp; annual reports →
         </Link>
@@ -395,6 +416,8 @@ export function NewCalendarView({ model, params, greeting, payments, application
         <ApplicationsToReviewTab rows={applications} />
       ) : params.tab === 'invoices' ? (
         <InvoicesToRaiseTab rows={invoices ? invoices.rows : null} />
+      ) : params.tab === 'calls' && calls ? (
+        <CallsToCheckTab cards={calls.cards} />
       ) : model ? (
         <JobsBody model={model} params={params} />
       ) : null}
