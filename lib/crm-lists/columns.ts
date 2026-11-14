@@ -65,7 +65,7 @@ export const ACCOUNT_COLUMNS: readonly ColumnDef[] = [
 /** What a list shows until the person chooses: exactly what the lists showed before the dropdown existed. */
 const DEFAULTS: Record<ListId, readonly string[]> = {
   contacts: ['email', 'citizenship', 'portal_stage'],
-  accounts: ['contact', 'type', 'status', 'state_of_formation', 'overdue'],
+  accounts: ['type', 'status', 'state_of_formation', 'contact', 'overdue'],
 }
 
 export function columnDefs(list: ListId): readonly ColumnDef[] {

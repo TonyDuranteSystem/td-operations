@@ -265,7 +265,7 @@ export function ContactsTable({ items, query, statusFilter, filters, linkCounts,
                             ID
                           </span>
                         )}
-                        {item.itin_number && (
+                        {item.itin_on_file && (
                           <span className="text-indigo-600">ITIN</span>
                         )}
                       </div>

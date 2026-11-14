@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { accountCellText, accountMetaText, contactCellText, contactMetaText, type AccountCellSource, type ContactCellSource } from '@/lib/crm-lists/cells'
 import { accountExtras, type AccountExtraRow } from '@/lib/crm-lists/extras'
-import { formatListDate, plainText, resolvePhysicalAddress, yesOrNull } from '@/lib/crm-lists/format'
+import { formatListDate, formatListTimestamp, plainText, resolvePhysicalAddress, yesOrNull } from '@/lib/crm-lists/format'
 import { InstallmentChip } from '@/components/lists/chips'
 
 const contact: ContactCellSource = {
   email: 'a@example.com', phone: ' ', language: 'Italian', citizenship: 'Italy', portal_tier: 'active', portal_role: null,
-  passport_on_file: true, itin_number: null, created_at: '2026-03-04T10:00:00Z', account_count: 2,
+  passport_on_file: true, itin_on_file: false, created_at: '2026-03-04T10:00:00Z', account_count: 2,
 }
 
 describe('formatting', () => {
@@ -24,6 +24,21 @@ describe('formatting', () => {
     expect(yesOrNull(null)).toBeNull()
     expect(plainText('  x ')).toBe('x')
     expect(plainText('   ')).toBeNull()
+  })
+})
+
+describe('timestamps', () => {
+  it('shows the New York day, not the UTC day', () => {
+    // 21:30 in New York on 13 Nov is already 14 Nov in UTC
+    expect(formatListTimestamp('2026-11-14T02:30:00Z')).toBe('13 Nov 2026')
+    // 00:30 in Italy on 14 Nov is still 13 Nov in New York
+    expect(formatListTimestamp('2026-11-13T23:30:00Z')).toBe('13 Nov 2026')
+    expect(formatListTimestamp('2026-03-04T10:00:00Z')).toBe('04 Mar 2026')
+    expect(formatListTimestamp(null)).toBeNull()
+    expect(formatListTimestamp('nope')).toBeNull()
+  })
+  it('the contact "Added on" uses it', () => {
+    expect(contactCellText({ ...contact, created_at: '2026-11-14T02:30:00Z' }, 'added_on')).toBe('13 Nov 2026')
   })
 })
 
@@ -57,7 +72,7 @@ describe('Contacts field text', () => {
     expect(contactMetaText(contact, 'company_count')).toBe('2 companies')
     expect(contactMetaText({ ...contact, account_count: 1 }, 'company_count')).toBe('1 company')
     expect(contactMetaText(contact, 'phone')).toBeNull()
-    expect(contactMetaText({ ...contact, itin_number: '9XX' }, 'itin_on_file')).toBe('ITIN on file')
+    expect(contactMetaText({ ...contact, itin_on_file: true }, 'itin_on_file')).toBe('ITIN on file')
   })
 })
 

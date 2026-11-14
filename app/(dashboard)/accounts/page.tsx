@@ -3,12 +3,13 @@ import { AccountTable } from '@/components/accounts/account-table'
 import type { AccountListItem } from '@/lib/types'
 import type { MailingAddressRow } from '@/lib/addresses'
 import { accountFacetCounts, companyMatches, parseAccountFilters } from '@/lib/crm-lists/filters'
-import { fetchAllRows, loadInstallmentChips, loadInstallmentYears, loadOverdueCounts, newYorkYear } from '@/lib/crm-lists/queries'
+import { fetchAllRows, loadInstallmentChips, loadInstallmentYears, loadOverdueCounts, newYorkToday, newYorkYear } from '@/lib/crm-lists/queries'
 import { letterCounts, letterMatches, parseLetter } from '@/lib/crm-lists/letters'
 import { listYearOptions, parseListYear } from '@/lib/crm-lists/year'
 import { getColumnPref } from '@/lib/crm-lists/prefs'
 import { resolveColumns } from '@/lib/crm-lists/columns'
 import { accountExtras } from '@/lib/crm-lists/extras'
+import { currentMemberCounts, pickMainContacts, type AccountContactLink } from '@/lib/crm-lists/people'
 
 const PAGE_SIZE = 50
 
@@ -78,14 +79,21 @@ export default async function AccountsPage({
         .from('accounts')
         // One literal string on purpose: the typed query builder only understands a select written as a single literal.
         // prettier-ignore
-        .select('id, state_of_formation, installment_1_amount, installment_1_currency, installment_2_amount, installment_2_currency, updated_at, formation_date, client_since, onboarding_date, member_count, ein_number, suite_number, physical_address, registered_agent_provider, ra_renewal_date, annual_report_due_date, lead_source, referrer, portal_tier, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip)')
+        .select('id, state_of_formation, installment_1_amount, installment_1_currency, installment_2_amount, installment_2_currency, updated_at, formation_date, client_since, onboarding_date, member_count, ein_number, suite_number, physical_address, registered_agent_provider, ra_renewal_date, annual_report_due_date, lead_source, referrer, portal_tier, mailing_address:addresses!business_mailing_address_id(address_line1, address_line2, city, state, zip), registered_agent:addresses!registered_agent_id(provider)')
         .in('id', accountIds),
       supabase
         .from('account_contacts')
-        .select('account_id, contact:contacts(full_name, email)')
+        .select('account_id, is_primary, ended_at, contact:contacts(full_name, email)')
         .in('account_id', accountIds),
       loadInstallmentChips(supabase, accountIds, year),
     ])
+    // "Number of members" counts the company's real current member rows (the free-text count on the account disagrees with them for some
+    // companies); only read when that field is chosen.
+    let memberCounts: Record<string, number> = {}
+    if (columns.includes('member_count')) {
+      const { data: memberRows } = await supabase.from('members').select('account_id, end_date').in('account_id', accountIds)
+      memberCounts = currentMemberCounts(memberRows ?? [], newYorkToday())
+    }
     for (const d of details ?? []) {
       detailById[d.id] = {
         state_of_formation: d.state_of_formation,
@@ -99,12 +107,13 @@ export default async function AccountsPage({
           formation_date: d.formation_date,
           client_since: d.client_since,
           onboarding_date: d.onboarding_date,
-          member_count: d.member_count,
+          member_count: memberCounts[d.id] ?? d.member_count,
           ein_number: d.ein_number,
           suite_number: d.suite_number,
           physical_address: d.physical_address,
           mailing_address: d.mailing_address as unknown as MailingAddressRow | null,
-          registered_agent_provider: d.registered_agent_provider,
+          // A company whose agent was set with the picker has only the linked row; the free text is the old way.
+          registered_agent_provider: (d.registered_agent as unknown as { provider: string | null } | null)?.provider ?? d.registered_agent_provider,
           ra_renewal_date: d.ra_renewal_date,
           annual_report_due_date: d.annual_report_due_date,
           lead_source: d.lead_source,
@@ -113,12 +122,7 @@ export default async function AccountsPage({
         }),
       }
     }
-    for (const c of links ?? []) {
-      const contact = c.contact as unknown as { full_name: string; email: string | null } | null
-      if (contact && !contactMap[c.account_id]) {
-        contactMap[c.account_id] = { name: contact.full_name, email: contact.email }
-      }
-    }
+    Object.assign(contactMap, pickMainContacts((links ?? []) as unknown as AccountContactLink[]))
     chipMap = chips
   }
 

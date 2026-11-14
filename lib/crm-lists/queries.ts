@@ -59,17 +59,25 @@ export async function loadOverdueCounts(db: Db, today: string = newYorkToday()):
   return counts
 }
 
-/** Every year that has at least one installment invoice (the "Invoice year" choices; the current year is added by the caller). */
+/**
+ * Every year that has at least one installment invoice (the "Invoice year" choices; the current year is added by the caller). It is only a
+ * convenience for the picker, so a failed read must never take the whole list down: it returns nothing and the picker offers the current year.
+ */
 export async function loadInstallmentYears(db: Db): Promise<number[]> {
-  const rows = await fetchAllRows((from, to) =>
-    db
-      .from('payments')
-      .select('year')
-      .in('payment_category', ['installment_1', 'installment_2'])
-      .not('year', 'is', null)
-      .range(from, to),
-  )
-  return Array.from(new Set(rows.map((r) => r.year).filter((y): y is number => typeof y === 'number')))
+  try {
+    const rows = await fetchAllRows((from, to) =>
+      db
+        .from('payments')
+        .select('year')
+        .in('payment_category', ['installment_1', 'installment_2'])
+        .not('year', 'is', null)
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+    return Array.from(new Set(rows.map((r) => r.year).filter((y): y is number => typeof y === 'number')))
+  } catch {
+    return []
+  }
 }
 
 export interface InstallmentChips {

@@ -254,6 +254,8 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
                         {item.company_name}
                       </Link>
                       {!hasColumn(columns, 'kind') && <KindChip kind={item.account_type} />}
+                      {/* A greyed, locked company always says why, even when the Status column is not chosen. */}
+                      {locked && !hasColumn(columns, 'status') && <StatusChip status={item.status} />}
                     </p>
                     {meta.length > 0 && <p className="lc-m mt-0.5 text-xs text-muted-foreground">{meta.join(' · ')}</p>}
                   </div>

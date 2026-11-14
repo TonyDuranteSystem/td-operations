@@ -372,7 +372,8 @@ export interface ContactListItem {
   citizenship: string | null
   portal_tier: string | null
   status: string | null
-  itin_number: string | null
+  /** Only whether an ITIN is on file; the number itself never goes to the list. */
+  itin_on_file: boolean
   passport_on_file: boolean | null
   portal_role: string | null
   account_count: number

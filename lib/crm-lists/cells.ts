@@ -2,7 +2,7 @@
  * The text each chosen field shows on the Accounts and Contacts lists, in one place so the wide columns and the small line under the
  * name (on a narrower window) always say the same thing. Pure.
  */
-import { formatListDate } from '@/lib/crm-lists/format'
+import { formatListTimestamp } from '@/lib/crm-lists/format'
 
 export interface ContactCellSource {
   email: string | null
@@ -12,7 +12,8 @@ export interface ContactCellSource {
   portal_tier: string | null
   portal_role: string | null
   passport_on_file: boolean | null
-  itin_number: string | null
+  /** Only whether an ITIN is on file; the number itself never goes to the list. */
+  itin_on_file: boolean
   created_at: string
   account_count: number
 }
@@ -36,13 +37,13 @@ export function contactCellText(c: ContactCellSource, id: string): string | null
     case 'passport_on_file':
       return c.passport_on_file ? 'Yes' : null
     case 'itin_on_file':
-      return c.itin_number ? 'Yes' : null
+      return c.itin_on_file ? 'Yes' : null
     case 'portal_stage':
       return blank(c.portal_tier)
     case 'portal_role':
       return blank(c.portal_role)
     case 'added_on':
-      return formatListDate(c.created_at)
+      return formatListTimestamp(c.created_at)
     case 'company_count':
       return String(c.account_count)
     default:

@@ -36,7 +36,10 @@ describe('the field lists', () => {
   })
   it('start with what the lists showed before the dropdown existed', () => {
     expect(defaultColumns('contacts')).toEqual(['email', 'citizenship', 'portal_stage'])
-    expect(defaultColumns('accounts')).toEqual(['contact', 'type', 'status', 'state_of_formation', 'overdue'])
+    expect(defaultColumns('accounts')).toEqual(['type', 'status', 'state_of_formation', 'contact', 'overdue'])
+    // the standard set is already in the dropdown's own order, so saving it unchanged is a no-op
+    expect(cleanColumns('accounts', defaultColumns('accounts'))).toEqual(defaultColumns('accounts'))
+    expect(cleanColumns('contacts', defaultColumns('contacts'))).toEqual(defaultColumns('contacts'))
   })
   it('keep Company status unticked by default', () => {
     expect(defaultColumns('contacts')).not.toContain('company_status')

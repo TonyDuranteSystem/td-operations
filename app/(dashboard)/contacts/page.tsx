@@ -127,7 +127,7 @@ export default async function ContactsPage({
         citizenship: c.citizenship,
         portal_tier: c.portal_tier,
         status: c.status,
-        itin_number: c.itin_number,
+        itin_on_file: !!c.itin_number,
         passport_on_file: c.passport_on_file,
         portal_role: c.portal_role,
         account_count: lines.length,
