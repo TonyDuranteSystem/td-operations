@@ -1,4 +1,5 @@
 import type { MessageReaction } from './portal/reactions'
+import type { InstallmentChip } from './billing/installment-invoices'
 
 export interface TaskAttachment {
   /** Publicly accessible URL (typically a Google Drive file URL). */
@@ -280,14 +281,23 @@ export interface AccountListItem {
   id: string
   company_name: string
   entity_type: string | null
+  /** Client / One-Time / Partner */
+  account_type: string | null
   status: string | null
   state_of_formation: string | null
-  formation_date: string | null
-  client_health: string | null
   contact_name: string | null
   contact_email: string | null
-  service_count: number
+  /** Live invoices that are Overdue and past due. */
   payment_overdue: number
+  installment_1_amount: number | null
+  installment_1_currency: string | null
+  installment_2_amount: number | null
+  installment_2_currency: string | null
+  /** The company's updated_at, sent back with every list edit so a stale screen is refused, not overwritten. */
+  updated_at: string
+  /** This year's invoice chip for each installment. */
+  chip_1: InstallmentChip
+  chip_2: InstallmentChip
 }
 
 // ─── Lead & Contact List Types ───────────────────────────
@@ -330,6 +340,24 @@ export interface LeadListItem {
   follow_up_date?: string | null
 }
 
+/** One company line under a person on the Contacts list. */
+export interface ContactCompanyLine {
+  account_id: string
+  company_name: string
+  entity_type: string | null
+  account_type: string | null
+  status: string | null
+  installment_1_amount: number | null
+  installment_1_currency: string | null
+  installment_2_amount: number | null
+  installment_2_currency: string | null
+  setup_fee_amount: number | null
+  setup_fee_currency: string | null
+  updated_at: string
+  chip_1: InstallmentChip
+  chip_2: InstallmentChip
+}
+
 export interface ContactListItem {
   id: string
   full_name: string
@@ -344,6 +372,8 @@ export interface ContactListItem {
   account_count: number
   account_names: string | null
   created_at: string
+  /** One line per linked company (empty when the person has none). */
+  companies: ContactCompanyLine[]
 }
 
 // ─── Contact Detail Types ────────────────────────────────
