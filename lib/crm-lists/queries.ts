@@ -52,7 +52,8 @@ export async function loadOverdueCounts(db: Db, today: string = newYorkToday()):
   )
   const counts: Record<string, number> = {}
   for (const r of rows) {
-    if (!r.account_id || !isLivePayment(r)) continue
+    // isLivePayment only looks at the two status words; the category / year it also accepts do not matter here.
+    if (!r.account_id || !isLivePayment({ payment_category: null, year: null, status: r.status, invoice_status: r.invoice_status })) continue
     counts[r.account_id] = (counts[r.account_id] ?? 0) + 1
   }
   return counts

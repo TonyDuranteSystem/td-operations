@@ -24,9 +24,11 @@ export function isListAmountField(field: string): field is ListAmountField {
   return (LIST_AMOUNT_FIELDS as readonly string[]).includes(field)
 }
 
+// The optional `error?: undefined` / `value?: undefined` members let callers read `.error` / `.value` WITHOUT narrowing: this project
+// compiles with strict off, where `if (!r.ok)` does not narrow a boolean-tagged union (the CI build failed on exactly that).
 export type PreparedAmount =
-  | { ok: true; /** the text to store ('' clears the amount) */ value: string; /** the number, or null when cleared */ amount: number | null }
-  | { ok: false; error: string }
+  | { ok: true; /** the text to store ('' clears the amount) */ value: string; /** the number, or null when cleared */ amount: number | null; error?: undefined }
+  | { ok: false; error: string; value?: undefined; amount?: undefined }
 
 /**
  * Check one list edit before anything is written.
