@@ -2,7 +2,7 @@ import { NextRequest } from "next/server"
 import { requireAdminJsonRoute } from "@/lib/auth/require-admin-route"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { changeKind } from "@/lib/booking/kinds-admin"
-import { BAD_BODY, currentAdmin, fail, ok, readJsonObject } from "@/lib/booking/route-helpers"
+import { BAD_BODY, currentAdmin, fail, ok, readJsonObject, refuseWhileOff } from "@/lib/booking/route-helpers"
 
 /** Booking page: rename, retire or restore a kind. Admin only. Body: { rename?: string, status?: "active" | "retired" }. */
 export const dynamic = "force-dynamic"
@@ -10,6 +10,8 @@ export const dynamic = "force-dynamic"
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ slug: string }> }) {
   const denied = await requireAdminJsonRoute(req)
   if (denied) return denied
+  const off = await refuseWhileOff()
+  if (off) return off
   const { slug } = await params
   const body = await readJsonObject(req)
   if (!body || (body.rename === undefined && body.status === undefined)) return fail(400, BAD_BODY)

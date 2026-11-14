@@ -5,6 +5,7 @@
 import { useState } from "react"
 import type { LinkDto } from "@/lib/booking/links"
 import { callApi, messageOf } from "@/components/booking/api"
+import { OFF_REASON } from "@/lib/booking/mode-text"
 
 const STATUS_CLASS: Record<string, string> = {
   open: "text-amber-700",
@@ -24,7 +25,7 @@ function callText(l: LinkDto): string {
   return `${len}${len ? " · " : ""}${l.once ? "first booking only" : "every booking"}`
 }
 
-export function LinksMade({ links, error, onChanged, onMakeAgain }: { links: LinkDto[] | null; error: string | null; onChanged: () => Promise<void> | void; onMakeAgain: (l: LinkDto) => void }) {
+export function LinksMade({ links, error, off, onChanged, onMakeAgain }: { links: LinkDto[] | null; error: string | null; off: boolean; onChanged: () => Promise<void> | void; onMakeAgain: (l: LinkDto) => void }) {
   const [sure, setSure] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [note, setNote] = useState<{ id: string; text: string; bad: boolean } | null>(null)
@@ -63,6 +64,7 @@ export function LinksMade({ links, error, onChanged, onMakeAgain }: { links: Lin
       <div className="px-4 pt-4">
         <h2 className="text-base font-semibold">Links I made</h2>
         <p className="text-sm text-zinc-600">Every link you sent, and what happened to it.</p>
+        {off && <p className="mt-1 text-sm font-semibold text-amber-900" data-testid="links-off">{OFF_REASON}: you can look, but not stop a link or make one again yet.</p>}
       </div>
       <div className="overflow-x-auto px-4 pb-4 pt-3">
         {error && <p className="mb-2 text-sm text-red-700" role="alert">{error}</p>}
@@ -92,10 +94,10 @@ export function LinksMade({ links, error, onChanged, onMakeAgain }: { links: Lin
                     {l.status === "open" && (
                       <>
                         <button type="button" onClick={() => copy(l)} className="mr-1.5 rounded-md border px-2.5 py-1 text-xs font-medium">Copy</button>
-                        <button type="button" disabled={busy === l.id} onClick={() => stop(l)} className="rounded-md border px-2.5 py-1 text-xs font-medium disabled:opacity-50" data-testid="stop-link">{sure === l.id ? "Sure? Stop it" : "Stop link"}</button>
+                        <button type="button" disabled={off || busy === l.id} onClick={() => stop(l)} className="rounded-md border px-2.5 py-1 text-xs font-medium disabled:opacity-50" data-testid="stop-link">{sure === l.id ? "Sure? Stop it" : "Stop link"}</button>
                       </>
                     )}
-                    {(l.status === "revoked" || l.status === "expired") && <button type="button" onClick={() => onMakeAgain(l)} className="rounded-md border px-2.5 py-1 text-xs font-medium">Make again</button>}
+                    {(l.status === "revoked" || l.status === "expired") && <button type="button" disabled={off} onClick={() => onMakeAgain(l)} className="rounded-md border px-2.5 py-1 text-xs font-medium disabled:opacity-50">Make again</button>}
                   </td>
                 </tr>
               ))}

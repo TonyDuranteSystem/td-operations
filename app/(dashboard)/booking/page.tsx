@@ -12,7 +12,8 @@ import { BookingWorkspace } from "@/components/booking/booking-workspace"
 /**
  * Booking page (dev job 19d2654a, Stage 1b) — ADMIN ONLY. One place where Antonio makes a Calendly link for a chosen person and kind, and sees the links he made.
  * The visitor is checked FIRST, before any read: a non-admin gets the ordinary "page not found", exactly like a page that does not exist.
- * The page also needs the `booking` setting to be `page` or `live` (missing = off = not found), so it ships hidden and Claude turns it on when Antonio says.
+ * While the `booking` setting is off (missing / malformed = off) an administrator still SEES the page, read-only, under a plain "Turned off" banner: the real screens, every control that makes, stops or answers
+ * something visibly inactive, and the routes refuse every change. `page` and `live` work as before. Claude turns it on when Antonio says; he never gets a switch.
  * "Calls to check" (the bookings the system could not settle by itself) are a section of THIS page — the day-to-day work Calendar is a different page and is not touched.
  * Reads that fail say so on the page; they are never shown as an empty list.
  */
@@ -23,7 +24,7 @@ export default async function BookingPage() {
     data: { user },
   } = await createClient().auth.getUser()
   if (!isSecureAdmin(user ?? null)) notFound()
-  if ((await readBookingMode(supabaseAdmin)) === "off") notFound()
+  const mode = await readBookingMode(supabaseAdmin)
 
   const now = new Date()
   const [kinds, links, templates, checks] = await Promise.all([
@@ -42,6 +43,7 @@ export default async function BookingPage() {
         kindsError={"error" in kinds ? kinds.error : null}
         links={"links" in links ? (links.links as LinkDto[]) : null}
         linksError={"error" in links ? links.error : null}
+        mode={mode}
         callTypesReady={!!templates.plain && !!templates.sales}
         cards={"cards" in checks ? checks.cards : null}
       >

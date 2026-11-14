@@ -33,7 +33,7 @@ describe("the Booking page carries the cards", () => {
     expect(page).toContain("cards={")
   })
   it("shows them as a section of the page, with the count, and never links to the Calendar", () => {
-    expect(workspace).toContain("<CallsToCheckTab cards={cards} />")
+    expect(workspace).toContain("<CallsToCheckTab cards={cards} off={off} />")
     expect(workspace).toContain('data-testid="calls-count"')
     expect(workspace).not.toMatch(/new-calendar|your Calendar/)
     expect(page).not.toMatch(/open-services|requireOpenServicesAccess/)

@@ -94,10 +94,11 @@ describe("the Booking page", () => {
     }
     expect(h.touched).toBe(0)
   })
-  it("an admin passes the check and the switch is read next; an unreadable switch means off, which is also the ordinary not-found page", async () => {
+  it("an admin passes the check and the page opens even though its switch is unreadable (= off): it is shown read-only, never hidden", async () => {
     const Page = (await import("../../app/(dashboard)/booking/page")).default
     h.user = ROLES.admin
-    await expect(Page()).rejects.toThrow("NEXT_NOT_FOUND")
+    const el = (await Page()) as { props: { children: { props: { mode: string } } } }
+    expect(el.props.children.props.mode).toBe("off")
     expect(h.touched).toBeGreaterThan(0)
   })
 })

@@ -5,6 +5,9 @@
 
 import { NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
+import { supabaseAdmin } from "@/lib/supabase-admin"
+import { readBookingMode } from "@/lib/booking-links/switch"
+import { OFF_REFUSAL } from "@/lib/booking/mode-text"
 
 export interface AdminWho {
   id: string | null
@@ -43,6 +46,15 @@ export function fail(status: number, error: string, extra: Record<string, unknow
 
 export function ok(body: Record<string, unknown>): NextResponse {
   return NextResponse.json(body, { headers: noStore })
+}
+
+/**
+ * While the Booking page is TURNED OFF (the `booking` setting is absent / malformed / "off"), every route that changes or sends anything refuses, in plain words,
+ * BEFORE it reads a body or touches a table or Calendly. Called right after the admin gate by every handler that is not a plain read. An unreadable setting counts as off.
+ */
+export async function refuseWhileOff(): Promise<NextResponse | null> {
+  const mode = await readBookingMode(supabaseAdmin)
+  return mode === "off" ? fail(403, OFF_REFUSAL, { off: true }) : null
 }
 
 export const BAD_BODY = "That request was not understood. Reload the page and try again."

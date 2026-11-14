@@ -1,6 +1,7 @@
 {
-  "title": "The Booking page screens are built (still switched off)",
-  "tag": "behind-the-scenes",
-  "text": "The screens of the Booking page are in, hidden until it is switched on. Only you will see a Booking item in the menu: pick a person (or someone new), the kind of call and the length, check what the system will do when it is booked, then copy the link. A list shows every link you made and what happened to it, and you can stop one. A section at the bottom, Calls to check, holds the bookings the system could not settle by itself, with buttons such as Same person: link this email. An invalid link just takes the visitor to the normal booking page. The day-to-day Calendar is not changed. Also fixed: a second call on the same day no longer disappears from a contact's Booked calls.",
-  "points": []
+  "title": "The Booking page is in the menu, turned off for now",
+  "tag": "new",
+  "text": "The Booking page is in the menu for you, turned off for now. Open it to look around: pick a person, the kind of call and the length, and see what the system will do when it is booked. While it is off, nothing on the page works and it says so (\"Turned off. Nothing here is live yet.\"). When it is turned on you can copy a link, see every link you made and stop one. A section at the bottom, Calls to check, holds the bookings the system could not settle by itself. The day-to-day Calendar is not changed. Also fixed: a second call on the same day no longer vanishes from a contact's Booked calls.",
+  "points": [],
+  "screenshot": "booking-page-turned-off.jpg"
 }

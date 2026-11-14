@@ -13,6 +13,8 @@ import { callApi, messageOf } from "@/components/booking/api"
 import { LinkMaker } from "@/components/booking/link-maker"
 import { LinksMade } from "@/components/booking/links-made"
 import { CallsToCheckTab } from "@/components/calls-to-check/calls-tab"
+import { OFF_TEXT, OFF_TITLE } from "@/lib/booking/mode-text"
+import type { BookingMode } from "@/lib/booking-links/switch"
 import type { CardDto } from "@/lib/booking/checks"
 
 export interface MakeAgain {
@@ -32,6 +34,7 @@ export function BookingWorkspace({
   kindsError,
   links: initialLinks,
   linksError,
+  mode,
   callTypesReady,
   cards,
 }: {
@@ -40,6 +43,8 @@ export function BookingWorkspace({
   kindsError: string | null
   links: LinkDto[] | null
   linksError: string | null
+  /** off = the page is only to LOOK at: nothing on it can make, stop or answer anything */
+  mode: BookingMode
   callTypesReady: boolean
   /** the bookings waiting for a look; null = they could not be read */
   cards: CardDto[] | null
@@ -48,6 +53,7 @@ export function BookingWorkspace({
   const [links, setLinks] = useState<LinkDto[] | null>(initialLinks)
   const [linksProblem, setLinksProblem] = useState<string | null>(linksError)
   const [again, setAgain] = useState<MakeAgain | null>(null)
+  const off = mode === "off"
 
   const refreshLinks = useCallback(async () => {
     try {
@@ -71,21 +77,29 @@ export function BookingWorkspace({
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">
             Booking <span className="ml-1 rounded-full bg-zinc-200 px-2 py-0.5 align-middle text-xs font-semibold text-zinc-700">Only you</span>
+            {off && <span className="ml-1.5 rounded-full bg-amber-200 px-2 py-0.5 align-middle text-xs font-semibold text-amber-900" data-testid="off-tag">Off</span>}
           </h1>
           <p className="text-sm text-zinc-600">A link for every kind of call. Only you can see this page.</p>
         </div>
         <p className="text-sm text-zinc-600">{dateText} · times in New York</p>
       </div>
 
-      {!callTypesReady && (
+      {off && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900" role="status" data-testid="off-banner">
+          <p className="font-semibold">{OFF_TITLE}</p>
+          <p>{OFF_TEXT}</p>
+        </div>
+      )}
+
+      {!off && !callTypesReady && (
         <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900" role="status" data-testid="call-types-missing">
           The Calendly call types for this page are not set up yet, so a link cannot be made. Ask Claude to set them.
         </div>
       )}
 
       <div className="grid grid-cols-[minmax(380px,460px)_minmax(0,1fr)] items-start gap-5">
-        <LinkMaker kinds={kinds} kindsError={kindsError} refreshKinds={refreshKinds} onMade={refreshLinks} again={again} callTypesReady={callTypesReady} />
-        <LinksMade links={links} error={linksProblem} onChanged={refreshLinks} onMakeAgain={(l) => setAgain({ nonce: Date.now(), contactId: l.contactId, leadId: l.leadId, name: l.personName, email: l.email, kindSlug: l.kindSlug, minutes: l.minutes, once: l.once })} />
+        <LinkMaker kinds={kinds} kindsError={kindsError} refreshKinds={refreshKinds} onMade={refreshLinks} again={again} callTypesReady={callTypesReady} off={off} />
+        <LinksMade links={links} error={linksProblem} off={off} onChanged={refreshLinks} onMakeAgain={(l) => setAgain({ nonce: Date.now(), contactId: l.contactId, leadId: l.leadId, name: l.personName, email: l.email, kindSlug: l.kindSlug, minutes: l.minutes, once: l.once })} />
       </div>
 
       <section id="calls" className="space-y-3" data-testid="calls-section">
@@ -98,7 +112,7 @@ export function BookingWorkspace({
           </h2>
           <p className="text-sm text-zinc-600">{cards === null ? "The calls to check could not be read." : cards.length === 0 ? "Nothing needs you." : `${cards.length} call${cards.length === 1 ? "" : "s"} need${cards.length === 1 ? "s" : ""} you.`}</p>
         </div>
-        <CallsToCheckTab cards={cards} />
+        <CallsToCheckTab cards={cards} off={off} />
       </section>
     </div>
   )

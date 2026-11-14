@@ -10,11 +10,12 @@ import { useState } from "react"
 import { useRouter } from "next/navigation"
 import type { CardDto } from "@/lib/booking/checks"
 import { callApi, messageOf } from "@/components/booking/api"
+import { OFF_REASON } from "@/lib/booking/mode-text"
 
 const callWhen = (iso: string | null): string | null =>
   iso ? `${new Date(iso).toLocaleString("en-US", { timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} ET` : null
 
-export function CallsToCheckTab({ cards }: { cards: CardDto[] | null }) {
+export function CallsToCheckTab({ cards, off = false }: { cards: CardDto[] | null; off?: boolean }) {
   const router = useRouter()
   const [done, setDone] = useState<Array<{ id: string; question: string; message: string }>>([])
   const [busy, setBusy] = useState<string | null>(null)
@@ -52,6 +53,7 @@ export function CallsToCheckTab({ cards }: { cards: CardDto[] | null }) {
       <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
         Bookings made through a link you sent that the system could not settle by itself. <b>Nothing was dropped</b>: each booking was saved as usual, and these cards ask you what it really was.
       </div>
+      {off && open.length > 0 && <p className="text-sm font-semibold text-amber-900" data-testid="calls-off">{OFF_REASON}: you can read the cards, but not answer them yet.</p>}
       {open.length === 0 && done.length === 0 && <p className="rounded-lg border p-4 text-sm text-zinc-600" data-testid="calls-empty">Nothing needs you.</p>}
       <div className="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-3">
         {open.map((c) => (
@@ -63,7 +65,7 @@ export function CallsToCheckTab({ cards }: { cards: CardDto[] | null }) {
             {errors[c.id] && <p className="text-sm text-red-700" role="alert">{errors[c.id]}</p>}
             <div className="flex flex-wrap gap-2">
               {c.answers.map((a) => (
-                <button key={a.key} type="button" disabled={busy !== null} onClick={() => answer(c, a.key)} data-testid={`answer-${a.key}`} className={`rounded-md border px-3 py-1.5 text-sm font-medium disabled:opacity-50 ${a.primary ? "border-zinc-900 bg-zinc-900 text-white" : "bg-white"}`}>
+                <button key={a.key} type="button" disabled={off || busy !== null} onClick={() => answer(c, a.key)} data-testid={`answer-${a.key}`} className={`rounded-md border px-3 py-1.5 text-sm font-medium disabled:opacity-50 ${a.primary ? "border-zinc-900 bg-zinc-900 text-white" : "bg-white"}`}>
                   {busy === `${c.id}:${a.key}` ? "Saving…" : a.label}
                 </button>
               ))}

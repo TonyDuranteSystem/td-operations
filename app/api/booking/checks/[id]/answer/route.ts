@@ -2,7 +2,7 @@ import { NextRequest } from "next/server"
 import { requireAdminJsonRoute } from "@/lib/auth/require-admin-route"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { answerCheck } from "@/lib/booking/checks"
-import { BAD_BODY, currentAdmin, fail, ok, readJsonObject } from "@/lib/booking/route-helpers"
+import { BAD_BODY, currentAdmin, fail, ok, readJsonObject, refuseWhileOff } from "@/lib/booking/route-helpers"
 
 /** Booking page, section "Calls to check": Antonio's answer to one card. Admin only. Body: { answer: "same_person" | "different_person" | "dismiss" }. */
 export const dynamic = "force-dynamic"
@@ -10,6 +10,8 @@ export const dynamic = "force-dynamic"
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const denied = await requireAdminJsonRoute(req)
   if (denied) return denied
+  const off = await refuseWhileOff()
+  if (off) return off
   const { id } = await params
   const body = await readJsonObject(req)
   if (!body) return fail(400, BAD_BODY)

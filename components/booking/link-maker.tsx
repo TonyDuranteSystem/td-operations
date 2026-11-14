@@ -8,6 +8,7 @@ import type { PersonHit } from "@/lib/booking/person"
 import type { PreviewLine } from "@/lib/booking/preview"
 import { callApi, messageOf } from "@/components/booking/api"
 import type { MakeAgain } from "@/components/booking/booking-workspace"
+import { OFF_REASON } from "@/lib/booking/mode-text"
 
 type MadeLink = { id: string; publicId: string; url: string; email: string | null; language: "Italian" | "English" | null }
 type Preview = { ok: true; lines: PreviewLine[]; once: boolean; minutes: number; ready: boolean } | { ok: false; errors: string[] }
@@ -45,6 +46,7 @@ export function LinkMaker({
   onMade,
   again,
   callTypesReady,
+  off,
 }: {
   kinds: KindDto[] | null
   kindsError: string | null
@@ -52,6 +54,8 @@ export function LinkMaker({
   onMade: () => Promise<void> | void
   again: MakeAgain | null
   callTypesReady: boolean
+  /** the page is turned off: the whole maker is visibly inactive */
+  off: boolean
 }) {
   const [who, setWho] = useState<"old" | "new">("old")
   const [query, setQuery] = useState("")
@@ -92,7 +96,7 @@ export function LinkMaker({
 
   // search as the person types
   useEffect(() => {
-    if (who !== "old") return
+    if (off || who !== "old") return
     const q = query.trim()
     if (q.length < 2) {
       setHits([])
@@ -109,11 +113,11 @@ export function LinkMaker({
       }
     }, 250)
     return () => { stop = true; clearTimeout(t) }
-  }, [query, who])
+  }, [query, who, off])
 
   // the live preview, from the same rules the link will be made with
   useEffect(() => {
-    if (!personRef || !kindOk || minutes === null) { setPreview(null); setPreviewError(null); return }
+    if (off || !personRef || !kindOk || minutes === null) { setPreview(null); setPreviewError(null); return }
     let stop = false
     const t = setTimeout(async () => {
       try {
@@ -124,7 +128,7 @@ export function LinkMaker({
       }
     }, 300)
     return () => { stop = true; clearTimeout(t) }
-  }, [personRef, kindSlug, kindOk, minutes, effectiveFirstOnly])
+  }, [personRef, kindSlug, kindOk, minutes, effectiveFirstOnly, off])
 
   // a different choice means the link shown above is no longer the one on screen
   useEffect(() => { setMade(null); setError(null) }, [personRef, kindSlug, minutes, effectiveFirstOnly])
@@ -213,14 +217,17 @@ export function LinkMaker({
     }
   }
 
-  const canMake = !!personRef && kindOk && minutes !== null && !!preview && preview.ok && preview.ready && !making && callTypesReady
+  const canMake = !off && !!personRef && kindOk && minutes !== null && !!preview && preview.ok && preview.ready && !making && callTypesReady
   const shownName = who === "old" ? picked?.name : newName.trim()
   const draft = made ? draftTexts(made.url, made.language) : null
 
   return (
     <section id="make" className="rounded-lg border bg-white" data-testid="link-maker">
-      <div className="px-4 pt-4"><h2 className="text-base font-semibold">Make a link</h2></div>
-      <div className="space-y-5 px-4 pb-4 pt-3">
+      <div className="px-4 pt-4">
+        <h2 className="text-base font-semibold">Make a link</h2>
+        {off && <p className="mt-1 text-sm font-semibold text-amber-900" data-testid="maker-off">{OFF_REASON}: you can look, but a link cannot be made yet.</p>}
+      </div>
+      <fieldset disabled={off} className={`m-0 min-w-0 space-y-5 border-0 px-4 pb-4 pt-3 ${off ? "opacity-60" : ""}`} data-testid="maker-fieldset">
         {/* WHO */}
         <div>
           <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-zinc-500">Who is it for?</span>
@@ -324,7 +331,7 @@ export function LinkMaker({
             </ul>
           )}
           {preview && preview.ok === false && <ul className="grid gap-1 text-sm text-red-700" role="alert">{preview.errors.map((e) => <li key={e}>{e}</li>)}</ul>}
-          {!preview && !previewError && <p className="text-sm text-zinc-500">{!personRef ? "Choose who it is for." : !kindOk ? "Choose what kind of call it is." : minutes === null ? "Choose how long it is." : "…"}</p>}
+          {!preview && !previewError && <p className="text-sm text-zinc-500">{off ? "Turned off. Nothing is live yet." : !personRef ? "Choose who it is for." : !kindOk ? "Choose what kind of call it is." : minutes === null ? "Choose how long it is." : "…"}</p>}
         </div>
 
         {/* MAKE + THE LINK */}
@@ -345,7 +352,7 @@ export function LinkMaker({
             </div>
           )}
         </div>
-      </div>
+      </fieldset>
     </section>
   )
 }

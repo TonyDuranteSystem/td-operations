@@ -4,7 +4,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { calendlyCtxFromEnv } from "@/lib/calendly/api"
 import { makeFreeLink } from "@/lib/booking/make-link"
 import { listLinks } from "@/lib/booking/links"
-import { BAD_BODY, currentAdmin, fail, ok, personRefFrom, readJsonObject } from "@/lib/booking/route-helpers"
+import { BAD_BODY, currentAdmin, fail, ok, personRefFrom, readJsonObject, refuseWhileOff } from "@/lib/booking/route-helpers"
 
 /** Booking page: "Links I made" (GET) and making a new FREE link (POST). Admin only. */
 export const dynamic = "force-dynamic"
@@ -20,6 +20,8 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const denied = await requireAdminJsonRoute(req)
   if (denied) return denied
+  const off = await refuseWhileOff()
+  if (off) return off
   const body = await readJsonObject(req)
   const person = body ? personRefFrom(body.person) : null
   if (!body || !person || typeof body.kindSlug !== "string") return fail(400, BAD_BODY)
