@@ -295,9 +295,14 @@ export interface AccountListItem {
   installment_2_currency: string | null
   /** The company's updated_at, sent back with every list edit so a stale screen is refused, not overwritten. */
   updated_at: string
-  /** This year's invoice chip for each installment. */
+  /** The chosen year's invoice chip for each installment. */
   chip_1: InstallmentChip
   chip_2: InstallmentChip
+  /**
+   * Display text for the extra fields this person chose (formation date, EIN, address…), by field id. Only the chosen fields are filled
+   * in: a field nobody asked for (the EIN above all) is never sent to the screen.
+   */
+  extras: Record<string, string | null>
 }
 
 // ─── Lead & Contact List Types ───────────────────────────
@@ -367,8 +372,10 @@ export interface ContactListItem {
   citizenship: string | null
   portal_tier: string | null
   status: string | null
-  itin_number: string | null
+  /** Only whether an ITIN is on file; the number itself never goes to the list. */
+  itin_on_file: boolean
   passport_on_file: boolean | null
+  portal_role: string | null
   account_count: number
   account_names: string | null
   created_at: string

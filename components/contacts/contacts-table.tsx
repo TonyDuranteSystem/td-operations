@@ -9,15 +9,21 @@ import type { ContactCompanyLine, ContactListItem } from '@/lib/types'
 import { SegmentedFilter } from '@/components/lists/segmented-filter'
 import { AmountCell } from '@/components/lists/amount-cell'
 import { EntityChip, StatusChip } from '@/components/lists/chips'
+import { ColumnsMenu } from '@/components/lists/columns-menu'
+import { LetterBar } from '@/components/lists/letter-bar'
+import { LISTS_CONTAINER, ListStyles } from '@/components/lists/list-styles'
+import { YearSelect } from '@/components/lists/year-select'
 import { useAmountOverrides, type AmountOverride } from '@/components/lists/use-amount-overrides'
 import { isAmountLocked } from '@/lib/crm-lists/amounts'
+import { chosenColumns, gridMinWidth, gridTemplate, hasColumn } from '@/lib/crm-lists/columns'
+import { contactCellText, contactMetaText } from '@/lib/crm-lists/cells'
 import { ACCOUNT_STATUS_CHOICES, KIND_CHOICES, TYPE_CHOICES, TYPE_NOT_SET, type ContactFilters } from '@/lib/crm-lists/filters'
 
 const TIER_COLORS: Record<string, string> = {
   'lead': 'bg-zinc-100 text-zinc-600',
+  'formation': 'bg-violet-100 text-violet-700',
   'onboarding': 'bg-amber-100 text-amber-700',
   'active': 'bg-emerald-100 text-emerald-700',
-  'full': 'bg-blue-100 text-blue-700',
 }
 
 interface ContactsTableProps {
@@ -29,23 +35,40 @@ interface ContactsTableProps {
   currentPage: number
   totalPages: number
   totalCount: number
+  /** The extra fields this person chose. */
+  columns: string[]
+  letter: string
+  letters: { all: number; byLetter: Record<string, number> }
+  year: number
+  years: number[]
+  defaultYear: number
 }
 
-type FilterKey = 'q' | 'status' | 'link' | 'cstatus' | 'kind' | 'ctype'
+type FilterKey = 'q' | 'status' | 'link' | 'cstatus' | 'kind' | 'ctype' | 'letter' | 'year'
 
-// The person's own columns, then ONE block holding one line per company (company | 1st Inst | 2nd Inst | Setup fee).
-const OUTER = 'md:grid-cols-[minmax(130px,.8fr)_150px_80px_64px_minmax(0,1fr)]'
-const INNER = 'grid grid-cols-1 md:grid-cols-[minmax(260px,1.4fr)_160px_160px_130px] gap-1 md:gap-3'
+// Wide (the table has the room the chosen fields need): one row = the person, the chosen fields as columns, then ONE block holding a
+// line per company (company | 1st Inst | 2nd Inst | Setup fee). Narrower: the person (the chosen fields on one small line under the
+// name) and the companies block; on a phone everything stacks. The wide columns come from --cols (built from the chosen fields).
+const MID_COLS = 'md:grid-cols-[minmax(200px,280px)_minmax(0,1fr)] md:gap-2.5 lc-row'
+const ROW_GRID = `grid grid-cols-1 gap-1 ${MID_COLS}`
+const HEAD_GRID = `hidden md:grid ${MID_COLS}`
+const INNER = 'grid grid-cols-2 gap-x-3 gap-y-1 md:grid-cols-[minmax(0,1.5fr)_minmax(112px,1fr)_minmax(112px,1fr)_minmax(84px,.6fr)]'
 
 function lineAmount(line: ContactCompanyLine, o: AmountOverride | undefined, key: 'installment_1_amount' | 'installment_2_amount' | 'setup_fee_amount'): number | null {
   return o && key in o ? (o[key] ?? null) : line[key]
 }
 
-export function ContactsTable({ items, query, statusFilter, filters, linkCounts, currentPage, totalPages, totalCount }: ContactsTableProps) {
+/** A small label shown above an amount on a phone, where the column headers are gone. */
+function PhoneLabel({ children }: { children: React.ReactNode }) {
+  return <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground md:hidden">{children}</span>
+}
+
+export function ContactsTable({ items, query, statusFilter, filters, linkCounts, currentPage, totalPages, totalCount, columns, letter, letters, year, years, defaultYear }: ContactsTableProps) {
   const router = useRouter()
   const [search, setSearch] = useState(query)
   const [isPending, startTransition] = useTransition()
   const { overrides, apply } = useAmountOverrides(items)
+  const yearParam = year === defaultYear ? '' : String(year)
   // The filter values we've actually told the server about — updated
   // synchronously the instant we act, NOT after the async navigation
   // resolves, covering EVERY filter (not just search — a fast, DIFFERENT
@@ -60,6 +83,8 @@ export function ContactsTable({ items, query, statusFilter, filters, linkCounts,
     cstatus: filters.cstatus,
     kind: filters.kind,
     ctype: filters.ctype,
+    letter,
+    year: yearParam,
   })
 
   // Resync when the URL changed for a reason OTHER than our own action —
@@ -74,12 +99,14 @@ export function ContactsTable({ items, query, statusFilter, filters, linkCounts,
       filters.link !== last.link ||
       filters.cstatus !== last.cstatus ||
       filters.kind !== last.kind ||
-      filters.ctype !== last.ctype
+      filters.ctype !== last.ctype ||
+      letter !== last.letter ||
+      yearParam !== last.year
     ) {
-      lastFiltersRef.current = { q: query, status: statusFilter, link: filters.link, cstatus: filters.cstatus, kind: filters.kind, ctype: filters.ctype }
+      lastFiltersRef.current = { q: query, status: statusFilter, link: filters.link, cstatus: filters.cstatus, kind: filters.kind, ctype: filters.ctype, letter, year: yearParam }
       setSearch(query)
     }
-  }, [query, statusFilter, filters.link, filters.cstatus, filters.kind, filters.ctype])
+  }, [query, statusFilter, filters.link, filters.cstatus, filters.kind, filters.ctype, letter, yearParam])
 
   function buildParams(overrideParams: Partial<Record<FilterKey | 'page', string>> = {}) {
     const params = new URLSearchParams()
@@ -91,6 +118,8 @@ export function ContactsTable({ items, query, statusFilter, filters, linkCounts,
     if (pick('cstatus')) params.set('cstatus', pick('cstatus'))
     if (pick('kind')) params.set('kind', pick('kind'))
     if (pick('ctype')) params.set('ctype', pick('ctype'))
+    if (pick('letter')) params.set('letter', pick('letter'))
+    if (pick('year')) params.set('year', pick('year'))
     const p = overrideParams.page ?? ''
     if (p && p !== '1') params.set('page', p)
     return params.toString()
@@ -145,25 +174,38 @@ export function ContactsTable({ items, query, statusFilter, filters, linkCounts,
     { value: TYPE_NOT_SET, label: 'Not set' },
   ]
 
+  const { before: extraCols } = chosenColumns('contacts', columns)
+  const showCompanyStatus = hasColumn(columns, 'company_status')
+  const rowVars = { '--cols': gridTemplate('contacts', columns) } as React.CSSProperties
+  const first = `1st Inst · ${year}`
+  const second = `2nd Inst · ${year}`
+
   return (
     <div className="space-y-4">
       {/* Filters */}
-      <form onSubmit={handleSearch} className="relative max-w-md">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <input
-          type="text"
-          value={search}
-          onChange={handleSearchChange}
-          placeholder="Search name or email..."
-          className="w-full pl-9 pr-4 py-2 rounded-lg border bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-        />
-      </form>
-      <div className="flex flex-wrap gap-x-6 gap-y-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <form onSubmit={handleSearch} className="relative w-full max-w-md flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <input
+            type="text"
+            value={search}
+            onChange={handleSearchChange}
+            placeholder="Search name or email..."
+            className="w-full pl-9 pr-4 py-2 rounded-lg border bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </form>
+        <div className="ml-auto">
+          <ColumnsMenu list="contacts" selected={columns} always="Name, Companies, 1st Inst, 2nd Inst, Setup fee" />
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
         <SegmentedFilter label="Companies" options={linkOptions} value={filters.link} onChange={v => updateFilter('link', v)} disabled={isPending} />
         <SegmentedFilter label="Company status" options={statusOptions} value={filters.cstatus} onChange={v => updateFilter('cstatus', v)} disabled={isPending} />
         <SegmentedFilter label="Client kind" options={kindOptions} value={filters.kind} onChange={v => updateFilter('kind', v)} disabled={isPending} />
         <SegmentedFilter label="Company type" options={typeOptions} value={filters.ctype} onChange={v => updateFilter('ctype', v)} disabled={isPending} />
+        <YearSelect year={year} years={years} onChange={y => updateFilter('year', y === defaultYear ? '' : String(y))} disabled={isPending} />
       </div>
+      <LetterBar value={letter} counts={letters} onChange={l => updateFilter('letter', l)} disabled={isPending} />
 
       {/* Stats row */}
       <div className="flex gap-3 flex-wrap text-sm">
@@ -173,18 +215,19 @@ export function ContactsTable({ items, query, statusFilter, filters, linkCounts,
       </div>
 
       {/* Table */}
-      <div className="bg-white rounded-lg border overflow-x-auto">
-        <div className={cn('min-w-[1260px] transition-opacity', isPending && 'opacity-50')}>
-          {/* Header */}
-          <div className={cn('hidden md:grid gap-3 px-4 py-2.5 border-b bg-zinc-50 text-xs font-medium text-muted-foreground uppercase tracking-wider', OUTER)}>
+      <div className="bg-white rounded-lg border overflow-x-auto" style={LISTS_CONTAINER}>
+        <ListStyles minWidth={gridMinWidth('contacts', columns)} />
+        <div className={cn('transition-opacity', isPending && 'opacity-50')} style={rowVars}>
+          {/* Header (wide and medium windows) */}
+          <div className={cn(HEAD_GRID, 'px-4 py-2.5 border-b bg-zinc-50 text-xs font-medium text-muted-foreground uppercase tracking-wider')}>
             <span>Name</span>
-            <span>Email</span>
-            <span>Citizenship</span>
-            <span>Tier</span>
+            {extraCols.map(c => (
+              <span key={c.id} className="lc-x">{c.short ?? c.label}</span>
+            ))}
             <div className={INNER}>
               <span>Companies</span>
-              <span>1st Inst</span>
-              <span>2nd Inst</span>
+              <span>{first}</span>
+              <span>{second}</span>
               <span>Setup fee</span>
             </div>
           </div>
@@ -192,122 +235,138 @@ export function ContactsTable({ items, query, statusFilter, filters, linkCounts,
           {/* Rows */}
           {items.length === 0 ? (
             <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-              No contacts found
+              {letter ? 'No contact starts with that letter under the filters you have on.' : 'No contacts found'}
             </div>
           ) : (
-            items.map(item => (
-              <div
-                key={item.id}
-                onClick={e => {
-                  if ((e.target as HTMLElement).closest('[data-no-nav]')) return
-                  router.push(`/contacts/${item.id}`)
-                }}
-                role="button"
-                tabIndex={0}
-                onKeyDown={e => e.target === e.currentTarget && e.key === 'Enter' && router.push(`/contacts/${item.id}`)}
-                className={cn('grid grid-cols-1 gap-1 md:gap-3 px-4 py-3 border-b last:border-b-0 hover:bg-zinc-50 transition-colors items-start cursor-pointer', OUTER)}
-              >
-                {/* Name */}
-                <div className="flex items-center gap-2 min-w-0 pt-0.5">
-                  <User className="h-4 w-4 text-muted-foreground shrink-0" />
-                  <div className="min-w-0">
-                    <p className="font-medium text-sm truncate">{item.full_name}</p>
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      {item.language && <span>{item.language}</span>}
-                      {item.passport_on_file && (
-                        <span className="flex items-center gap-0.5 text-emerald-600">
-                          <Shield className="h-3 w-3" />
-                          ID
-                        </span>
-                      )}
-                      {item.itin_number && (
-                        <span className="text-indigo-600">ITIN</span>
-                      )}
+            items.map(item => {
+              const meta = extraCols.map(c => contactMetaText(item, c.id)).filter((x): x is string => !!x)
+              return (
+                <div
+                  key={item.id}
+                  onClick={e => {
+                    if ((e.target as HTMLElement).closest('[data-no-nav]')) return
+                    router.push(`/contacts/${item.id}`)
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={e => e.target === e.currentTarget && e.key === 'Enter' && router.push(`/contacts/${item.id}`)}
+                  className={cn('px-4 py-3 border-b last:border-b-0 hover:bg-zinc-50 transition-colors items-start cursor-pointer', ROW_GRID)}
+                >
+                  {/* Name (and, on a window too narrow for columns, the chosen fields on one small line) */}
+                  <div className="flex items-start gap-2 min-w-0 pt-0.5">
+                    <User className="mt-0.5 h-4 w-4 text-muted-foreground shrink-0" />
+                    <div className="min-w-0">
+                      <p className="font-medium text-sm truncate">{item.full_name}</p>
+                      <div className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+                        {item.language && !hasColumn(columns, 'language') && <span>{item.language}</span>}
+                        {item.passport_on_file && (
+                          <span className="flex items-center gap-0.5 text-emerald-600">
+                            <Shield className="h-3 w-3" />
+                            ID
+                          </span>
+                        )}
+                        {item.itin_on_file && (
+                          <span className="text-indigo-600">ITIN</span>
+                        )}
+                      </div>
+                      {meta.length > 0 && <p className="lc-m mt-0.5 text-xs text-muted-foreground">{meta.join(' · ')}</p>}
                     </div>
                   </div>
-                </div>
 
-                {/* Email */}
-                <div className="hidden md:block text-xs text-muted-foreground truncate pt-1">
-                  {item.email ?? '—'}
-                </div>
-
-                {/* Citizenship */}
-                <div className="hidden md:block text-xs text-muted-foreground pt-1">
-                  {item.citizenship ?? '—'}
-                </div>
-
-                {/* Tier */}
-                <div className="hidden md:block pt-0.5">
-                  {item.portal_tier && (
-                    <span className={cn('text-xs font-medium px-1.5 py-0.5 rounded', TIER_COLORS[item.portal_tier] ?? 'bg-zinc-100')}>
-                      {item.portal_tier}
-                    </span>
-                  )}
-                </div>
-
-                {/* Companies: one line per company, each with its own amounts */}
-                <div className="min-w-0">
-                  {item.companies.length === 0 ? (
-                    <span className="text-xs text-muted-foreground">No company</span>
-                  ) : (
-                    item.companies.map((line, i) => {
-                      const o = overrides[line.account_id]
-                      const locked = isAmountLocked(line.status)
-                      const updatedAt = o?.updated_at ?? line.updated_at
+                  {/* The chosen fields, as columns (wide window) */}
+                  {extraCols.map(c => {
+                    const text = contactCellText(item, c.id)
+                    if (c.id === 'portal_stage') {
                       return (
-                        <div
-                          key={line.account_id}
-                          className={cn(INNER, 'items-center min-h-[28px]', i > 0 && 'mt-1.5 pt-1.5 border-t border-dashed', locked && 'opacity-60')}
-                        >
-                          <div className="flex min-w-0 items-center gap-1.5">
-                            <Link
-                              href={`/accounts/${line.account_id}`}
-                              data-no-nav
-                              className="truncate text-sm font-medium hover:underline"
-                            >
-                              {line.company_name}
-                            </Link>
-                            <EntityChip entityType={line.entity_type} />
-                            <StatusChip status={line.status} />
-                          </div>
-                          <AmountCell
-                            accountId={line.account_id}
-                            field="installment_1_amount"
-                            amount={lineAmount(line, o, 'installment_1_amount')}
-                            currency={line.installment_1_currency}
-                            locked={locked}
-                            updatedAt={updatedAt}
-                            chip={line.chip_1}
-                            onSaved={apply}
-                          />
-                          <AmountCell
-                            accountId={line.account_id}
-                            field="installment_2_amount"
-                            amount={lineAmount(line, o, 'installment_2_amount')}
-                            currency={line.installment_2_currency}
-                            locked={locked}
-                            updatedAt={updatedAt}
-                            chip={line.chip_2}
-                            onSaved={apply}
-                          />
-                          <AmountCell
-                            accountId={line.account_id}
-                            field="setup_fee_amount"
-                            amount={lineAmount(line, o, 'setup_fee_amount')}
-                            currency={line.setup_fee_currency}
-                            locked={locked}
-                            updatedAt={updatedAt}
-                            emptyLabel="—"
-                            onSaved={apply}
-                          />
+                        <div key={c.id} className="lc-x pt-0.5">
+                          {text ? (
+                            <span className={cn('text-xs font-medium px-1.5 py-0.5 rounded', TIER_COLORS[text] ?? 'bg-zinc-100 text-zinc-600')}>{text}</span>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">—</span>
+                          )}
                         </div>
                       )
-                    })
-                  )}
+                    }
+                    return (
+                      <div key={c.id} className="lc-x min-w-0 truncate pt-1 text-xs text-muted-foreground">
+                        {text ?? '—'}
+                      </div>
+                    )
+                  })}
+
+                  {/* Companies: one line per company, each with its own amounts */}
+                  <div className="min-w-0">
+                    {item.companies.length === 0 ? (
+                      <span className="text-xs text-muted-foreground">No company</span>
+                    ) : (
+                      item.companies.map((line, i) => {
+                        const o = overrides[line.account_id]
+                        const locked = isAmountLocked(line.status)
+                        const updatedAt = o?.updated_at ?? line.updated_at
+                        return (
+                          <div
+                            key={line.account_id}
+                            className={cn(INNER, 'items-start min-h-[28px]', i > 0 && 'mt-1.5 pt-1.5 border-t border-dashed', locked && 'opacity-60')}
+                          >
+                            <div className="col-span-2 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 md:col-span-1">
+                              <Link
+                                href={`/accounts/${line.account_id}`}
+                                data-no-nav
+                                className="break-words text-sm font-medium hover:underline"
+                              >
+                                {line.company_name}
+                              </Link>
+                              <EntityChip entityType={line.entity_type} />
+                              {/* Its status is a field you can tick; a locked company always says why it is greyed. */}
+                              {(showCompanyStatus || locked) && <StatusChip status={line.status} />}
+                            </div>
+                            <div className="min-w-0">
+                              <PhoneLabel>{first}</PhoneLabel>
+                              <AmountCell
+                                accountId={line.account_id}
+                                field="installment_1_amount"
+                                amount={lineAmount(line, o, 'installment_1_amount')}
+                                currency={line.installment_1_currency}
+                                locked={locked}
+                                updatedAt={updatedAt}
+                                chip={line.chip_1}
+                                onSaved={apply}
+                              />
+                            </div>
+                            <div className="min-w-0">
+                              <PhoneLabel>{second}</PhoneLabel>
+                              <AmountCell
+                                accountId={line.account_id}
+                                field="installment_2_amount"
+                                amount={lineAmount(line, o, 'installment_2_amount')}
+                                currency={line.installment_2_currency}
+                                locked={locked}
+                                updatedAt={updatedAt}
+                                chip={line.chip_2}
+                                onSaved={apply}
+                              />
+                            </div>
+                            <div className="min-w-0">
+                              <PhoneLabel>Setup fee</PhoneLabel>
+                              <AmountCell
+                                accountId={line.account_id}
+                                field="setup_fee_amount"
+                                amount={lineAmount(line, o, 'setup_fee_amount')}
+                                currency={line.setup_fee_currency}
+                                locked={locked}
+                                updatedAt={updatedAt}
+                                emptyLabel="—"
+                                onSaved={apply}
+                              />
+                            </div>
+                          </div>
+                        )
+                      })
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))
+              )
+            })
           )}
         </div>
       </div>

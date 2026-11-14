@@ -26,7 +26,7 @@ export function SegmentedFilter({
   return (
     <div className="flex items-center gap-2" role="group" aria-label={label}>
       <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</span>
-      <div className="inline-flex overflow-hidden rounded-lg border bg-white text-xs">
+      <div className="inline-flex max-w-full overflow-x-auto rounded-lg border bg-white text-xs">
         {options.map((o, i) => {
           const on = o.value === value
           return (
