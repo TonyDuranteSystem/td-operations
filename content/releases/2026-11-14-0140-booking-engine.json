@@ -1,0 +1,6 @@
+{
+  "title": "Groundwork for the Booking page: Calendly links made for a person (switched off)",
+  "tag": "behind-the-scenes",
+  "text": "The hidden engine of the future Booking page is in, and it is switched off, so nothing changes today. Later you will make a Calendly link for a chosen person (lead, client, partner or private), and when they book through it the system will know who it was for: a client's call will be saved under the client instead of creating a stray lead, a wrong email or a used link will fall back to what happens today and leave a card for a person to check. Already part of this release and visible once such calls exist: the contact page can list \"Booked calls\", and the Zoom recordings sorter knows about calls booked this way, so a client call is not filed as a marketing call.",
+  "points": []
+}
