@@ -105,6 +105,7 @@ The exact queries / files to check to confirm this doc still matches reality.
 | [portal.md](portal.md) | Client portal — 4 tiers (R102), syncTier, chat/notifications/docs, account types | ✅ written |
 | [client-app.md](client-app.md) | Client iPhone app (MyLLC Manager 2.0) — design decisions, build steps, what is live | ✅ written (Step 1 live; Step 2 in a pull request, switched off) |
 | [referrals-circleback.md](referrals-circleback.md) | Referrals — 10% credit notes, partner commissions, Calendly intake | ✅ written |
+| [booking.md](booking.md) | Booking page — Calendly links per audience (lead / client / partner / private): kinds, link rows, the webhook branch, the call log (Stage 1a engine, sandbox, switched off) | ✅ written |
 | [workflow-engine.md](workflow-engine.md) | Catalog framework + workflow engine — triggers, dispatch, snapshots, validity gate, editor | ✅ written |
 | [crm-core.md](crm-core.md) | CRM core — accounts/contacts/tasks/deals, account_contacts M:N, crm_update_record (R018) | ✅ written |
 | [hooks-guardrails.md](hooks-guardrails.md) | Safety system — Claude hooks, pre-push gates, sandbox enforcement, R-rules | ✅ written |

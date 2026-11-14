@@ -32,7 +32,7 @@ import { pickChatContact } from '@/lib/flows/chat-contact'
 import { deriveFlowYear, buildFlowTopic } from '@/lib/flows/resolve-flows'
 import { chooseFlowMessageTopic } from '@/lib/flows/flow-chat-topic'
 import { openTopicsOf } from '@/lib/portal/chat-topics'
-import { createPortalNotification, notifyClientOfAdminMessage } from '@/lib/portal/notifications'
+import { createPortalNotification, notifyClientOfAdminMessage, waitForClientAlert } from '@/lib/portal/notifications'
 
 const MAX_MESSAGE_LENGTH = 5000
 
@@ -279,7 +279,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
 
     // Notify the client — reuse the existing portal notification system.
-    createPortalNotification({
+    const clientAlert = createPortalNotification({
       account_id: sd.account_id || undefined,
       contact_id: contactId || undefined,
       type: 'chat',
@@ -288,13 +288,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       // Deep link ONTO the topic tab (Wave 2) — the client's reply then
       // inherits the topic without them doing anything.
       link: topic ? `/portal/chat?topic=${encodeURIComponent(topic)}` : '/portal/chat',
-    }).catch(() => {})
+    })
     notifyClientOfAdminMessage({
       account_id: sd.account_id || null,
       contact_id: contactId,
       topic,
       messagePreview: message,
     }).catch(() => {})
+    // wait (at most 4 s) for the client's browser + iPhone-app alert: a serverless function may be stopped as soon as it has answered
+    await waitForClientAlert(clientAlert)
 
     return NextResponse.json({ success: true, message: flatten(inserted) })
   } catch (e) {

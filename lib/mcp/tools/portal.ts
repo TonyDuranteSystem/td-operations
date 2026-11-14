@@ -967,21 +967,23 @@ TOPIC (2026-09-23): the portal chat is organized into topic tabs (e.g. "Mailing 
         }).catch(() => 0)
 
         // In-app notification + email to client (fire-and-forget)
-        const { createPortalNotification, notifyClientOfAdminMessage } = await import("@/lib/portal/notifications")
-        createPortalNotification({
+        const { createPortalNotification, notifyClientOfAdminMessage, waitForClientAlert } = await import("@/lib/portal/notifications")
+        const clientAlert = createPortalNotification({
           account_id: account_id || undefined,
           contact_id: contact_id || undefined,
           type: "chat",
           title: "New message from Tony Durante Team",
           body: msgText.slice(0, 100),
           link: buildPortalChatLink({ accountId: account_id || null, topic: resolvedTopic }),
-        }).catch(() => {})
+        })
         notifyClientOfAdminMessage({
           account_id: account_id || null,
           contact_id: contact_id || null,
           topic: resolvedTopic,
           messagePreview: msgText,
         }).catch(() => {})
+        // wait (at most 4 s) for the client's browser + iPhone-app alert: a serverless function may be stopped as soon as it has answered
+        await waitForClientAlert(clientAlert)
 
         // Identify recipient for confirmation
         let recipientName = ""
