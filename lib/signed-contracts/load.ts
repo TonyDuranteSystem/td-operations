@@ -10,7 +10,9 @@
  * Only the columns the card needs are read: never the passport, the address or any other personal field of `contracts`.
  */
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import type { CompanyAmountsRow, CompanyLookup } from './company-check'
 import { buildEntries, type AgreementRow, type ContractRow, type CorrectionRow, type OfferRow } from './entries'
+import { hasInstallmentAmounts } from './labels'
 import { AMOUNTS_CORRECTED_ACTION, type SignedContractEntry } from './types'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -18,6 +20,8 @@ const db = supabaseAdmin as any
 
 const OFFER_COLUMNS = 'id, token, contract_type, installment_currency, recurring_costs, account_id'
 const CONTRACT_COLUMNS = 'id, offer_token, signed_at, created_at, updated_at, contract_version, annual_fee, installments, pdf_path'
+/** the company's own installment amounts (what the CRM shows) — nothing else of the company is read */
+const COMPANY_COLUMNS = 'id, installment_1_amount, installment_1_currency, installment_2_amount, installment_2_currency'
 
 /** Escape a value for ilike so "_" and "%" in an email match themselves. */
 const likeEscape = (v: string) => v.replace(/[\\%_]/g, (m) => `\\${m}`)
@@ -48,6 +52,32 @@ async function offersFor(contactId: string, email: string | null): Promise<Offer
   return Array.from(byId.values())
 }
 
+/**
+ * The companies the signed formation / onboarding offers are filed on, for the "does the company agree with the contract" note.
+ * A failed read NEVER hides a contract and never claims a match: it is reported as `failed` and the line says it could not compare.
+ */
+async function lookUpCompanies(offers: OfferRow[], contracts: ContractRow[]): Promise<CompanyLookup> {
+  const signed = new Set(contracts.map((c) => c.offer_token))
+  const ids = Array.from(
+    new Set(
+      offers
+        .filter((o) => o.contract_type !== 'renewal' && hasInstallmentAmounts(o.contract_type) && o.account_id && signed.has(o.token))
+        .map((o) => o.account_id as string),
+    ),
+  )
+  const byId = new Map<string, CompanyAmountsRow>()
+  if (ids.length === 0) return { kind: 'ok', byId }
+  try {
+    const res = await db.from('accounts').select(COMPANY_COLUMNS).in('id', ids)
+    if (res.error) throw new Error(res.error.message)
+    for (const row of (res.data ?? []) as CompanyAmountsRow[]) byId.set(row.id, row)
+    return { kind: 'ok', byId }
+  } catch (err) {
+    console.error('[signed-contracts] the companies could not be read for the amount check:', err instanceof Error ? err.message : err)
+    return { kind: 'failed' }
+  }
+}
+
 async function assemble(offers: OfferRow[], contractFilter?: { id: string }): Promise<SignedContractEntry[]> {
   const tokens = offers.map((o) => o.token).filter(Boolean)
   if (tokens.length === 0) return []
@@ -60,7 +90,8 @@ async function assemble(offers: OfferRow[], contractFilter?: { id: string }): Pr
   if (contracts.length === 0) return []
 
   const renewalTokens = offers.filter((o) => o.contract_type === 'renewal').map((o) => o.token)
-  const [agreementsRes, correctionsRes] = await Promise.all([
+  const [companies, agreementsRes, correctionsRes] = await Promise.all([
+    lookUpCompanies(offers, contracts),
     renewalTokens.length
       ? db.from('annual_agreements').select('token, agreement_year, cost_summary, updated_at').in('token', renewalTokens)
       : Promise.resolve({ data: [] }),
@@ -80,6 +111,7 @@ async function assemble(offers: OfferRow[], contractFilter?: { id: string }): Pr
     contracts,
     agreements: (agreementsRes.data ?? []) as AgreementRow[],
     corrections,
+    companies,
   })
 }
 
