@@ -29,6 +29,7 @@ import {
   Eye,
   EyeOff,
   UserCheck,
+  BookUser,
   Target,
   Wrench,
   Share2,
@@ -126,6 +127,8 @@ const defaultNavigation: NavItem[] = [
   { id: 'marketing', name: 'Marketing', href: '/marketing-leads', icon: Megaphone, adminOnly: true, tooltip: 'TD Marketing — the master view of Rocco\'s team: leads from the ads, who is working them, what needs you today, and the Meta connection. Admin only.' },
   { id: 'intake', name: 'Intake', href: '/intake', icon: PhoneIncoming, tooltip: 'Review new Calendly bookings — create leads, link calls, or dismiss.' },
   { id: 'contacts', name: 'Contacts', href: '/contacts', icon: UserCheck, tooltip: 'All people in the system. Each contact can own one or more LLCs (accounts).' },
+  // Address book (dev job 055f2400, Antonio 2026-11-14): standalone — shows everyone the CRM already has (read only) and the people saved here. Sits in the Network group beside Contacts; it never changes Contacts.
+  { id: 'address-book', name: 'Address book', href: '/address-book', icon: BookUser, tooltip: 'Everyone we know in one list: the people from the CRM (read only) and the people you save here — suppliers, lawyers, a banker you met. You make the types.' },
   { id: 'accounts', name: 'Accounts', href: '/accounts', icon: Building2, tooltip: 'LLCs and companies. Each account has services, documents, invoices, and a timeline.' },
   { id: 'conversations', name: 'Conversations', href: '/conversations', icon: Tag, tooltip: 'Client threads tagged by client + topic — pull up everything for a client or a topic. Auto-tagged from #td-support.' },
   { id: 'client-audit', name: 'Client Audit', href: '/clients/audit', icon: ClipboardCheck, tooltip: 'Point zero — review every active client account, establish ground truth, fix data inconsistencies.' },
