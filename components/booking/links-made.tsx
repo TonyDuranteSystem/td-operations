@@ -128,7 +128,8 @@ export function LinksMade({ links, error, off, onChanged, onMakeAgain }: { links
                 return (
                   <tr key={l.id} className="align-middle" data-testid="link-row" data-status={l.status} data-booking={l.booking?.state ?? "none"}>
                     <td className="border-b px-2.5 py-2">
-                      <ListHoverCard card={l.card}><b>{l.personName ?? "Someone new"}</b></ListHoverCard>
+                      <ListHoverCard card={l.card}><b>{l.who.primary}</b></ListHoverCard>
+                      {l.who.secondary && <span className={`block max-w-[210px] break-words text-xs ${l.who.differs ? "font-semibold text-amber-700" : "text-zinc-500"}`} data-testid="link-booker">{l.who.secondary}</span>}
                     </td>
                     <td className="border-b px-2.5 py-2"><span className={BADGE}>{l.kindLabel}</span></td>
                     <td className="border-b px-2.5 py-2 text-zinc-700">

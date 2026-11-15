@@ -62,7 +62,7 @@ function calendly(answer: (req: CalendlyHttpRequest) => Answer): { ctx: Calendly
 const eventBody = (uri: string, over: Record<string, unknown> = {}) => ({ resource: { uri, status: "active", start_time: "2026-11-16T14:30:00Z", end_time: "2026-11-16T15:00:00Z", name: "New Meeting", ...over } })
 const cancelledByHost = { cancellation: { canceled_by: "Antonio Durante", reason: "", canceler_type: "host", created_at: "2026-11-15T12:56:47Z" } }
 
-const stored = (over: Partial<StoredBooking> = {}): StoredBooking => ({ tag: TAG_A, eventUri: EV_A, startTime: "2026-11-16T14:30:00.000000Z", storedAt: "2026-11-15T12:54:30Z", cancelUrl: CANCEL_URL, ...over })
+const stored = (over: Partial<StoredBooking> = {}): StoredBooking => ({ tag: TAG_A, eventUri: EV_A, startTime: "2026-11-16T14:30:00.000000Z", storedAt: "2026-11-15T12:54:30Z", cancelUrl: CANCEL_URL, booker: null, ...over })
 
 const linkRow = (over: Record<string, unknown> = {}) => ({
   id: "b0000000-0000-4000-8000-000000000001", public_id: TAG_A, kind_label: "Private", rule_snapshot: {}, contact_id: null, lead_id: null, person_name: null, person_emails: [],
