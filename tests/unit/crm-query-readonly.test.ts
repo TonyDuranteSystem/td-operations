@@ -41,6 +41,8 @@ describe("crm_query rejectIfNotReadOnly (app-layer read-only gate)", () => {
     "SELECT * FROM hc_tokens",
     "SELECT token FROM portal_welcome_tokens",
     "SELECT * FROM oauth_users JOIN accounts USING (id)",
+    "SELECT * FROM address_book_personal",
+    "SELECT payload_enc FROM public.address_book_personal WHERE owner_user_id IS NOT NULL",
   ])("rejects credential/token table access: %s", (q) => {
     expect(rejectIfNotReadOnly(q)).toMatch(/credential\/token tables/)
   })
