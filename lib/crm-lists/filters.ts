@@ -24,6 +24,8 @@ export interface FilterableCompany {
   status: string | null
   account_type: string | null
   entity_type: string | null
+  /** Live invoices that are Overdue and past due (only the Accounts list fills this in). */
+  overdue_count?: number
 }
 
 export interface CompanyFilters {
@@ -33,6 +35,8 @@ export interface CompanyFilters {
   kind: string
   /** '' (all) | an entity type | 'none' */
   type: string
+  /** Only companies with at least one overdue invoice (the "with overdue payments" pill). Off when missing. */
+  overdue?: boolean
 }
 
 function one(v: string | string[] | undefined): string {
@@ -40,8 +44,13 @@ function one(v: string | string[] | undefined): string {
 }
 
 /** Accounts page URL -> filters. Status defaults to Active (as today). */
-export function parseAccountFilters(sp: { status?: string | string[]; kind?: string | string[]; type?: string | string[] }): CompanyFilters {
-  return { status: one(sp.status) || 'Active', kind: one(sp.kind), type: one(sp.type) }
+export function parseAccountFilters(sp: {
+  status?: string | string[]
+  kind?: string | string[]
+  type?: string | string[]
+  overdue?: string | string[]
+}): CompanyFilters {
+  return { status: one(sp.status) || 'Active', kind: one(sp.kind), type: one(sp.type), overdue: one(sp.overdue) === '1' }
 }
 
 function typeMatches(entity: string | null, type: string): boolean {
@@ -50,13 +59,14 @@ function typeMatches(entity: string | null, type: string): boolean {
   return entity === type
 }
 
-export type FilterDimension = 'status' | 'kind' | 'type'
+export type FilterDimension = 'status' | 'kind' | 'type' | 'overdue'
 
 /** Does one company pass the filters? `skip` leaves one dimension out (used for the cross-filtered counts). */
 export function companyMatches(c: FilterableCompany, f: CompanyFilters, skip?: FilterDimension): boolean {
   if (skip !== 'status' && f.status !== 'all' && c.status !== f.status) return false
   if (skip !== 'kind' && f.kind && c.account_type !== f.kind) return false
   if (skip !== 'type' && !typeMatches(c.entity_type, f.type)) return false
+  if (skip !== 'overdue' && f.overdue && !((c.overdue_count ?? 0) > 0)) return false
   return true
 }
 
