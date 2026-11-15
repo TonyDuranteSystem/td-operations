@@ -2,9 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase-admin', () => ({ supabaseAdmin: { from: vi.fn() } }))
 vi.mock('@/lib/portal/document-alerts', () => ({ resolveDocLocale: vi.fn().mockResolvedValue('it') }))
+vi.mock('@/lib/auth-admin-helpers', () => ({ findAuthUserByEmail: vi.fn().mockResolvedValue({ id: 'u1', email: 'ada@example.com' }) }))
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { getContactMessageContext } from '@/lib/portal/contact-message-context'
+import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
+import { getContactMessageContext, portalLoginStateOf } from '@/lib/portal/contact-message-context'
 
 /** Chainable mock: every builder returns the chain; awaiting it (or maybeSingle) resolves the table's rows. */
 function table(rows: unknown[]) {
@@ -77,3 +79,50 @@ describe('getContactMessageContext', () => {
     expect(ctx.targets.filter((t) => t.kind === 'company')).toHaveLength(1)
   })
 })
+
+describe('the "cannot read it yet" notice is worked out by the server when the pop-up opens', () => {
+  beforeEach(() => vi.clearAllMocks())
+  const ctxFor = async () => {
+    mockDb({ contacts: [{ id: 'c1', full_name: 'Ada Rossi', email: 'ada@example.com' }], account_contacts: [] })
+    const ctx = await getContactMessageContext('c1')
+    if (!ctx || !ctx.askable) throw new Error('expected an askable context')
+    return ctx
+  }
+
+  it('no notice when the person has a working login', async () => {
+    vi.mocked(findAuthUserByEmail).mockResolvedValue({ id: 'u1', email: 'ada@example.com' } as never)
+    expect((await ctxFor()).notice).toBeUndefined()
+  })
+
+  it('says so when the person has no login', async () => {
+    vi.mocked(findAuthUserByEmail).mockResolvedValue(null)
+    expect((await ctxFor()).notice).toMatch(/Ada Rossi has no portal login yet/)
+  })
+
+  it('says so when the login is suspended', async () => {
+    vi.mocked(findAuthUserByEmail).mockResolvedValue({ id: 'u1', email: 'ada@example.com', banned_until: '2999-01-01T00:00:00Z' } as never)
+    expect((await ctxFor()).notice).toMatch(/suspended/)
+  })
+
+  it('a person with no email has no login, so the notice says so', async () => {
+    mockDb({ contacts: [{ id: 'c1', full_name: 'Ada Rossi', email: null }], account_contacts: [] })
+    const ctx = await getContactMessageContext('c1')
+    if (!ctx || !ctx.askable) throw new Error('expected an askable context')
+    expect(ctx.notice).toMatch(/no portal login yet/)
+    expect(findAuthUserByEmail).not.toHaveBeenCalled()
+  })
+
+  it('if the login lookup fails, say nothing rather than a false "no login"', async () => {
+    vi.mocked(findAuthUserByEmail).mockRejectedValue(new Error('auth down'))
+    expect((await ctxFor()).notice).toBeUndefined()
+  })
+})
+
+describe('portalLoginStateOf', () => {
+  const now = new Date('2026-11-15T12:00:00Z')
+  it('no auth user → no login', () => expect(portalLoginStateOf(null, now)).toEqual({ exists: false, suspended: false }))
+  it('auth user with no ban → working login', () => expect(portalLoginStateOf({ banned_until: null }, now)).toEqual({ exists: true, suspended: false }))
+  it('a ban in the future → suspended', () => expect(portalLoginStateOf({ banned_until: '2026-12-01T00:00:00Z' }, now)).toEqual({ exists: true, suspended: true }))
+  it('a ban already over → working login', () => expect(portalLoginStateOf({ banned_until: '2026-01-01T00:00:00Z' }, now)).toEqual({ exists: true, suspended: false }))
+})
+

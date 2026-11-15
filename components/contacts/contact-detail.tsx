@@ -423,7 +423,7 @@ export function ContactDetail({
             to={contact.email || undefined}
             linkLabel={contact.full_name || contact.email || undefined}
           />
-          <MessageContactButton contactId={contact.id} contactName={contact.full_name || ''} login={{ exists: portalAuth.exists, suspended: portalAuth.suspended }} />
+          <MessageContactButton contactId={contact.id} contactName={contact.full_name || ''} />
           {(contact.phone || contact.phone_2 || contact.phone_3 || contact.phone_4) && (
             <button
               onClick={() => setShowWhatsApp(true)}

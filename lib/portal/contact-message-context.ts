@@ -10,11 +10,35 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { resolveDocLocale } from "@/lib/portal/document-alerts"
 import { buildShareTargets } from "@/lib/portal/document-share-message"
-import type { ShareContext } from "@/lib/portal/document-share-text"
+import { contactMessageNotice, type PortalLoginState, type ShareContext } from "@/lib/portal/document-share-text"
+import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
+
+/**
+ * Pure: a person's portal login state from their auth user (null = no login). A login is "suspended" when its auth user is
+ * banned with a still-in-the-future banned_until — the same rule the Contact page's Portal tab uses.
+ */
+export function portalLoginStateOf(authUser: { banned_until?: string | null } | null, now: Date = new Date()): PortalLoginState {
+  if (!authUser) return { exists: false, suspended: false }
+  const bannedUntil = authUser.banned_until ?? null
+  return { exists: true, suspended: !!bannedUntil && new Date(bannedUntil) > now }
+}
+
+/**
+ * The amber "cannot read it yet" line for this person, worked out when the pop-up OPENS (not per list row). If the login cannot
+ * be looked up, say nothing rather than claim "no portal login" falsely.
+ */
+async function loginNotice(name: string, email: string | null): Promise<string | undefined> {
+  if (!email) return contactMessageNotice(name, { exists: false, suspended: false }) ?? undefined
+  try {
+    return contactMessageNotice(name, portalLoginStateOf(await findAuthUserByEmail(email))) ?? undefined
+  } catch {
+    return undefined
+  }
+}
 
 /** null when the contact does not exist. */
 export async function getContactMessageContext(contactId: string): Promise<ShareContext | null> {
-  const { data: contact, error } = await supabaseAdmin.from("contacts").select("id, full_name").eq("id", contactId).maybeSingle()
+  const { data: contact, error } = await supabaseAdmin.from("contacts").select("id, full_name, email").eq("id", contactId).maybeSingle()
   if (error) throw new Error(`Could not read the contact (${error.message}).`)
   if (!contact) return null
 
@@ -26,5 +50,7 @@ export async function getContactMessageContext(contactId: string): Promise<Share
   // the person's own chat first, then the companies
   const targets = [...built.filter((t) => t.kind === "person"), ...built.filter((t) => t.kind === "company")]
   const locale = await resolveDocLocale(null, contactId)
-  return { askable: true, fileName: "", locale, defaultTopic: "", targets, recipientName: (contact.full_name as string | null) ?? undefined }
+  const name = ((contact.full_name as string | null) ?? "").trim()
+  const notice = await loginNotice(name, (contact.email as string | null) ?? null)
+  return { askable: true, fileName: "", locale, defaultTopic: "", targets, recipientName: name || undefined, ...(notice ? { notice } : {}) }
 }

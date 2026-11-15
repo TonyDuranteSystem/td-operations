@@ -9,6 +9,11 @@
  *
  * Nothing is pre-selected when there is more than one choice (a message to the wrong chat can reach every member of a company).
  * A typed message is never lost: if the send fails the pop-up stays open and shows why.
+ *
+ * Two looks, one behaviour: the labelled button in the Contact page header, and (variant "icon", Antonio 2026-11-15: "directly from the
+ * list") a small chat icon beside a person's name in the Contacts list. The "no portal login" line is worked out by the server when the
+ * pop-up opens, so a list of 50 rows costs nothing extra. In a list row the pop-up lives inside a clickable row, so the wrapper stops
+ * clicks (and is marked data-no-nav) — otherwise a click inside the pop-up would open the person's page behind it.
  */
 import { useState } from 'react'
 import { MessageSquare, Loader2 } from 'lucide-react'
@@ -16,7 +21,7 @@ import { toast } from 'sonner'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { ShareMessageDialog, type ShareSendResult } from '@/components/storage/share-message-dialog'
 import { sendShareMessage } from '@/lib/crm-store/document-share-client'
-import { contactMessageNotice, type PortalLoginState, type ShareContext } from '@/lib/portal/document-share-text'
+import type { ShareContext } from '@/lib/portal/document-share-text'
 
 type Askable = Extract<ShareContext, { askable: true }>
 
@@ -32,7 +37,7 @@ async function fetchMessageContext(contactId: string): Promise<Askable> {
   return ctx
 }
 
-export function MessageContactButton({ contactId, contactName, login }: { contactId: string; contactName: string; login: PortalLoginState }) {
+export function MessageContactButton({ contactId, contactName, variant = 'button' }: { contactId: string; contactName: string; variant?: 'button' | 'icon' }) {
   const [loading, setLoading] = useState(false)
   const [ctx, setCtx] = useState<Askable | null>(null)
 
@@ -41,8 +46,7 @@ export function MessageContactButton({ contactId, contactName, login }: { contac
     setLoading(true)
     try {
       const c = await fetchMessageContext(contactId)
-      const notice = contactMessageNotice(contactName, login)
-      setCtx({ ...c, recipientName: c.recipientName || contactName || undefined, ...(notice ? { notice } : {}) })
+      setCtx({ ...c, recipientName: c.recipientName || contactName || undefined })
     } catch (e) {
       toast.error(e instanceof Error && e.message ? e.message : 'Could not open the message window — please try again.')
     } finally {
@@ -57,21 +61,34 @@ export function MessageContactButton({ contactId, contactName, login }: { contac
     window.dispatchEvent(new CustomEvent(CONTACT_CHAT_SENT_EVENT, { detail: { contactId } }))
   }
 
+  const label = 'Write a portal chat message to this person or to one of their companies.'
   return (
-    <>
-      <FastTooltip label="Write a portal chat message to this person or to one of their companies.">
-        <button
-          type="button"
-          onClick={open}
-          disabled={loading}
-          aria-label="Write a portal chat message to this person or to one of their companies."
-          className="inline-flex items-center gap-1.5 rounded-lg border border-blue-300 px-3 py-1 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-50 disabled:opacity-60"
-        >
-          {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MessageSquare className="h-3.5 w-3.5" />}
-          Message
-        </button>
+    <span data-no-nav className="inline-flex" onClick={(e) => e.stopPropagation()}>
+      <FastTooltip label={variant === 'icon' ? `Message ${contactName || 'this person'}` : label}>
+        {variant === 'icon' ? (
+          <button
+            type="button"
+            onClick={open}
+            disabled={loading}
+            aria-label={label}
+            className="inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-blue-50 hover:text-blue-700 focus-visible:text-blue-700 disabled:opacity-60"
+          >
+            {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MessageSquare className="h-3.5 w-3.5" />}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={open}
+            disabled={loading}
+            aria-label={label}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-blue-300 px-3 py-1 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-50 disabled:opacity-60"
+          >
+            {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MessageSquare className="h-3.5 w-3.5" />}
+            Message
+          </button>
+        )}
       </FastTooltip>
       {ctx && <ShareMessageDialog mode="message" ctx={ctx} onResult={() => setCtx(null)} onSend={send} />}
-    </>
+    </span>
   )
 }
