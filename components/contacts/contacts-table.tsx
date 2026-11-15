@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useEffect, useRef, useState, useTransition } from 'react'
-import { Search, ChevronLeft, ChevronRight, User, Shield } from 'lucide-react'
+import { ChevronLeft, ChevronRight, User, Shield } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { ContactCompanyLine, ContactListItem } from '@/lib/types'
 import { SegmentedFilter } from '@/components/lists/segmented-filter'
@@ -14,6 +14,7 @@ import { LetterBar } from '@/components/lists/letter-bar'
 import { LISTS_CONTAINER, ListStyles } from '@/components/lists/list-styles'
 import { YearSelect } from '@/components/lists/year-select'
 import { ListHoverCard } from '@/components/lists/hover-card'
+import { ListSearchBox } from '@/components/lists/list-search-box'
 import { MessageContactButton } from '@/components/contacts/message-contact-button'
 import { useAmountOverrides, type AmountOverride } from '@/components/lists/use-amount-overrides'
 import { isAmountLocked } from '@/lib/crm-lists/amounts'
@@ -187,16 +188,7 @@ export function ContactsTable({ items, query, statusFilter, filters, linkCounts,
     <div className="space-y-4">
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3">
-        <form onSubmit={handleSearch} className="relative w-full max-w-md flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <input
-            type="text"
-            value={search}
-            onChange={handleSearchChange}
-            placeholder="Search name or email..."
-            className="w-full pl-9 pr-4 py-2 rounded-lg border bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-        </form>
+        <ListSearchBox kind="contact" value={search} onChange={handleSearchChange} onSubmit={handleSearch} placeholder="Search name or email..." />
         <div className="ml-auto">
           <ColumnsMenu list="contacts" selected={columns} always="Name, Companies, 1st Inst, 2nd Inst, Setup fee" />
         </div>

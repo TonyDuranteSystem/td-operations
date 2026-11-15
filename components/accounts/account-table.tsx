@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useEffect, useRef, useState, useTransition } from 'react'
-import { Search, AlertCircle, ChevronLeft, ChevronRight, Plus, X } from 'lucide-react'
+import { AlertCircle, ChevronLeft, ChevronRight, Plus, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { AccountListItem } from '@/lib/types'
 import { CreateAccountDialog } from './create-account-dialog'
@@ -15,6 +15,7 @@ import { LetterBar } from '@/components/lists/letter-bar'
 import { LISTS_CONTAINER, ListStyles } from '@/components/lists/list-styles'
 import { YearSelect } from '@/components/lists/year-select'
 import { ListHoverCard } from '@/components/lists/hover-card'
+import { ListSearchBox } from '@/components/lists/list-search-box'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { OpenInWindowLink } from '@/components/windows/open-in-window-link'
 import { useAmountOverrides } from '@/components/lists/use-amount-overrides'
@@ -163,16 +164,7 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
     <div className="space-y-4">
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3">
-        <form onSubmit={handleSearch} className="relative w-full max-w-md flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <input
-            type="text"
-            value={search}
-            onChange={handleSearchChange}
-            placeholder="Search company..."
-            className="w-full pl-9 pr-4 py-2 rounded-lg border bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-        </form>
+        <ListSearchBox kind="account" value={search} onChange={handleSearchChange} onSubmit={handleSearch} placeholder="Search company..." />
         <div className="ml-auto flex items-center gap-2">
           <ColumnsMenu list="accounts" selected={columns} always="Company, 1st Inst, 2nd Inst, Per year" />
           <button
