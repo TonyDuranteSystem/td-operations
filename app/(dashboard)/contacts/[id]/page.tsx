@@ -15,6 +15,7 @@ import { isDashboardUser, isOwnerOnly } from '@/lib/auth'
 import { loadSignedContractsForContact } from '@/lib/signed-contracts/load'
 import type { SignedContractEntry } from '@/lib/signed-contracts/types'
 import { ViewAsClientButton } from '@/components/accounts/view-as-client-button'
+import { contactsWithPassportFile, passportOnFile } from '@/lib/contacts/passport-on-file'
 import type { LinkedAccount, ServiceDelivery, ConversationEntry } from '@/lib/types'
 import type { OfferPackageOption } from '@/lib/types/offer'
 
@@ -31,6 +32,10 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
     .single()
 
   if (!contact) notFound()
+
+  // "Passport on file" follows the real files (Storage, then old documents), not only the saved flag.
+  const hasPassportFile = (await contactsWithPassportFile([params.id])).has(params.id)
+  contact.passport_on_file = passportOnFile(contact.passport_on_file, hasPassportFile)
 
   // Fetch related data in parallel
   const [accountsResult, sdsResult, conversationsResult, leadResult, docsResult, offersResult, pendingActivationsResult, wizardProgressResult] = await Promise.all([

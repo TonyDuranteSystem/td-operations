@@ -8,6 +8,7 @@ import { listYearOptions, parseListYear } from '@/lib/crm-lists/year'
 import { getColumnPref } from '@/lib/crm-lists/prefs'
 import { resolveColumns } from '@/lib/crm-lists/columns'
 import { formatListDate } from '@/lib/crm-lists/format'
+import { contactsWithPassportFile, passportOnFile } from '@/lib/contacts/passport-on-file'
 import { pickMainContacts, type AccountContactLink } from '@/lib/crm-lists/people'
 
 const PAGE_SIZE = 50
@@ -79,7 +80,7 @@ export default async function ContactsPage({
   const pageIds = pageRows.map(p => p.id)
   const pageAccountIds = Array.from(new Set(pageRows.flatMap(p => p.companies.map(c => c.id))))
 
-  const [contactDetails, accountDetails, chipMap, mainLinks, overdueMap] = await Promise.all([
+  const [contactDetails, accountDetails, chipMap, mainLinks, overdueMap, passportFiles] = await Promise.all([
     pageIds.length > 0
       ? supabase
           .from('contacts')
@@ -98,6 +99,7 @@ export default async function ContactsPage({
       ? supabase.from('account_contacts').select('account_id, is_primary, ended_at, contact:contacts(full_name, email)').in('account_id', pageAccountIds)
       : Promise.resolve({ data: [] }),
     loadOverdueCounts(supabase),
+    contactsWithPassportFile(pageIds),
   ])
   const mainContacts = pickMainContacts((mainLinks.data ?? []) as unknown as AccountContactLink[])
   const contactById = new Map((contactDetails.data ?? []).map(c => [c.id, c]))
@@ -141,7 +143,7 @@ export default async function ContactsPage({
         portal_tier: c.portal_tier,
         status: c.status,
         itin_on_file: !!c.itin_number,
-        passport_on_file: c.passport_on_file,
+        passport_on_file: passportOnFile(c.passport_on_file, passportFiles.has(c.id)),
         portal_role: c.portal_role,
         account_count: lines.length,
         account_names: lines.map(l => l.company_name).join(', ') || null,
