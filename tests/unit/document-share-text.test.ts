@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildDocumentShareMessage, normalizeTopic, resolveTypedTopic, sameShareAudience, topicChoices, DEFAULT_DOCUMENT_TOPIC, type ShareContext, type ShareTarget } from '@/lib/portal/document-share-text'
+import { buildDocumentShareMessage, contactMessageNotice, messageTopicChoices, normalizeTopic, resolveTypedTopic, sameShareAudience, topicChoices, DEFAULT_DOCUMENT_TOPIC, type ShareContext, type ShareTarget } from '@/lib/portal/document-share-text'
 import { buildShareChatBody, type ShareMessageToSend } from '@/lib/crm-store/document-share-client'
 
 describe('buildDocumentShareMessage', () => {
@@ -66,5 +66,36 @@ describe('sameShareAudience (one pop-up for several files)', () => {
   it('a different number of choices, or any non-askable file → not the same', () => {
     expect(sameShareAudience(ctx([t('company:a', true)]), ctx([t('company:a', true), t('person:c', false)]))).toBe(false)
     expect(sameShareAudience(ctx([t('company:a', true)]), { askable: false, reason: 'personal', fileName: 'p' })).toBe(false)
+  })
+})
+
+describe('messageTopicChoices (the Contact page Message pop-up)', () => {
+  it('"General" (an empty topic) always comes first, then the chat\'s own topics', () => {
+    expect(messageTopicChoices([])).toEqual([''])
+    expect(messageTopicChoices(['ITIN', 'Tax'])).toEqual(['', 'ITIN', 'Tax'])
+  })
+  it('drops case-insensitive duplicates and blanks', () => {
+    expect(messageTopicChoices(['ITIN', 'itin', ' ', 'Tax'])).toEqual(['', 'ITIN', 'Tax'])
+  })
+  it('a General message is sent with an empty topic, which the chat route stores as no topic', () => {
+    const target = { key: 'person:c1', kind: 'person', accountId: null, contactId: 'c1', label: 'Ada', closed: false, isDefault: false, topics: [] } as ShareTarget
+    expect(buildShareChatBody({ target, topic: '', message: 'Hello', addressedToMemberId: null, addressedToCompany: false })).toEqual({
+      contact_id: 'c1', sender_context: 'person', topic: '', message: 'Hello',
+    })
+  })
+})
+
+describe('contactMessageNotice', () => {
+  it('says nothing when the login is fine', () => {
+    expect(contactMessageNotice('Ada Rossi', { exists: true, suspended: false })).toBeNull()
+  })
+  it('warns when the person has no portal login yet', () => {
+    expect(contactMessageNotice('Ada Rossi', { exists: false, suspended: false })).toBe('Ada Rossi has no portal login yet. The message is saved in their chat, but they cannot read it until they have portal access.')
+  })
+  it('warns when the login is suspended', () => {
+    expect(contactMessageNotice('Ada Rossi', { exists: true, suspended: true })).toContain('suspended')
+  })
+  it('falls back to "This person" for a nameless contact', () => {
+    expect(contactMessageNotice('  ', { exists: false, suspended: false })).toMatch(/^This person has no portal login yet/)
   })
 })

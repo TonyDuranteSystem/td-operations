@@ -39,7 +39,17 @@ export interface ShareTarget {
 
 export type ShareContext =
   | { askable: false; reason: "personal" | "no_recipient" | "not_listed"; fileName: string }
-  | { askable: true; fileName: string; locale: Locale; defaultTopic: string; targets: ShareTarget[] }
+  | {
+      askable: true
+      fileName: string
+      locale: Locale
+      defaultTopic: string
+      targets: ShareTarget[]
+      /** the Contact page's Message pop-up: who the message is for (shown in its title) */
+      recipientName?: string
+      /** an amber line shown under the choices (e.g. "no portal login yet") */
+      notice?: string
+    }
 
 /** Pure: trim + cap a typed topic exactly as the chat route stores it (trim, 100 chars). */
 export function normalizeTopic(raw: string): string {
@@ -77,4 +87,26 @@ export function sameShareAudience(a: ShareContext, b: ShareContext): boolean {
   if (a.targets.length !== b.targets.length) return false
   const sig = (c: Extract<ShareContext, { askable: true }>) => c.targets.map((t) => `${t.key}|${t.isDefault ? 1 : 0}|${t.closed ? 1 : 0}`).sort().join(',')
   return sig(a) === sig(b) && a.locale === b.locale
+}
+
+/**
+ * Pure: the topic choices for a plain staff message (the Contact page's Message pop-up). The first choice is "General" — an EMPTY
+ * topic, which the chat route stores as no topic (portal_messages.topic NULL) — followed by the chat's own topics, no duplicates.
+ */
+export function messageTopicChoices(existing: string[]): string[] {
+  return ["", ...topicChoices("", existing)]
+}
+
+/** How a person's portal login looks from the Contact page (the same facts as its Portal tab). */
+export interface PortalLoginState { exists: boolean; suspended: boolean }
+
+/**
+ * Pure: the amber line the Message pop-up shows when the person cannot read the chat yet — null when their login is fine.
+ * It states only what is known: the message is saved in the chat either way; without a working login the person cannot open it.
+ */
+export function contactMessageNotice(name: string, login: PortalLoginState): string | null {
+  const who = name.trim() || "This person"
+  if (!login.exists) return `${who} has no portal login yet. The message is saved in their chat, but they cannot read it until they have portal access.`
+  if (login.suspended) return `${who}'s portal login is suspended. The message is saved in their chat, but they cannot read it while the login is suspended.`
+  return null
 }
