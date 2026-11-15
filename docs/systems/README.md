@@ -109,6 +109,7 @@ The exact queries / files to check to confirm this doc still matches reality.
 | [leads.md](leads.md) | Leads — the Leads list as the first tab of the Booking page, the old /leads redirect, the lead page, who sees it (staff), what stayed the same | ✅ written |
 | [workflow-engine.md](workflow-engine.md) | Catalog framework + workflow engine — triggers, dispatch, snapshots, validity gate, editor | ✅ written |
 | [crm-core.md](crm-core.md) | CRM core — accounts/contacts/tasks/deals, account_contacts M:N, crm_update_record (R018) | ✅ written |
+| [account-journey.md](account-journey.md) | Account journey — the company page's first card: closed by default, one-line header with the client's real state, the six steps and form rows inside, Partner Bank Applications as its own card | ✅ written |
 | [hooks-guardrails.md](hooks-guardrails.md) | Safety system — Claude hooks, pre-push gates, sandbox enforcement, R-rules | ✅ written |
 | [auth-oauth.md](auth-oauth.md) | Auth — Supabase session RBAC (middleware) + MCP Bearer/OAuth 2.1 PKCE | ✅ written |
 | [documents.md](documents.md) | Documents & storage — Drive/Supabase storage, OCR+classify pipeline, PDF gen | ✅ written |

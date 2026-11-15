@@ -28,7 +28,12 @@ function formatDate(iso: string): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
-export function BankReferralsPanel({ entries }: { entries: BankReferralEntry[] }) {
+/**
+ * `standalone` = its own card on the company page, under Signed contracts (Antonio, 2026-11-14, dev job b3b013cd).
+ * It used to sit INSIDE the Account journey card; that card now starts closed, which would have hidden the red
+ * "N applied" tag, so the panel is a closed card of its own.
+ */
+export function BankReferralsPanel({ entries, standalone = false }: { entries: BankReferralEntry[]; standalone?: boolean }) {
   const { clickedCount, hasActivity } = summarizeBankActivity(entries)
   // Always closed to start with; the red "N applied" tag in the header says when the client clicked a bank.
   const [open, setOpen] = useState(false)
@@ -42,7 +47,7 @@ export function BankReferralsPanel({ entries }: { entries: BankReferralEntry[] }
   })
 
   return (
-    <div className="mt-4 border-t pt-4">
+    <div className={standalone ? 'bg-white rounded-lg border p-5' : 'mt-4 border-t pt-4'} data-testid={standalone ? 'bank-referrals-card' : undefined}>
       <button
         type="button"
         onClick={() => setOpen(v => !v)}

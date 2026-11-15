@@ -13,10 +13,12 @@ import { ColumnsMenu } from '@/components/lists/columns-menu'
 import { LetterBar } from '@/components/lists/letter-bar'
 import { LISTS_CONTAINER, ListStyles } from '@/components/lists/list-styles'
 import { YearSelect } from '@/components/lists/year-select'
+import { ListHoverCard } from '@/components/lists/hover-card'
 import { useAmountOverrides, type AmountOverride } from '@/components/lists/use-amount-overrides'
 import { isAmountLocked } from '@/lib/crm-lists/amounts'
 import { chosenColumns, gridMinWidth, gridTemplate, hasColumn } from '@/lib/crm-lists/columns'
 import { contactCellText, contactMetaText } from '@/lib/crm-lists/cells'
+import { companyCard, personCard } from '@/lib/crm-lists/hover-cards'
 import { ACCOUNT_STATUS_CHOICES, KIND_CHOICES, TYPE_CHOICES, TYPE_NOT_SET, type ContactFilters } from '@/lib/crm-lists/filters'
 
 const TIER_COLORS: Record<string, string> = {
@@ -256,7 +258,12 @@ export function ContactsTable({ items, query, statusFilter, filters, linkCounts,
                   <div className="flex items-start gap-2 min-w-0 pt-0.5">
                     <User className="mt-0.5 h-4 w-4 text-muted-foreground shrink-0" />
                     <div className="min-w-0">
-                      <p className="font-medium text-sm truncate">{item.full_name}</p>
+                      <ListHoverCard
+                        card={personCard({ ...item, companies: item.companies.map(c => ({ company_name: c.company_name, status: c.status })) })}
+                        className="min-w-0 max-w-full"
+                      >
+                        <p className="truncate font-medium text-sm">{item.full_name}</p>
+                      </ListHoverCard>
                       <div className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
                         {item.language && !hasColumn(columns, 'language') && <span>{item.language}</span>}
                         {item.passport_on_file && (
@@ -309,13 +316,15 @@ export function ContactsTable({ items, query, statusFilter, filters, linkCounts,
                             className={cn(INNER, 'items-start min-h-[28px]', i > 0 && 'mt-1.5 pt-1.5 border-t border-dashed', locked && 'opacity-60')}
                           >
                             <div className="col-span-2 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 md:col-span-1">
-                              <Link
-                                href={`/accounts/${line.account_id}`}
-                                data-no-nav
-                                className="break-words text-sm font-medium hover:underline"
-                              >
-                                {line.company_name}
-                              </Link>
+                              <ListHoverCard card={companyCard(line, year)}>
+                                <Link
+                                  href={`/accounts/${line.account_id}`}
+                                  data-no-nav
+                                  className="break-words text-sm font-medium hover:underline"
+                                >
+                                  {line.company_name}
+                                </Link>
+                              </ListHoverCard>
                               <EntityChip entityType={line.entity_type} />
                               {/* Its status is a field you can tick; a locked company always says why it is greyed. */}
                               {(showCompanyStatus || locked) && <StatusChip status={line.status} />}

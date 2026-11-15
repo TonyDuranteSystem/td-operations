@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useEffect, useRef, useState, useTransition } from 'react'
-import { Search, AlertCircle, ChevronLeft, ChevronRight, Plus } from 'lucide-react'
+import { Search, AlertCircle, ChevronLeft, ChevronRight, Plus, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { AccountListItem } from '@/lib/types'
 import { CreateAccountDialog } from './create-account-dialog'
@@ -14,10 +14,14 @@ import { ColumnsMenu } from '@/components/lists/columns-menu'
 import { LetterBar } from '@/components/lists/letter-bar'
 import { LISTS_CONTAINER, ListStyles } from '@/components/lists/list-styles'
 import { YearSelect } from '@/components/lists/year-select'
+import { ListHoverCard } from '@/components/lists/hover-card'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { OpenInWindowLink } from '@/components/windows/open-in-window-link'
 import { useAmountOverrides } from '@/components/lists/use-amount-overrides'
 import { isAmountLocked, perYearLabel, perYearTotal } from '@/lib/crm-lists/amounts'
 import { chosenColumns, gridMinWidth, gridTemplate, hasColumn } from '@/lib/crm-lists/columns'
 import { accountCellText, accountMetaText } from '@/lib/crm-lists/cells'
+import { companyCard, personCard } from '@/lib/crm-lists/hover-cards'
 import { ACCOUNT_STATUS_CHOICES, KIND_CHOICES, TYPE_CHOICES, TYPE_NOT_SET, type AccountFacets } from '@/lib/crm-lists/filters'
 
 interface AccountTableProps {
@@ -26,6 +30,8 @@ interface AccountTableProps {
   statusFilter: string
   kindFilter: string
   typeFilter: string
+  /** Only companies with an overdue invoice (the "with overdue payments" pill was clicked). */
+  overdueOnly: boolean
   facets: AccountFacets
   stats: {
     total: number
@@ -43,7 +49,7 @@ interface AccountTableProps {
   defaultYear: number
 }
 
-type FilterKey = 'q' | 'status' | 'kind' | 'type' | 'letter' | 'year'
+type FilterKey = 'q' | 'status' | 'kind' | 'type' | 'overdue' | 'letter' | 'year'
 
 // Wide (the table has the room the chosen fields need): company, the chosen fields, 1st Inst, 2nd Inst, Per year, then any "after" field
 // (Overdue) — the columns come from --cols. Narrower: company (chosen fields on one small line under it) + the three money columns.
@@ -52,7 +58,7 @@ const MID_COLS = 'md:grid-cols-[minmax(0,1fr)_130px_130px_84px] md:gap-2.5 lc-ro
 const ROW_GRID = `grid grid-cols-3 gap-x-3 gap-y-1 ${MID_COLS}`
 const HEAD_GRID = `hidden md:grid ${MID_COLS}`
 
-export function AccountTable({ items, query, statusFilter, kindFilter, typeFilter, facets, stats, currentPage, totalPages, totalCount, columns, letter, letters, year, years, defaultYear }: AccountTableProps) {
+export function AccountTable({ items, query, statusFilter, kindFilter, typeFilter, overdueOnly, facets, stats, currentPage, totalPages, totalCount, columns, letter, letters, year, years, defaultYear }: AccountTableProps) {
   const router = useRouter()
   const [search, setSearch] = useState(query)
   const [isPending, startTransition] = useTransition()
@@ -67,7 +73,8 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
   // the second call fell back to a still-stale prop for it. Found by
   // adversarial review, 2026-09-03 (round 3 — the original round-2 fix only
   // covered search).
-  const lastFiltersRef = useRef<Record<FilterKey, string>>({ q: query, status: statusFilter, kind: kindFilter, type: typeFilter, letter, year: yearParam })
+  const overdueParam = overdueOnly ? '1' : ''
+  const lastFiltersRef = useRef<Record<FilterKey, string>>({ q: query, status: statusFilter, kind: kindFilter, type: typeFilter, overdue: overdueParam, letter, year: yearParam })
 
   // Resync when the URL changed for a reason OTHER than our own action —
   // browser back/forward, or a link elsewhere setting these params. See
@@ -75,11 +82,11 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
   // "prop changed" check.
   useEffect(() => {
     const last = lastFiltersRef.current
-    if (query !== last.q || statusFilter !== last.status || kindFilter !== last.kind || typeFilter !== last.type || letter !== last.letter || yearParam !== last.year) {
-      lastFiltersRef.current = { q: query, status: statusFilter, kind: kindFilter, type: typeFilter, letter, year: yearParam }
+    if (query !== last.q || statusFilter !== last.status || kindFilter !== last.kind || typeFilter !== last.type || overdueParam !== last.overdue || letter !== last.letter || yearParam !== last.year) {
+      lastFiltersRef.current = { q: query, status: statusFilter, kind: kindFilter, type: typeFilter, overdue: overdueParam, letter, year: yearParam }
       setSearch(query)
     }
-  }, [query, statusFilter, kindFilter, typeFilter, letter, yearParam])
+  }, [query, statusFilter, kindFilter, typeFilter, overdueParam, letter, yearParam])
 
   function buildParams(overridesParams: Record<string, string> = {}) {
     const params = new URLSearchParams()
@@ -88,6 +95,7 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
     const s = overridesParams.status ?? cur.status
     const k = overridesParams.kind ?? cur.kind
     const t = overridesParams.type ?? cur.type
+    const o = overridesParams.overdue ?? cur.overdue
     const l = overridesParams.letter ?? cur.letter
     const y = overridesParams.year ?? cur.year
     const p = overridesParams.page ?? ''
@@ -95,6 +103,7 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
     if (s) params.set('status', s)
     if (k) params.set('kind', k)
     if (t) params.set('type', t)
+    if (o) params.set('overdue', o)
     if (l) params.set('letter', l)
     if (y) params.set('year', y)
     if (p && p !== '1') params.set('page', p)
@@ -188,11 +197,33 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
         <span className="px-3 py-1 rounded-full bg-zinc-100 text-zinc-700 font-medium">
           {stats.total} total
         </span>
-        {stats.withOverdue > 0 && (
-          <span className="px-3 py-1 rounded-full bg-red-100 text-red-700 font-medium flex items-center gap-1">
-            <AlertCircle className="h-3.5 w-3.5" />
-            {stats.withOverdue} with overdue payments
-          </span>
+        {overdueOnly ? (
+          // The list is already narrowed to overdue companies (typically inside the floating window): this clears it.
+          <FastTooltip label="Show every company again" align="left">
+            <button
+              type="button"
+              onClick={() => updateFilter('overdue', '')}
+              disabled={isPending}
+              aria-label="Show every company again"
+              className="px-3 py-1 rounded-full bg-red-600 text-white font-medium flex items-center gap-1 hover:bg-red-700 transition-colors"
+            >
+              <AlertCircle className="h-3.5 w-3.5" />
+              {stats.withOverdue} with overdue payments
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </FastTooltip>
+        ) : (
+          stats.withOverdue > 0 && (
+            // Opens the same list, limited to the companies with an overdue payment, in a floating window.
+            <OpenInWindowLink
+              href={`/accounts?${buildParams({ overdue: '1', page: '1' })}`}
+              title="Companies with overdue payments"
+              className="px-3 py-1 rounded-full bg-red-100 text-red-700 font-medium flex items-center gap-1 hover:bg-red-200 transition-colors cursor-pointer"
+            >
+              <AlertCircle className="h-3.5 w-3.5" />
+              {stats.withOverdue} with overdue payments
+            </OpenInWindowLink>
+          )
         )}
       </div>
 
@@ -249,14 +280,16 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
                 >
                   {/* Company */}
                   <div className="col-span-3 min-w-0 md:col-span-1">
-                    <p className="flex items-center gap-1.5 font-medium text-sm truncate">
-                      <Link href={`/accounts/${item.id}`} className="truncate hover:underline" onClick={e => e.stopPropagation()}>
-                        {item.company_name}
-                      </Link>
+                    <div className="flex items-center gap-1.5 font-medium text-sm">
+                      <ListHoverCard card={companyCard(item, year)} className="min-w-0 max-w-full">
+                        <Link href={`/accounts/${item.id}`} className="truncate hover:underline" onClick={e => e.stopPropagation()}>
+                          {item.company_name}
+                        </Link>
+                      </ListHoverCard>
                       {!hasColumn(columns, 'kind') && <KindChip kind={item.account_type} />}
                       {/* A greyed, locked company always says why, even when the Status column is not chosen. */}
                       {locked && !hasColumn(columns, 'status') && <StatusChip status={item.status} />}
-                    </p>
+                    </div>
                     {meta.length > 0 && <p className="lc-m mt-0.5 text-xs text-muted-foreground">{meta.join(' · ')}</p>}
                   </div>
 
@@ -267,6 +300,10 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
                         <EntityChip entityType={item.entity_type} />
                       ) : c.id === 'status' ? (
                         <StatusChip status={item.status} />
+                      ) : c.id === 'contact' && item.contact_card && item.contact_name ? (
+                        <ListHoverCard card={personCard(item.contact_card)} className="min-w-0 max-w-full">
+                          <span className="truncate">{item.contact_name}</span>
+                        </ListHoverCard>
                       ) : (
                         (accountCellText(item, c.id) ?? '—')
                       )}
