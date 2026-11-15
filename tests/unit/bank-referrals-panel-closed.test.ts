@@ -34,3 +34,23 @@ describe('Partner Bank Applications always starts closed (Antonio 2026-11-14)', 
     expect(render([])).toBe('')
   })
 })
+
+describe('Partner Bank Applications as its own card on the company page (Antonio 2026-11-14)', () => {
+  const standalone = (e: BankReferralEntry[]) => renderToStaticMarkup(createElement(BankReferralsPanel, { entries: e, standalone: true }))
+
+  it('standalone: its own card, closed, red tag in the header', () => {
+    const h = standalone(entries(4))
+    expect(h).toContain('data-testid="bank-referrals-card"')
+    expect(h).toContain('bg-white rounded-lg border')
+    expect(h).toContain('aria-expanded="false"')
+    expect(h).toContain('4 applied')
+  })
+
+  it('not standalone (the old shape): no card of its own', () => {
+    expect(render(entries(1))).not.toContain('bank-referrals-card')
+  })
+
+  it('standalone with no banks in the catalog still draws nothing', () => {
+    expect(standalone([])).toBe('')
+  })
+})

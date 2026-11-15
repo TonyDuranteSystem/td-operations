@@ -179,8 +179,9 @@ _Regenerated 2026-11-15 from the R-rule list in CLAUDE.md — **45 rules**, high
 
 ## Appendix E — Subsystem deep docs
 <!-- GENERATED:deep-docs -->
-_Regenerated 2026-11-15. Every subsystem doc under `docs/systems/` (62 docs), with the date each was last verified against code — **an old date means treat that doc as a hint and check the code**._
+_Regenerated 2026-11-15. Every subsystem doc under `docs/systems/` (63 docs), with the date each was last verified against code — **an old date means treat that doc as a hint and check the code**._
 
+- [account-journey.md](account-journey.md) — Account journey (the card on the company page) _(verified 2026-11-14)_
 - [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-11-13)_
 - [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-11-13)_
 - [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-11-15)_
