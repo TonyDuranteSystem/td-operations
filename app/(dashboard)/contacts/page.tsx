@@ -2,11 +2,13 @@ import { createClient } from '@/lib/supabase/server'
 import { ContactsTable } from '@/components/contacts/contacts-table'
 import type { ContactCompanyLine, ContactListItem } from '@/lib/types'
 import { contactLinkCounts, contactMatches, parseContactFilters, type FilterableCompany } from '@/lib/crm-lists/filters'
-import { fetchAllRows, loadInstallmentChips, loadInstallmentYears, newYorkYear } from '@/lib/crm-lists/queries'
+import { fetchAllRows, loadInstallmentChips, loadInstallmentYears, loadOverdueCounts, newYorkYear } from '@/lib/crm-lists/queries'
 import { letterCounts, letterMatches, parseLetter } from '@/lib/crm-lists/letters'
 import { listYearOptions, parseListYear } from '@/lib/crm-lists/year'
 import { getColumnPref } from '@/lib/crm-lists/prefs'
 import { resolveColumns } from '@/lib/crm-lists/columns'
+import { formatListDate } from '@/lib/crm-lists/format'
+import { pickMainContacts, type AccountContactLink } from '@/lib/crm-lists/people'
 
 const PAGE_SIZE = 50
 
@@ -77,7 +79,7 @@ export default async function ContactsPage({
   const pageIds = pageRows.map(p => p.id)
   const pageAccountIds = Array.from(new Set(pageRows.flatMap(p => p.companies.map(c => c.id))))
 
-  const [contactDetails, accountDetails, chipMap] = await Promise.all([
+  const [contactDetails, accountDetails, chipMap, mainLinks, overdueMap] = await Promise.all([
     pageIds.length > 0
       ? supabase
           .from('contacts')
@@ -87,11 +89,17 @@ export default async function ContactsPage({
     pageAccountIds.length > 0
       ? supabase
           .from('accounts')
-          .select('id, installment_1_amount, installment_1_currency, installment_2_amount, installment_2_currency, setup_fee_amount, setup_fee_currency, updated_at')
+          .select('id, installment_1_amount, installment_1_currency, installment_2_amount, installment_2_currency, setup_fee_amount, setup_fee_currency, updated_at, state_of_formation, client_since')
           .in('id', pageAccountIds)
       : Promise.resolve({ data: [] }),
     loadInstallmentChips(supabase, pageAccountIds, year),
+    // Each company's main contact and its overdue count, for the company's hover card.
+    pageAccountIds.length > 0
+      ? supabase.from('account_contacts').select('account_id, is_primary, ended_at, contact:contacts(full_name, email)').in('account_id', pageAccountIds)
+      : Promise.resolve({ data: [] }),
+    loadOverdueCounts(supabase),
   ])
+  const mainContacts = pickMainContacts((mainLinks.data ?? []) as unknown as AccountContactLink[])
   const contactById = new Map((contactDetails.data ?? []).map(c => [c.id, c]))
   const moneyById = new Map((accountDetails.data ?? []).map(a => [a.id, a]))
 
@@ -115,6 +123,11 @@ export default async function ContactsPage({
         updated_at: m?.updated_at ?? '',
         chip_1: chipMap[co.id]?.first ?? { kind: 'not_invoiced', count: 0 },
         chip_2: chipMap[co.id]?.second ?? { kind: 'not_invoiced', count: 0 },
+        state_of_formation: m?.state_of_formation ?? null,
+        client_since: formatListDate(m?.client_since),
+        contact_name: mainContacts[co.id]?.name ?? null,
+        contact_email: mainContacts[co.id]?.email ?? null,
+        payment_overdue: overdueMap[co.id] ?? 0,
       }
     })
     return [

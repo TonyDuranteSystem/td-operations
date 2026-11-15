@@ -29,10 +29,10 @@ const ROWS: FilterableCompany[] = [
 
 describe('parseAccountFilters', () => {
   it('defaults the status to Active and the rest to all', () => {
-    expect(parseAccountFilters({})).toEqual({ status: 'Active', kind: '', type: '' })
+    expect(parseAccountFilters({})).toEqual({ status: 'Active', kind: '', type: '', overdue: false })
   })
   it('reads the three words', () => {
-    expect(parseAccountFilters({ status: 'all', kind: 'One-Time', type: 'none' })).toEqual({ status: 'all', kind: 'One-Time', type: 'none' })
+    expect(parseAccountFilters({ status: 'all', kind: 'One-Time', type: 'none' })).toEqual({ status: 'all', kind: 'One-Time', type: 'none', overdue: false })
   })
   it('takes the first value of a repeated parameter and trims', () => {
     expect(parseAccountFilters({ status: [' Closed ', 'Active'] }).status).toBe('Closed')
