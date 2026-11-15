@@ -825,6 +825,162 @@ export type Database = {
           },
         ]
       }
+      address_book_crm_labels: {
+        Row: {
+          confirmed_by_email: string | null
+          created_at: string
+          id: string
+          subject_id: string
+          subject_kind: string
+          type_entry_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          confirmed_by_email?: string | null
+          created_at?: string
+          id?: string
+          subject_id: string
+          subject_kind: string
+          type_entry_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          confirmed_by_email?: string | null
+          created_at?: string
+          id?: string
+          subject_id?: string
+          subject_kind?: string
+          type_entry_id?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "address_book_crm_labels_type_entry_id_fkey"
+            columns: ["type_entry_id"]
+            isOneToOne: false
+            referencedRelation: "catalog_entries"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "address_book_crm_labels_type_entry_id_fkey"
+            columns: ["type_entry_id"]
+            isOneToOne: false
+            referencedRelation: "service_catalog"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      address_book_entries: {
+        Row: {
+          address: string | null
+          archived_at: string | null
+          card_file_path: string | null
+          company: string | null
+          created_at: string
+          created_by: string | null
+          created_by_email: string | null
+          emails: string[]
+          extra: Json
+          full_name: string
+          id: string
+          job_title: string | null
+          notes: string | null
+          phone_keys: string[]
+          phones: string[]
+          source: string
+          source_ref: Json | null
+          type_entry_id: string | null
+          updated_at: string
+          website: string | null
+        }
+        Insert: {
+          address?: string | null
+          archived_at?: string | null
+          card_file_path?: string | null
+          company?: string | null
+          created_at?: string
+          created_by?: string | null
+          created_by_email?: string | null
+          emails?: string[]
+          extra?: Json
+          full_name: string
+          id?: string
+          job_title?: string | null
+          notes?: string | null
+          phone_keys?: string[]
+          phones?: string[]
+          source?: string
+          source_ref?: Json | null
+          type_entry_id?: string | null
+          updated_at?: string
+          website?: string | null
+        }
+        Update: {
+          address?: string | null
+          archived_at?: string | null
+          card_file_path?: string | null
+          company?: string | null
+          created_at?: string
+          created_by?: string | null
+          created_by_email?: string | null
+          emails?: string[]
+          extra?: Json
+          full_name?: string
+          id?: string
+          job_title?: string | null
+          notes?: string | null
+          phone_keys?: string[]
+          phones?: string[]
+          source?: string
+          source_ref?: Json | null
+          type_entry_id?: string | null
+          updated_at?: string
+          website?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "address_book_entries_type_entry_id_fkey"
+            columns: ["type_entry_id"]
+            isOneToOne: false
+            referencedRelation: "catalog_entries"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "address_book_entries_type_entry_id_fkey"
+            columns: ["type_entry_id"]
+            isOneToOne: false
+            referencedRelation: "service_catalog"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      address_book_personal: {
+        Row: {
+          archived_at: string | null
+          created_at: string
+          id: string
+          owner_user_id: string
+          payload_enc: string
+          updated_at: string
+        }
+        Insert: {
+          archived_at?: string | null
+          created_at?: string
+          id?: string
+          owner_user_id: string
+          payload_enc: string
+          updated_at?: string
+        }
+        Update: {
+          archived_at?: string | null
+          created_at?: string
+          id?: string
+          owner_user_id?: string
+          payload_enc?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       addresses: {
         Row: {
           active: boolean
