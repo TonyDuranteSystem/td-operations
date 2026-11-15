@@ -133,3 +133,60 @@ describe('loadSignedContractEntry — answers with the line as it now stands', (
     expect(filtered?.filters).toContainEqual(['eq', 'id', 'k1'])
   })
 })
+
+describe('the company amount check — what is read and how a failure behaves', () => {
+  const filedOn = (id: string, token: string, accountId: string | null, type = 'formation') => ({ ...offer(id, token, type), account_id: accountId })
+  const company = (id: string, a: number, b: number) => ({ id, installment_1_amount: a, installment_1_currency: 'USD', installment_2_amount: b, installment_2_currency: 'USD' })
+
+  it('reads only the installment columns of the companies the signed formation and onboarding offers are filed on', async () => {
+    state.scripts.offers = {
+      data: [filedOn('o1', 't1', 'acc-1'), filedOn('o2', 't2', 'acc-2', 'onboarding'), filedOn('o3', 't3', 'acc-3', 'renewal'), filedOn('o4', 't4', 'acc-4'), filedOn('o5', 't5', null)],
+      error: null,
+    }
+    // t4 is not signed, so its company is not asked for; the renewal and the offer without a company are not either
+    state.scripts.contracts = { data: [contract('k1', 't1'), contract('k2', 't2'), contract('k3', 't3'), contract('k5', 't5')], error: null }
+    state.scripts.accounts = { data: [company('acc-1', 1000, 1000), company('acc-2', 1000, 1000)], error: null }
+    const entries = await loadSignedContractsForContact('c1', null)
+    const read = callsOn('accounts')
+    expect(read.length).toBe(1)
+    expect(read[0].columns).toBe('id, installment_1_amount, installment_1_currency, installment_2_amount, installment_2_currency')
+    expect(read[0].filters).toEqual([['in', 'id', ['acc-1', 'acc-2']]])
+    // the contract holds 1,000 + 1,000 (the test fixture), so these two companies agree
+    expect(Object.fromEntries(entries.map((e) => [e.id, e.companyCheck?.state ?? null]))).toEqual({ k1: 'match', k2: 'match', k3: null, k5: 'no_company' })
+  })
+
+  it('asks for no company at all when no signed offer is filed on one', async () => {
+    state.scripts.offers = { data: [filedOn('o1', 't1', null)], error: null }
+    state.scripts.contracts = { data: [contract('k1', 't1')], error: null }
+    await loadSignedContractsForContact('c1', null)
+    expect(callsOn('accounts').length).toBe(0)
+  })
+
+  it('a company that differs is reported with its own figures', async () => {
+    state.scripts.offers = { data: [filedOn('o1', 't1', 'acc-1')], error: null }
+    state.scripts.contracts = { data: [{ ...contract('k1', 't1'), annual_fee: '2350', installments: '{"jan":1175,"jun":1175}' }], error: null }
+    state.scripts.accounts = { data: [company('acc-1', 1000, 1000)], error: null }
+    const [e] = await loadSignedContractsForContact('c1', null)
+    expect(e.companyCheck).toEqual({ state: 'differ', january: '$1,000', june: '$1,000' })
+  })
+
+  it('a failed company read never hides the contract and never claims a match', async () => {
+    state.scripts.offers = { data: [filedOn('o1', 't1', 'acc-1')], error: null }
+    state.scripts.contracts = { data: [contract('k1', 't1')], error: null }
+    state.scripts.accounts = { data: null, error: { message: 'accounts timed out' } }
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const entries = await loadSignedContractsForContact('c1', null)
+    spy.mockRestore()
+    expect(entries.map((e) => e.id)).toEqual(['k1'])
+    expect(entries[0].companyCheck).toEqual({ state: 'lookup_failed' })
+  })
+
+  it('the line read back after an edit carries the check too', async () => {
+    state.scripts.contracts = (c: Call) =>
+      c.columns === 'offer_token' ? { data: { offer_token: 't1' }, error: null } : { data: [contract('k1', 't1')], error: null }
+    state.scripts.offers = { data: [filedOn('o1', 't1', 'acc-1')], error: null }
+    state.scripts.accounts = { data: [company('acc-1', 1000, 1000)], error: null }
+    const entry = await loadSignedContractEntry('k1')
+    expect(entry?.companyCheck).toEqual({ state: 'match' })
+  })
+})

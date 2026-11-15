@@ -8,6 +8,7 @@
  *    saved text of the annual agreement;
  *  - nothing here reads a passport number or an address: the row types below do not carry them.
  */
+import { checkContractAgainstCompany, type CompanyLookup } from './company-check'
 import { displayContractAmounts, readContractAmounts } from './contract-amounts'
 import { formatSavedNumber } from './amount-input'
 import { contractLabel, hasInstallmentAmounts } from './labels'
@@ -92,6 +93,8 @@ export function buildEntries(input: {
   contracts: ContractRow[]
   agreements: AgreementRow[]
   corrections: CorrectionRow[]
+  /** the companies the offers are filed on; leave out when they were not looked up (no comparison is then made) */
+  companies?: CompanyLookup
 }): SignedContractEntry[] {
   const offerByToken = new Map(input.offers.map((o) => [o.token, o]))
   const agreementByToken = new Map(input.agreements.map((a) => [a.token, a]))
@@ -110,6 +113,7 @@ export function buildEntries(input: {
     let editStart: SignedContractEntry['editStart'] = null
     let source: SignedContractEntry['source'] = 'contract'
     let updatedAt: string | null = c.updated_at
+    let companyCheck: SignedContractEntry['companyCheck'] = null
 
     if (type === 'renewal') {
       source = 'agreement'
@@ -147,6 +151,16 @@ export function buildEntries(input: {
         january: saved.january != null ? String(saved.january) : '',
         june: saved.june != null ? String(saved.june) : '',
       }
+      if (input.companies) {
+        companyCheck = checkContractAgainstCompany({
+          january: saved.january,
+          june: saved.june,
+          unreadable: saved.unreadable,
+          symbol,
+          accountId: offer.account_id,
+          lookup: input.companies,
+        })
+      }
     }
 
     entries.push({
@@ -165,6 +179,7 @@ export function buildEntries(input: {
       fileAvailable: hasUsablePath(c.pdf_path),
       correction: newestCorrection(input.corrections, c.id),
       updatedAt,
+      companyCheck,
     })
   }
 

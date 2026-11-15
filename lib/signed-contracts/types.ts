@@ -1,3 +1,5 @@
+import type { CompanyCheck } from './company-check'
+
 /** What the Signed contracts card shows for one signing. Client-safe: no storage path, no personal data. */
 
 export type AmountsView =
@@ -30,6 +32,8 @@ export interface SignedContractEntry {
   correction: { byName: string; at: string; wasText: string } | null
   /** changes whenever the saved amounts change; sent back with an edit so two people cannot overwrite each other */
   updatedAt: string | null
+  /** does the company's own installment amount agree with these? null = this kind of contract is not compared */
+  companyCheck: CompanyCheck | null
 }
 
 export const AMOUNTS_CORRECTED_ACTION = 'signed_contract_amounts_corrected'
