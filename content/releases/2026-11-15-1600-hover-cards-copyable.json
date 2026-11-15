@@ -1,0 +1,10 @@
+{
+  "title": "You can copy from the hover cards",
+  "tag": "improved",
+  "text": "The little card that opens when you rest the mouse on a name (in the Accounts and Contacts lists, and on the names in Booking's \"Links I made\") used to vanish the moment the pointer left the name, so nothing on it could be copied. Now you can move the pointer onto the card, select any detail (an email, a state, an amount) and copy it. The card closes a moment after the pointer leaves both the name and the card, when you press Escape, or when you click somewhere else. While you have text selected it stays open, so the copy can finish.",
+  "points": [
+    "Clicking inside the card does not open the record behind it. Clicking the name still does.",
+    "A touch screen still shows no card, as before."
+  ],
+  "screenshot": "hover-cards-copyable.png"
+}
