@@ -25,10 +25,16 @@ export interface BookerAnswer {
 
 /**
  * Who made the booking, as Calendly sent it and the webhook stored it (dev job 4ebfe4d3, Antonio 15 Nov 2026: "more information about who booked it").
- * Calendly's booking page for these call types has ONE name box, so the name is kept exactly as the booker typed it; a first and last name are only used when Calendly really sent them.
+ * What Calendly sends depends on the call type (read from the 104 stored deliveries on 15 Nov 2026): "Free meet&greet call" (93) and "Free Call" (3) send the full name AND a separate first
+ * and last name; "New Meeting", "Strategic Call" and "TD Strategic Consulting" send ONE full name only. So the full name is always shown as sent, and the first and last name are kept
+ * (and shown on the card) only when Calendly really sent them — nothing here ever guesses where a name splits.
  */
 export interface Booker {
   name: string | null
+  /** only when Calendly sent a separate first name (some call types do, some do not) */
+  firstName?: string | null
+  /** only when Calendly sent a separate last name */
+  lastName?: string | null
   email: string | null
   phone: string | null
   answers: BookerAnswer[]
@@ -78,7 +84,7 @@ const text = (v: unknown): string | null => (typeof v === "string" && v.trim() ?
 const MAX_ANSWERS = 6
 const MAX_ANSWER_CHARS = 300
 
-/** The booker, from the fields of one stored delivery. A name comes from Calendly's one name box, else first + last if both were sent; null when the delivery says nothing about them. */
+/** The booker, from the fields of one stored delivery. The name is the full name Calendly sent, else first + last joined; the separate first and last name are kept when sent. Null when the delivery says nothing about them. */
 export function parseBooker(r: { name?: unknown; first?: unknown; last?: unknown; email?: unknown; phone?: unknown; answers?: unknown }): Booker | null {
   const first = text(r.first)
   const last = text(r.last)
@@ -95,7 +101,7 @@ export function parseBooker(r: { name?: unknown; first?: unknown; last?: unknown
       if (answers.length >= MAX_ANSWERS) break
     }
   }
-  return name || email || phone || answers.length ? { name, email, phone, answers } : null
+  return name || email || phone || answers.length ? { name, firstName: first, lastName: last, email, phone, answers } : null
 }
 
 export interface WhoBooked {

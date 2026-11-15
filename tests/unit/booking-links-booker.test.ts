@@ -1,6 +1,7 @@
 /**
  * "Links I made": who booked (dev job 4ebfe4d3, Antonio 15 Nov 2026: "more information about who booked it, name last name email").
- * The shapes are the REAL ones read from the stored deliveries on 15 Nov 2026: ONE name field (first_name and last_name null), an email, no phone, no answers for the short-note call type.
+ * The shapes are the REAL ones read from the stored deliveries on 15 Nov 2026: the "New Meeting" call type sends ONE full name (first_name and last_name null), an email, no phone, no answers;
+ * the "Free meet&greet call" type (93 of 93 stored bookings) sends the full name AND a separate first and last name.
  */
 import { describe, it, expect } from "vitest"
 import { loadStoredBookings, parseBooker, whoBooked, type Booker } from "@/lib/booking/link-bookings"
@@ -43,8 +44,11 @@ const linkRow = (over: Record<string, unknown> = {}) => ({
 const NOW = new Date("2026-11-15T15:00:00Z")
 
 describe("parseBooker: the booker from one stored delivery", () => {
-  it("the real shape: ONE name, an email, nothing else", () => {
-    expect(parseBooker({ name: "Uxio Lead Test", first: null, last: null, email: "housedurante@icloud.com", phone: null, answers: [] })).toEqual({ name: "Uxio Lead Test", email: "housedurante@icloud.com", phone: null, answers: [] })
+  it("the real 'New Meeting' shape: ONE name, an email, nothing else", () => {
+    expect(parseBooker({ name: "Uxio Lead Test", first: null, last: null, email: "housedurante@icloud.com", phone: null, answers: [] })).toEqual({ name: "Uxio Lead Test", firstName: null, lastName: null, email: "housedurante@icloud.com", phone: null, answers: [] })
+  })
+  it("the real 'Free meet&greet call' shape: the full name AND a separate first and last name are both kept", () => {
+    expect(parseBooker({ name: "Maria Rossi", first: "Maria", last: "Rossi", email: "maria@example.com", phone: "+39 333", answers: [] })).toMatchObject({ name: "Maria Rossi", firstName: "Maria", lastName: "Rossi" })
   })
   it("a first and last name are used only when Calendly really sent them, and only if there is no single name", () => {
     expect(parseBooker({ name: null, first: "Maria", last: "Rossi", email: "m@example.com" })?.name).toBe("Maria Rossi")
@@ -141,7 +145,13 @@ describe("the card gains the booker's details", () => {
 describe("Links I made: who booked, end to end from the stored delivery", () => {
   it("loadStoredBookings carries the booker (the real stored shape)", async () => {
     const r = await loadStoredBookings(fakeDb({ webhook_events: [delivery()] }), [TAG])
-    expect(r.ok && r.byTag.get(TAG)?.[0].booker).toEqual({ name: "Uxio Lead Test", email: "housedurante@icloud.com", phone: null, answers: [] })
+    expect(r.ok && r.byTag.get(TAG)?.[0].booker).toEqual({ name: "Uxio Lead Test", firstName: null, lastName: null, email: "housedurante@icloud.com", phone: null, answers: [] })
+  })
+  it("the booker's own card shows a separate first and last name only when Calendly sent them", () => {
+    const sales = bookerCard({ name: "Maria Rossi", firstName: "Maria", lastName: "Rossi", email: "maria@example.com", phone: null, answers: [] })
+    expect(sales.lines).toEqual([{ label: "First name", value: "Maria" }, { label: "Last name", value: "Rossi" }, { label: "Email", value: "maria@example.com" }])
+    const short = bookerCard({ name: "Uxio Lead Test", firstName: null, lastName: null, email: "housedurante@icloud.com", phone: null, answers: [] })
+    expect(short.lines).toEqual([{ label: "Email", value: "housedurante@icloud.com" }])
   })
   it("a link with no name shows the booker on the row and in the card", async () => {
     const r = await listLinks(fakeDb({ booking_links: [linkRow()], webhook_events: [delivery({ bookerName: "antonnio noel", bookerEmail: "antonionoeldurante@gmail.com" })] }), NOW)

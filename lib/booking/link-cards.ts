@@ -80,6 +80,9 @@ export function shortLabel(q: string): string {
 /** The card of someone who is only known from their booking (the link has no name or record to show). */
 export function bookerCard(b: Booker): CardModel {
   const lines: CardLine[] = []
+  // the separate first and last name, only when Calendly sent them (the sales call type does; the short "New Meeting" type sends one full name)
+  if (b.firstName) lines.push({ label: "First name", value: b.firstName })
+  if (b.lastName) lines.push({ label: "Last name", value: b.lastName })
   if (b.email) lines.push({ label: "Email", value: b.email })
   if (b.phone) lines.push({ label: "Phone", value: b.phone })
   for (const a of b.answers) lines.push({ label: shortLabel(a.question), value: a.answer })
