@@ -12,7 +12,7 @@
  */
 
 import { APP_BASE_URL } from "@/lib/config"
-import { decideLinkPlan, STANDARD_MINUTES, type LinkPlan } from "@/lib/booking/plan"
+import { decideLinkPlan, STANDARD_MINUTES, type LinkPlan, type QuestionsChoice } from "@/lib/booking/plan"
 import { parseKindRule } from "@/lib/booking/kinds"
 import { loadTemplates, templateFor, TEMPLATES_MISSING_TEXT } from "@/lib/booking/templates"
 import { describePlan, type PreviewLine } from "@/lib/booking/preview"
@@ -31,6 +31,8 @@ export interface MakeLinkInput {
   kindSlug: string
   minutes: unknown
   firstBookingOnly?: boolean
+  /** what the booker is asked; left out = the system decides (the old rule) */
+  questions?: QuestionsChoice
 }
 
 export interface KindRow {
@@ -78,6 +80,7 @@ export async function judgeLink(db: Db, input: MakeLinkInput): Promise<{ ok: tru
     kind: { slug: k.kind.slug, label: k.kind.display_name, metadata: k.kind.metadata },
     minutes: input.minutes,
     firstBookingOnly: input.firstBookingOnly === true,
+    questions: input.questions,
   })
   if ("errors" in r) return { ok: false, errors: r.errors }
   return {

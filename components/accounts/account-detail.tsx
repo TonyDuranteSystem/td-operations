@@ -49,6 +49,7 @@ import { StoreBusyScope, STORE_BUSY_HINT } from './store-busy'
 import { CorrespondenceUpload } from './correspondence-upload'
 import { AccountOfferPanel, type OfferData } from '@/components/offers/account-offer-panel'
 import { AccountJourney } from './account-journey'
+import { BankReferralsPanel } from './bank-referrals-panel'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { ClosureNotifyCheckbox, isClosureServiceType, showClosurePromptToast } from '@/components/services/closure-notify'
@@ -882,7 +883,6 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
         hasSetupPayment={payments.some(p => p.status === 'Paid' && (p.description?.toLowerCase().includes('setup') || p.period === 'One-Time'))}
         hasPaidPayment={payments.some(p => p.status === 'Paid' && (p.amount_paid ?? 0) > 0)}
         allWizards={allWizards}
-        bankReferrals={bankReferrals}
       />
 
       {/* Offer Panel */}
@@ -900,6 +900,9 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
 
       {/* Signed contracts — closed by default; opens each contract in the floating window */}
       {signedContractLines !== undefined && <SignedContractsCard lines={signedContractLines} />}
+
+      {/* Partner Bank Applications: its own closed card (it used to sit inside the Account journey card) */}
+      <BankReferralsPanel entries={bankReferrals} standalone />
 
       {/* Documents to Sign Panel */}
       <DocumentsPanel
