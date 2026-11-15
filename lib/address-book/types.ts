@@ -110,6 +110,16 @@ export function phoneKey(phone: string | null | undefined): string | null {
   return d.length >= 5 ? d : null
 }
 
+/**
+ * Every key a phone number can be found by: its digits and, for a number longer than ten digits, its last ten — so "+1 (555) 010-0188" and "555-010-0188" are the same number
+ * (a country code typed or not typed must not hide a duplicate). Empty when the number is too short to match.
+ */
+export function phoneKeysOf(phone: string | null | undefined): string[] {
+  const k = phoneKey(phone)
+  if (!k) return []
+  return k.length > 10 ? [k, k.slice(-10)] : [k]
+}
+
 export function normalizeEmail(email: string | null | undefined): string | null {
   const e = (email ?? "").trim().toLowerCase()
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) ? e : null
@@ -135,7 +145,7 @@ export type PersonInput = z.infer<typeof personInputSchema>
 /** The searchable keys written next to a person: lower-case emails, digits-only phones, with repeats removed. */
 export function lookupKeys(p: { phones?: readonly string[]; emails?: readonly string[] }): { phones: string[]; phone_keys: string[]; emails: string[] } {
   const phones = (p.phones ?? []).map((x) => x.trim()).filter(Boolean)
-  const phone_keys = Array.from(new Set(phones.map(phoneKey).filter((k): k is string => !!k)))
+  const phone_keys = Array.from(new Set(phones.flatMap(phoneKeysOf)))
   const emails = Array.from(new Set((p.emails ?? []).map(normalizeEmail).filter((e): e is string => !!e)))
   return { phones, phone_keys, emails }
 }

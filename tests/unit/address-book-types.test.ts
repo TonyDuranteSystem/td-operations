@@ -8,6 +8,7 @@ import {
   parseTypeMeta,
   personInputSchema,
   phoneKey,
+  phoneKeysOf,
   uniqueBoxKey,
   type Box,
 } from "@/lib/address-book/types"
@@ -103,6 +104,15 @@ describe("phone and email keys", () => {
     expect(phoneKey("123")).toBeNull()
     expect(phoneKey(null)).toBeNull()
   })
+  it("phoneKeysOf also gives the last ten digits of a long number, so a country code typed or not is the same number", () => {
+    expect(phoneKeysOf("+1 (555) 010-0188")).toEqual(["15550100188", "5550100188"])
+    expect(phoneKeysOf("555-010-0188")).toEqual(["5550100188"])
+    expect(phoneKeysOf("555 0100")).toEqual(["5550100"])
+    expect(phoneKeysOf("+39 333 123 4567")).toEqual(["393331234567", "3331234567"])
+    expect(phoneKeysOf("12")).toEqual([])
+    expect(phoneKeysOf(null)).toEqual([])
+    expect(lookupKeys({ phones: ["+1 555 010 0188"] }).phone_keys).toContain(phoneKeysOf("(555) 010-0188")[0])
+  })
   it("normalizeEmail lower-cases and refuses non-emails", () => {
     expect(normalizeEmail("  Tom@Lakeshore.Example ")).toBe("tom@lakeshore.example")
     expect(normalizeEmail("not an email")).toBeNull()
@@ -112,7 +122,7 @@ describe("phone and email keys", () => {
   it("lookupKeys cleans, de-duplicates and keeps the typed phones", () => {
     const k = lookupKeys({ phones: ["+1 (555) 010-0188", "1-555-010-0188", " ", "12"], emails: ["A@B.co", "a@b.co", "bad"] })
     expect(k.phones).toEqual(["+1 (555) 010-0188", "1-555-010-0188", "12"])
-    expect(k.phone_keys).toEqual(["15550100188"])
+    expect(k.phone_keys).toEqual(["15550100188", "5550100188"])
     expect(k.emails).toEqual(["a@b.co"])
     expect(lookupKeys({})).toEqual({ phones: [], phone_keys: [], emails: [] })
   })
