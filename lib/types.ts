@@ -1,6 +1,7 @@
 import type { MessageReaction } from './portal/reactions'
 import type { InstallmentChip } from './billing/installment-invoices'
 import type { PersonCardSource } from './crm-lists/hover-cards'
+import type { ContractMismatch } from './signed-contracts/types'
 
 export interface TaskAttachment {
   /** Publicly accessible URL (typically a Google Drive file URL). */
@@ -392,6 +393,8 @@ export interface ContactListItem {
   created_at: string
   /** One line per linked company (empty when the person has none). */
   companies: ContactCompanyLine[]
+  /** The amber findings about this person's signed contracts (a contract that does not match its company); empty = nothing to flag. */
+  contract_mismatches: ContractMismatch[]
 }
 
 // ─── Contact Detail Types ────────────────────────────────

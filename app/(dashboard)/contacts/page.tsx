@@ -10,6 +10,7 @@ import { resolveColumns } from '@/lib/crm-lists/columns'
 import { formatListDate } from '@/lib/crm-lists/format'
 import { contactsWithPassportFile, passportOnFile } from '@/lib/contacts/passport-on-file'
 import { pickMainContacts, type AccountContactLink } from '@/lib/crm-lists/people'
+import { loadContractMismatchesForPeople } from '@/lib/signed-contracts/load'
 
 const PAGE_SIZE = 50
 
@@ -38,7 +39,7 @@ export default async function ContactsPage({
 
   // 1. Every person that matches the search, in name order.
   const people = await fetchAllRows((from, to) => {
-    let q = supabase.from('contacts').select('id, full_name').order('full_name', { ascending: true }).order('id', { ascending: true }).range(from, to)
+    let q = supabase.from('contacts').select('id, full_name, email').order('full_name', { ascending: true }).order('id', { ascending: true }).range(from, to)
     if (statusFilter && statusFilter !== 'all') q = q.eq('status', statusFilter)
     if (query) q = q.or(`full_name.ilike.%${query}%,email.ilike.%${query}%`)
     return q
@@ -80,7 +81,7 @@ export default async function ContactsPage({
   const pageIds = pageRows.map(p => p.id)
   const pageAccountIds = Array.from(new Set(pageRows.flatMap(p => p.companies.map(c => c.id))))
 
-  const [contactDetails, accountDetails, chipMap, mainLinks, overdueMap, passportFiles] = await Promise.all([
+  const [contactDetails, accountDetails, chipMap, mainLinks, overdueMap, passportFiles, contractMismatches] = await Promise.all([
     pageIds.length > 0
       ? supabase
           .from('contacts')
@@ -100,6 +101,11 @@ export default async function ContactsPage({
       : Promise.resolve({ data: [] }),
     loadOverdueCounts(supabase),
     contactsWithPassportFile(pageIds),
+    // Whose signed contract does not match their company (the amber note on the Contact page), for the amber name + its hover card.
+    loadContractMismatchesForPeople({
+      people: pageRows.map(p => ({ id: p.id, email: p.email ?? null, accountIds: p.companies.map(c => c.id) })),
+      companyNames: new Map(accounts.map(a => [a.id, a.company_name])),
+    }),
   ])
   const mainContacts = pickMainContacts((mainLinks.data ?? []) as unknown as AccountContactLink[])
   const contactById = new Map((contactDetails.data ?? []).map(c => [c.id, c]))
@@ -149,6 +155,7 @@ export default async function ContactsPage({
         account_names: lines.map(l => l.company_name).join(', ') || null,
         created_at: c.created_at,
         companies: lines,
+        contract_mismatches: contractMismatches.kind === 'ok' ? contractMismatches.byPerson.get(c.id) ?? [] : [],
       },
     ]
   })
@@ -160,6 +167,11 @@ export default async function ContactsPage({
         <p className="text-muted-foreground text-sm mt-1">
           {linkCounts.all} contacts — {linkCounts.with} with a company, {linkCounts.none} with no company
         </p>
+        {contractMismatches.kind === 'failed' && (
+          <p className="mt-1 text-xs text-muted-foreground" data-testid="contract-check-failed">
+            Could not check the contract amounts just now, so no contact is marked. Reload the page to try again.
+          </p>
+        )}
       </div>
       <ContactsTable
         items={items}

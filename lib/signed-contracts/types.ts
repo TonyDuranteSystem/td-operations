@@ -36,4 +36,22 @@ export interface SignedContractEntry {
   companyCheck: CompanyCheck | null
 }
 
+/**
+ * One amber finding about a person, for the Contacts list (Antonio 2026-11-15: "when there is an amber message for a mismatch I want the
+ * contact to be amber with an hover to click and read the mismatch"). The same finding the Contact page shows on the contract's line,
+ * with everything the hover card needs to say it. Client-safe: no email, no storage path, no personal data.
+ */
+export interface ContractMismatch {
+  /** 'differs' = the company's amounts are not the contract's; 'company_empty' = the company has none saved (the two amber notes) */
+  kind: 'differs' | 'company_empty'
+  /** the company the offer is filed on */
+  company: string
+  /** which contract: "Formation" or "Onboarding" */
+  contract: string
+  /** the contract's own amounts, as saved: "January $1,175 · June $1,175" */
+  contractAmounts: string
+  /** the company's amounts in the CRM, as saved: "January $1,000 · June $1,000"; null when the company has none */
+  crmAmounts: string | null
+}
+
 export const AMOUNTS_CORRECTED_ACTION = 'signed_contract_amounts_corrected'

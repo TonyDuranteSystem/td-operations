@@ -8,6 +8,9 @@ import type { CardModel } from '@/lib/crm-lists/hover-cards'
 const HOVER_DELAY_MS = 350
 /** A card runs about ten lines at most (title, subtitle, up to six lines of details, a heading and companies). */
 const CARD_HEIGHT = 260
+/** An amber block adds its heading plus about three lines for each finding. */
+const ALERT_BASE_HEIGHT = 40
+const ALERT_BLOCK_HEIGHT = 64
 
 /** The contents of a hover card: a title, a small grey line, label/value details and (for a person) a short list of companies. */
 export function HoverCardBody({ card }: { card: CardModel }) {
@@ -17,6 +20,19 @@ export function HoverCardBody({ card }: { card: CardModel }) {
         <p className="font-semibold leading-snug">{card.title}</p>
         {card.subtitle && <p className="text-zinc-400">{card.subtitle}</p>}
       </div>
+      {card.alert && (
+        <div className="space-y-1 rounded border border-amber-400/50 bg-amber-500/15 p-1.5" data-testid="card-alert">
+          <p className="font-semibold text-amber-300">{card.alert.heading}</p>
+          {card.alert.blocks.map((b, i) => (
+            <div key={`${b.title}-${i}`}>
+              <p className="font-medium break-words">{b.title}</p>
+              {b.lines.map((line) => (
+                <p key={line} className="break-words text-zinc-200">{line}</p>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
       {card.lines.length > 0 && (
         <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5">
           {card.lines.map(l => (
@@ -49,8 +65,9 @@ export function HoverCardBody({ card }: { card: CardModel }) {
  */
 export function ListHoverCard({ card, children, className }: { card: CardModel | null; children: React.ReactNode; className?: string }) {
   if (!card) return <>{children}</>
+  const height = CARD_HEIGHT + (card.alert ? ALERT_BASE_HEIGHT + card.alert.blocks.length * ALERT_BLOCK_HEIGHT : 0)
   return (
-    <FastTooltip label={undefined} card={<HoverCardBody card={card} />} align="left" delayMs={HOVER_DELAY_MS} cardHeightPx={CARD_HEIGHT} interactive className={className}>
+    <FastTooltip label={undefined} card={<HoverCardBody card={card} />} align="left" delayMs={HOVER_DELAY_MS} cardHeightPx={height} interactive className={className}>
       {children}
     </FastTooltip>
   )
