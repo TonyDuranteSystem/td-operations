@@ -42,7 +42,7 @@ import { FileManager } from './file-manager'
 import { MoveToStorePanel } from '@/components/storage/move-to-store-panel'
 import { AccountDocumentsList } from './account-documents-list'
 import { BecameClientRow } from './became-client-row'
-import { SignedContractRow } from './signed-contract-row'
+import { SignedContractsCard } from './signed-contracts-card'
 import type { AccountContractLine } from '@/lib/signed-contracts/account-lines'
 import type { GuessSummary } from '@/lib/accounts/became-client'
 import { StoreBusyScope, STORE_BUSY_HINT } from './store-busy'
@@ -895,7 +895,11 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
         offers={offers}
         isAdmin={isAdmin}
         pendingActivations={pendingActivations}
+        startClosed
       />
+
+      {/* Signed contracts — closed by default; opens each contract in the floating window */}
+      {signedContractLines !== undefined && <SignedContractsCard lines={signedContractLines} />}
 
       {/* Documents to Sign Panel */}
       <DocumentsPanel
@@ -1038,7 +1042,7 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
       {/* Tab content */}
       {activeTab === 'overview' && (
         <>
-          <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} onOpenStatusDialog={() => setShowStatusDialog(true)} dbaServiceDeliveries={dbaServiceDeliveries} stagesByServiceType={stagesByServiceType} becameClientGuess={becameClientGuess} signedContractLines={signedContractLines} />
+          <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} onOpenStatusDialog={() => setShowStatusDialog(true)} dbaServiceDeliveries={dbaServiceDeliveries} stagesByServiceType={stagesByServiceType} becameClientGuess={becameClientGuess} />
           {/* Recent emails (auto-matched + linked) — visible without hunting
               for the Emails tab (Antonio 2026-07-08) */}
           <div className="px-4 pb-4">
@@ -2501,7 +2505,7 @@ function MembersSection({ accountId, accountCompanyName, contacts, memberCount: 
 
 /* ── Panoramica Tab ───────────────────────────────────── */
 
-function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, partnerName, onOpenStatusDialog, dbaServiceDeliveries = [], stagesByServiceType = {}, becameClientGuess = null, signedContractLines }: { becameClientGuess?: GuessSummary | null; signedContractLines?: AccountContractLine[] | null; account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean; partnerName: string | null; onOpenStatusDialog: () => void; dbaServiceDeliveries?: NonNullable<AccountDetailProps['dbaServiceDeliveries']>; stagesByServiceType?: Record<string, PipelineStage[]> }) {
+function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, partnerName, onOpenStatusDialog, dbaServiceDeliveries = [], stagesByServiceType = {}, becameClientGuess = null }: { becameClientGuess?: GuessSummary | null; account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean; partnerName: string | null; onOpenStatusDialog: () => void; dbaServiceDeliveries?: NonNullable<AccountDetailProps['dbaServiceDeliveries']>; stagesByServiceType?: Record<string, PipelineStage[]> }) {
   const router = useRouter()
   const [noteText, setNoteText] = useState('')
   const [addingNote, setAddingNote] = useState(false)
@@ -2585,7 +2589,6 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
             clientSince={account.client_since ?? null}
             raSwitchDate={account.ra_switch_date ?? null}
           />
-          {signedContractLines !== undefined && <SignedContractRow lines={signedContractLines} />}
           <EditableField icon={Calendar} label="Formation" value={account.formation_date ?? ''} type="date" onSave={makeAccountSaver('formation_date')} />
           <EditableField icon={Calendar} label="Client Since" value={account.client_since ?? ''} type="date" onSave={makeAccountSaver('client_since')} />
           <EditableField icon={Calendar} label="RA Switch Date" value={account.ra_switch_date ?? ''} type="date" onSave={makeAccountSaver('ra_switch_date')} />
