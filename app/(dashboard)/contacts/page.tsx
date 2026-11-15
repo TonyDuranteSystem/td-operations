@@ -2,21 +2,38 @@ import { createClient } from '@/lib/supabase/server'
 import { ContactsTable } from '@/components/contacts/contacts-table'
 import type { ContactCompanyLine, ContactListItem } from '@/lib/types'
 import { contactLinkCounts, contactMatches, parseContactFilters, type FilterableCompany } from '@/lib/crm-lists/filters'
-import { fetchAllRows, loadInstallmentChips, newYorkYear } from '@/lib/crm-lists/queries'
+import { fetchAllRows, loadInstallmentChips, loadInstallmentYears, loadOverdueCounts, newYorkYear } from '@/lib/crm-lists/queries'
+import { letterCounts, letterMatches, parseLetter } from '@/lib/crm-lists/letters'
+import { listYearOptions, parseListYear } from '@/lib/crm-lists/year'
+import { getColumnPref } from '@/lib/crm-lists/prefs'
+import { resolveColumns } from '@/lib/crm-lists/columns'
+import { formatListDate } from '@/lib/crm-lists/format'
+import { pickMainContacts, type AccountContactLink } from '@/lib/crm-lists/people'
 
 const PAGE_SIZE = 50
 
 export default async function ContactsPage({
   searchParams,
 }: {
-  searchParams: { q?: string; status?: string; link?: string; cstatus?: string; kind?: string; ctype?: string; page?: string }
+  searchParams: { q?: string; status?: string; link?: string; cstatus?: string; kind?: string; ctype?: string; letter?: string; year?: string; page?: string }
 }) {
   const supabase = createClient()
   const query = searchParams.q?.trim() ?? ''
   // Every contact is "active" today; the setting stays in the URL (old links keep working) but has no control on the page.
   const statusFilter = searchParams.status ?? 'active'
   const filters = parseContactFilters(searchParams)
+  const letter = parseLetter(searchParams.letter)
   const currentPage = Math.max(1, parseInt(searchParams.page ?? '1', 10) || 1)
+
+  // This person's chosen fields, and the years that have installment invoices.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  const [saved, yearsWithInvoices] = await Promise.all([user ? getColumnPref(user.id, 'contacts') : Promise.resolve(null), loadInstallmentYears(supabase)])
+  const columns = resolveColumns('contacts', saved)
+  const defaultYear = newYorkYear()
+  const years = listYearOptions(yearsWithInvoices, defaultYear)
+  const year = parseListYear(searchParams.year, years, defaultYear)
 
   // 1. Every person that matches the search, in name order.
   const people = await fetchAllRows((from, to) => {
@@ -49,8 +66,11 @@ export default async function ContactsPage({
   for (const list of Array.from(companiesByContact.values())) list.sort((x, y) => x.company_name.localeCompare(y.company_name))
 
   const withCompanies = people.map(p => ({ ...p, companies: companiesByContact.get(p.id) ?? [] }))
-  const linkCounts = contactLinkCounts(withCompanies.map(p => ({ companies: p.companies.map(c => c.filter) })), filters)
-  const filtered = withCompanies.filter(p => contactMatches(p.companies.map(c => c.filter), filters))
+  // The letter is one more filter: the Companies counts follow it, and the letter buttons' own counts follow the other filters.
+  const letterCountsForView = letterCounts(withCompanies.filter(p => contactMatches(p.companies.map(c => c.filter), filters)).map(p => p.full_name))
+  const forLetter = withCompanies.filter(p => letterMatches(p.full_name, letter))
+  const linkCounts = contactLinkCounts(forLetter.map(p => ({ companies: p.companies.map(c => c.filter) })), filters)
+  const filtered = forLetter.filter(p => contactMatches(p.companies.map(c => c.filter), filters))
   const totalCount = filtered.length
   const totalPages = Math.ceil(totalCount / PAGE_SIZE)
 
@@ -59,21 +79,27 @@ export default async function ContactsPage({
   const pageIds = pageRows.map(p => p.id)
   const pageAccountIds = Array.from(new Set(pageRows.flatMap(p => p.companies.map(c => c.id))))
 
-  const [contactDetails, accountDetails, chipMap] = await Promise.all([
+  const [contactDetails, accountDetails, chipMap, mainLinks, overdueMap] = await Promise.all([
     pageIds.length > 0
       ? supabase
           .from('contacts')
-          .select('id, full_name, email, phone, language, citizenship, portal_tier, status, itin_number, passport_on_file, created_at')
+          .select('id, full_name, email, phone, language, citizenship, portal_tier, portal_role, status, itin_number, passport_on_file, created_at')
           .in('id', pageIds)
       : Promise.resolve({ data: [] }),
     pageAccountIds.length > 0
       ? supabase
           .from('accounts')
-          .select('id, installment_1_amount, installment_1_currency, installment_2_amount, installment_2_currency, setup_fee_amount, setup_fee_currency, updated_at')
+          .select('id, installment_1_amount, installment_1_currency, installment_2_amount, installment_2_currency, setup_fee_amount, setup_fee_currency, updated_at, state_of_formation, client_since')
           .in('id', pageAccountIds)
       : Promise.resolve({ data: [] }),
-    loadInstallmentChips(supabase, pageAccountIds, newYorkYear()),
+    loadInstallmentChips(supabase, pageAccountIds, year),
+    // Each company's main contact and its overdue count, for the company's hover card.
+    pageAccountIds.length > 0
+      ? supabase.from('account_contacts').select('account_id, is_primary, ended_at, contact:contacts(full_name, email)').in('account_id', pageAccountIds)
+      : Promise.resolve({ data: [] }),
+    loadOverdueCounts(supabase),
   ])
+  const mainContacts = pickMainContacts((mainLinks.data ?? []) as unknown as AccountContactLink[])
   const contactById = new Map((contactDetails.data ?? []).map(c => [c.id, c]))
   const moneyById = new Map((accountDetails.data ?? []).map(a => [a.id, a]))
 
@@ -97,6 +123,11 @@ export default async function ContactsPage({
         updated_at: m?.updated_at ?? '',
         chip_1: chipMap[co.id]?.first ?? { kind: 'not_invoiced', count: 0 },
         chip_2: chipMap[co.id]?.second ?? { kind: 'not_invoiced', count: 0 },
+        state_of_formation: m?.state_of_formation ?? null,
+        client_since: formatListDate(m?.client_since),
+        contact_name: mainContacts[co.id]?.name ?? null,
+        contact_email: mainContacts[co.id]?.email ?? null,
+        payment_overdue: overdueMap[co.id] ?? 0,
       }
     })
     return [
@@ -109,8 +140,9 @@ export default async function ContactsPage({
         citizenship: c.citizenship,
         portal_tier: c.portal_tier,
         status: c.status,
-        itin_number: c.itin_number,
+        itin_on_file: !!c.itin_number,
         passport_on_file: c.passport_on_file,
+        portal_role: c.portal_role,
         account_count: lines.length,
         account_names: lines.map(l => l.company_name).join(', ') || null,
         created_at: c.created_at,
@@ -136,6 +168,12 @@ export default async function ContactsPage({
         currentPage={currentPage}
         totalPages={totalPages}
         totalCount={totalCount}
+        columns={columns}
+        letter={letter}
+        letters={letterCountsForView}
+        year={year}
+        years={years}
+        defaultYear={defaultYear}
       />
     </div>
   )

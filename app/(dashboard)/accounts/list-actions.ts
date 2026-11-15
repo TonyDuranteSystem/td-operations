@@ -4,6 +4,8 @@ import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { isStaffUser } from '@/lib/auth'
 import { prepareAmountEdit } from '@/lib/crm-lists/amounts'
+import { clearColumnPref, setColumnPref } from '@/lib/crm-lists/prefs'
+import type { ListId } from '@/lib/crm-lists/columns'
 import { updateAccountField } from './actions'
 
 export interface ListAmountResult {
@@ -48,4 +50,40 @@ export async function saveListAmount(accountId: string, field: string, raw: stri
 
   const { data: fresh } = await supabase.from('accounts').select('updated_at').eq('id', accountId).maybeSingle()
   return { success: true, amount: prepared.amount, updatedAt: fresh?.updated_at ?? undefined }
+}
+
+export interface ListColumnsResult {
+  success: boolean
+  error?: string
+}
+
+function isListId(v: string): v is ListId {
+  return v === 'contacts' || v === 'accounts'
+}
+
+/**
+ * Save which extra fields this person wants on the Accounts or Contacts list. Kept with their login, so it follows them to every
+ * computer. Staff only. `cols` is cleaned on the server (unknown ids dropped), so a stale screen cannot save nonsense.
+ */
+export async function saveListColumns(list: string, cols: string[]): Promise<ListColumnsResult> {
+  const supabase = createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user || !isStaffUser(user)) return { success: false, error: 'Not allowed.' }
+  if (!isListId(list)) return { success: false, error: 'Unknown list.' }
+  const ok = await setColumnPref(user.id, list, Array.isArray(cols) ? cols : [])
+  return ok ? { success: true } : { success: false, error: 'Could not save your fields. Please try again.' }
+}
+
+/** "Put the standard fields back" for one list. */
+export async function resetListColumns(list: string): Promise<ListColumnsResult> {
+  const supabase = createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user || !isStaffUser(user)) return { success: false, error: 'Not allowed.' }
+  if (!isListId(list)) return { success: false, error: 'Unknown list.' }
+  const ok = await clearColumnPref(user.id, list)
+  return ok ? { success: true } : { success: false, error: 'Could not reset your fields. Please try again.' }
 }

@@ -5,9 +5,12 @@
  *
  * Quiet by default (Antonio, 2026-07-27): the bank catalog went from one row to
  * seven, so a panel that always listed every bank was a wall of "Not Clicked"
- * on an already-busy account page. It now collapses itself when there is no
- * activity and turns RED when the client has clicked something — the only case
- * where staff need to react. The full list is still one click away.
+ * on an already-busy account page. It turns RED when the client has clicked
+ * something — the only case where staff need to react. The full list is one click away.
+ *
+ * ALWAYS starts closed (Antonio, 2026-11-14, dev job bbd2e644: "Yes, always closed"). Before, it opened by itself
+ * when a bank had been clicked; now the red "N applied" tag in the header is what tells staff, and it stays visible
+ * while the list is closed.
  */
 
 import { useState } from 'react'
@@ -27,8 +30,8 @@ function formatDate(iso: string): string {
 
 export function BankReferralsPanel({ entries }: { entries: BankReferralEntry[] }) {
   const { clickedCount, hasActivity } = summarizeBankActivity(entries)
-  // Open only when there's something to react to; otherwise stay out of the way.
-  const [open, setOpen] = useState(hasActivity)
+  // Always closed to start with; the red "N applied" tag in the header says when the client clicked a bank.
+  const [open, setOpen] = useState(false)
 
   if (entries.length === 0) return null
 

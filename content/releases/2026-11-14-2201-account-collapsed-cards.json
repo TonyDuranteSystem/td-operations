@@ -1,0 +1,13 @@
+{
+  "title": "A tidier company page: Offers, Signed contracts and Partner banks start closed",
+  "tag": "new",
+  "text": "On a company's page, three cards now start closed: Offers, a new Signed contracts card, and Partner Bank Applications. A closed card still tells you what is inside in one line. Offers shows each offer's type and status. Signed contracts lists every signed contract: open it, choose one, and it shows in a floating window you can move while you keep working. The old Signed contract line in Company Info is gone. Partner Bank Applications is always closed now, and its red tag still says how many banks the client clicked.",
+  "points": [
+    "Open a company and look under the Account journey card.",
+    "Offers (n): one line per offer with its type and status. Create New Offer stays visible. Click the header to see the offers as before.",
+    "Signed contracts (n): click the header, then Open next to the contract you want. A company with no contract on record says so.",
+    "Partner Bank Applications: the red number of banks clicked stays in the header. Click it to see which banks.",
+    "The Contact page is not changed. Its Offers card stays open."
+  ],
+  "screenshot": "account-collapsed-cards.png"
+}
