@@ -13,7 +13,8 @@
 
 import { APP_BASE_URL } from "@/lib/config"
 import { decideLinkPlan, STANDARD_MINUTES, type LinkPlan } from "@/lib/booking/plan"
-import { parseKindRule } from "@/lib/booking/kinds"
+import { parseKindRule, kindOfferedToNewPerson } from "@/lib/booking/kinds"
+import { findOrCreateBookingContact, removeJustCreatedBookingContact } from "@/lib/operations/booking-contact"
 import { loadTemplates, templateFor, TEMPLATES_MISSING_TEXT } from "@/lib/booking/templates"
 import { describePlan, type PreviewLine } from "@/lib/booking/preview"
 import { loadPerson, type PersonFacts, type PersonRef } from "@/lib/booking/person"
@@ -73,6 +74,10 @@ export async function judgeLink(db: Db, input: MakeLinkInput): Promise<{ ok: tru
   if ("reason" in rule) return { ok: false, errors: [`${k.kind.display_name}: ${rule.reason} Ask Claude to set it up.`] }
   const p = await loadPerson(db, input.person)
   if ("error" in p) return { ok: false, errors: [p.error] }
+  // Someone NEW cannot already be a Client (or a People contact): refused here, on the server, whatever the page shows (Antonio, 14 Nov)
+  if (p.person.state === "new" && !kindOfferedToNewPerson(k.kind.metadata)) {
+    return { ok: false, errors: [`${k.kind.display_name} is only for people already in the system. Pick another kind, or find the person under "Someone in the system".`] }
+  }
   const r = decideLinkPlan({
     person: { state: p.person.state, established: p.person.established },
     kind: { slug: k.kind.slug, label: k.kind.display_name, metadata: k.kind.metadata },
@@ -80,15 +85,21 @@ export async function judgeLink(db: Db, input: MakeLinkInput): Promise<{ ok: tru
     firstBookingOnly: input.firstBookingOnly === true,
   })
   if ("errors" in r) return { ok: false, errors: r.errors }
-  return {
-    ok: true,
-    judged: {
-      person: p.person,
-      kind: k.kind,
-      plan: r.plan,
-      lines: describePlan({ plan: r.plan, personState: p.person.state, personName: p.person.name, hasEmails: p.person.emails.length > 0 }),
-    },
+  // "People" is just a contact: a kind that would make a lead when they book contradicts it
+  if (p.person.people && r.plan.recorder === "lead") {
+    return { ok: false, errors: [`${k.kind.display_name} makes a lead when the call is booked, but People is just a contact. Pick People, or another kind that saves the call on their page.`] }
   }
+  const lines = describePlan({ plan: r.plan, personState: p.person.state, personName: p.person.name, hasEmails: p.person.emails.length > 0 })
+  if (p.person.people) lines.splice(1, 0, peopleLine(p.person))
+  return { ok: true, judged: { person: p.person, kind: k.kind, plan: r.plan, lines } }
+}
+
+/** The extra preview line for a "People" person: made now, or already there. */
+function peopleLine(person: PersonFacts): PreviewLine {
+  const name = person.name ?? "The person"
+  return person.people?.mode === "create"
+    ? { label: "Contact", text: `${name} is saved as a new contact when you make the link: name and email only, no lead and no company.` }
+    : { label: "Contact", text: `${name} is already a contact, so nothing new is created.` }
 }
 
 export interface MadeLink {
@@ -129,6 +140,17 @@ export async function makeFreeLink(deps: MakeDeps, input: MakeLinkInput): Promis
     }
   }
 
+  // "People": the contact is made now (the preview only read). Made last, after every refusal above, so a refused link leaves nothing behind.
+  let contactId = person.contactId
+  let justCreated: string | null = null
+  if (person.people?.mode === "create") {
+    const c = await findOrCreateBookingContact(db, { name: person.people.name, email: person.people.email })
+    if (c.ok === false) return { ok: false, errors: [c.error] }
+    contactId = c.contactId
+    if (c.created) justCreated = c.contactId
+  }
+  const undoContact = async () => { if (justCreated) await removeJustCreatedBookingContact(db, justCreated) }
+
   const language = normalizeLeadLanguage(person.language)
   for (let attempt = 0; attempt < INSERT_TRIES; attempt++) {
     const publicId = newLinkId()
@@ -140,7 +162,7 @@ export async function makeFreeLink(deps: MakeDeps, input: MakeLinkInput): Promis
           kind_label: kind.display_name,
           kind_entry_id: kind.id,
           rule_snapshot: plan.snapshot,
-          contact_id: person.contactId,
+          contact_id: contactId,
           account_id: person.accountId,
           lead_id: person.leadId,
           person_name: person.name,
@@ -157,12 +179,15 @@ export async function makeFreeLink(deps: MakeDeps, input: MakeLinkInput): Promis
         .single()
       if (!error && data) return { ok: true, link: { id: data.id as string, publicId: data.public_id as string, url: linkUrl(publicId, deps.baseUrl), email: person.emails[0] ?? null, language }, lines }
       if (error && isUniqueViolation(error)) continue // a clash on the random id: draw another
+      await undoContact()
       if (error && isMissingTable(error)) return { ok: false, errors: ["The Booking tables are not on this database yet."] }
       return { ok: false, errors: ["The link could not be saved. Try again."] }
     } catch {
+      await undoContact()
       return { ok: false, errors: ["The link could not be saved. Try again."] }
     }
   }
+  await undoContact()
   return { ok: false, errors: ["The link could not be saved. Try again."] }
 }
 

@@ -10,13 +10,22 @@
  */
 
 import { isEstablishedClientContact } from "@/lib/calendly/existing-client-tag"
-import { contactEmailSet, escapeLike } from "@/lib/operations/contact-email-aliases"
+import { contactEmailSet, escapeLike, findContactByAnyEmail } from "@/lib/operations/contact-email-aliases"
+import { checkPeopleInput } from "@/lib/operations/booking-contact"
 import type { PersonState } from "@/lib/booking/plan"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic service client
 type Db = any
 
-export type PersonRef = { type: "contact"; id: string } | { type: "lead"; id: string } | { type: "new"; name?: string | null; email?: string | null }
+/**
+ * `new_contact` = "People": a person who is just a contact (name + email typed on the page). Found by email if they are already a contact, otherwise made as a plain
+ * contact when the link is made. Never a lead, never a company.
+ */
+export type PersonRef =
+  | { type: "contact"; id: string }
+  | { type: "lead"; id: string }
+  | { type: "new"; name?: string | null; email?: string | null }
+  | { type: "new_contact"; name?: string | null; email?: string | null }
 
 export interface PersonFacts {
   state: PersonState
@@ -29,6 +38,11 @@ export interface PersonFacts {
   /** the emails the link will compare a booker against; may be empty */
   emails: string[]
   language: string | null
+  /**
+   * Only for a `new_contact` person ("People"): `existing` = the email already belongs to a contact (reused, nothing created); `create` = the contact is made when
+   * the link is made (judging the link only READS; it never creates).
+   */
+  people?: { mode: "existing" } | { mode: "create"; name: string; email: string }
 }
 
 export type PersonResult = { ok: true; person: PersonFacts } | { ok: false; error: string }
@@ -53,6 +67,21 @@ export async function loadPerson(db: Db, ref: PersonRef): Promise<PersonResult> 
       const email = cleanEmail(rawEmail)
       if (rawEmail && !email) return { ok: false, error: "That email does not look right. Check it, or leave it empty." }
       return { ok: true, person: { state: "new", contactId: null, accountId: null, leadId: null, name: cleanName(ref.name), emails: email ? [email] : [], language: null } }
+    }
+    if (ref.type === "new_contact") {
+      const p = checkPeopleInput(ref.name, ref.email)
+      if (p.ok === false) return { ok: false, error: p.error }
+      const found = await findContactByAnyEmail(db, p.email)
+      if (found.state === "error") return { ok: false, error: "The person could not be read. Try again." }
+      if (found.state === "found") {
+        const r = await loadPerson(db, { type: "contact", id: found.contact.id })
+        return r.ok ? { ok: true, person: { ...r.person, people: { mode: "existing" } } } : r
+      }
+      // an open lead with this email is not "just a contact": pick the lead instead, so no second record is made for the same person
+      const lead = await db.from("leads").select("id, full_name").is("converted_to_contact_id", null).ilike("email", escapeLike(p.email)).limit(1)
+      if (lead.error) return { ok: false, error: "The person could not be read. Try again." }
+      if ((lead.data?.length ?? 0) > 0) return { ok: false, error: `That email already belongs to a lead${cleanName(lead.data[0].full_name) ? ` (${cleanName(lead.data[0].full_name)})` : ""}. Pick them under "Someone in the system" instead.` }
+      return { ok: true, person: { state: "contact", established: false, contactId: null, accountId: null, leadId: null, name: cleanName(p.fullName), emails: [p.email], language: null, people: { mode: "create", name: p.fullName, email: p.email } } }
     }
     if (!UUID.test(ref.id)) return { ok: false, error: "That person could not be found." }
 
@@ -96,7 +125,7 @@ export interface PersonHit {
   /** the badge: what this person is to us */
   badge: "Client" | "Lead" | "Partner" | "Contact"
   /** the kind the maker suggests for this person (the catalog slug) */
-  suggestedKind: "client" | "lead" | "partner"
+  suggestedKind: "client" | "lead" | "partner" | "people"
 }
 
 const MAX_PER_TABLE = 8
@@ -158,7 +187,8 @@ export async function searchPeople(db: Db, rawQuery: unknown): Promise<{ ok: tru
         name: (c.full_name ?? "").trim() || c.email || "Unnamed contact",
         sub: company ?? c.email ?? "",
         badge: isPartner ? "Partner" : established || company ? "Client" : "Contact",
-        suggestedKind: isPartner ? "partner" : established || company ? "client" : "lead",
+        // a contact with no company, no portal stage and no partner mark is just a contact: the "People" kind (no lead made)
+        suggestedKind: isPartner ? "partner" : established || company ? "client" : "people",
       })
     }
     for (const l of Array.from(leads.values())) {

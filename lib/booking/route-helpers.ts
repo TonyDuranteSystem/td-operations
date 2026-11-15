@@ -8,6 +8,7 @@ import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { readBookingMode } from "@/lib/booking-links/switch"
 import { OFF_REFUSAL } from "@/lib/booking/mode-text"
+import type { PersonRef } from "@/lib/booking/person"
 
 export interface AdminWho {
   id: string | null
@@ -60,11 +61,11 @@ export async function refuseWhileOff(): Promise<NextResponse | null> {
 export const BAD_BODY = "That request was not understood. Reload the page and try again."
 
 /** The person the maker asked for, from the JSON body. Never trusts a field's type. */
-export function personRefFrom(raw: unknown): { type: "contact"; id: string } | { type: "lead"; id: string } | { type: "new"; name: string | null; email: string | null } | null {
+export function personRefFrom(raw: unknown): PersonRef | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null
   const p = raw as Record<string, unknown>
   if (p.type === "contact" && typeof p.id === "string") return { type: "contact", id: p.id }
   if (p.type === "lead" && typeof p.id === "string") return { type: "lead", id: p.id }
-  if (p.type === "new") return { type: "new", name: typeof p.name === "string" ? p.name : null, email: typeof p.email === "string" ? p.email : null }
+  if (p.type === "new" || p.type === "new_contact") return { type: p.type, name: typeof p.name === "string" ? p.name : null, email: typeof p.email === "string" ? p.email : null }
   return null
 }
