@@ -1,0 +1,18 @@
+{
+  "title": "Booking: Links I made now shows what really happened, and you can cancel the call",
+  "tag": "improved",
+  "text": "On Booking, Links and calls, each row of Links I made now says what really happened: Waiting, Booked (with the day and time), Cancelled by you, or Cancelled by the booker. A booked row has a Cancel the call button: it asks you to confirm, and Calendly emails the booker. Pointing at a name shows their card. When you make a link you can choose what the booker is asked: let the system decide, the full questions, or just the short note. The questions are shown, and are edited in Calendly.",
+  "points": [
+    "Open Booking, then Links and calls, and look at Links I made",
+    "Point at a name to see their card",
+    "On a booked row, click Cancel the call twice to confirm",
+    "When you make a link, pick what the booker is asked"
+  ],
+  "stepsTitle": "What a link's row tells you now",
+  "steps": [
+    { "name": "Link sent", "detail": "The row says Waiting until someone books." },
+    { "name": "Booked", "detail": "The row shows the day and time, read from Calendly.", "flag": "new" },
+    { "name": "Cancel the call", "detail": "One button on the row. Calendly emails the booker.", "flag": "new" },
+    { "name": "Cancelled", "detail": "The row says Cancelled by you or Cancelled by the booker.", "flag": "new" }
+  ]
+}

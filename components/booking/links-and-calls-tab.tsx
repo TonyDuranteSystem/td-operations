@@ -1,5 +1,6 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import type { BookingMode } from "@/lib/booking-links/switch"
+import { calendlyCtxFromEnv } from "@/lib/calendly/api"
 import { listKinds, type KindDto } from "@/lib/booking/kinds-admin"
 import { listLinks, type LinkDto } from "@/lib/booking/links"
 import { loadTemplates } from "@/lib/booking/templates"
@@ -15,7 +16,7 @@ import { BookingWorkspace } from "@/components/booking/booking-workspace"
 export async function LinksAndCallsTab({ mode, checks, now }: { mode: BookingMode; checks: LoadChecks; now: Date }) {
   const [kinds, links, templates] = await Promise.all([
     listKinds(supabaseAdmin),
-    listLinks(supabaseAdmin, now),
+    listLinks(supabaseAdmin, now, 100, undefined, calendlyCtxFromEnv()),
     loadTemplates(supabaseAdmin),
   ])
   const dateText = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "long", day: "numeric", month: "long" }).format(now)

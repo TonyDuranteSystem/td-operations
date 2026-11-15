@@ -4,6 +4,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { calendlyCtxFromEnv } from "@/lib/calendly/api"
 import { makeFreeLink } from "@/lib/booking/make-link"
 import { listLinks } from "@/lib/booking/links"
+import { parseQuestionsChoice } from "@/lib/booking/plan"
 import { BAD_BODY, currentAdmin, fail, ok, personRefFrom, readJsonObject, refuseWhileOff } from "@/lib/booking/route-helpers"
 
 /** Booking page: "Links I made" (GET) and making a new FREE link (POST). Any staff (administrator or team). */
@@ -12,7 +13,7 @@ export const dynamic = "force-dynamic"
 export async function GET() {
   const denied = await requireBookingStaffRoute()
   if (denied) return denied
-  const r = await listLinks(supabaseAdmin, new Date())
+  const r = await listLinks(supabaseAdmin, new Date(), 100, undefined, calendlyCtxFromEnv())
   if ("error" in r) return fail(500, r.error)
   return ok({ links: r.links })
 }
@@ -28,7 +29,7 @@ export async function POST(req: NextRequest) {
   const who = await currentAdmin()
   const r = await makeFreeLink(
     { db: supabaseAdmin, calendly: calendlyCtxFromEnv(), createdBy: who.email },
-    { person, kindSlug: body.kindSlug, minutes: body.minutes, firstBookingOnly: body.firstBookingOnly === true },
+    { person, kindSlug: body.kindSlug, minutes: body.minutes, firstBookingOnly: body.firstBookingOnly === true, questions: parseQuestionsChoice(body.questions) },
   )
   if ("errors" in r) return fail(422, r.errors.join(" "), { errors: r.errors })
   return ok({ link: r.link, lines: r.lines })

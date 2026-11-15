@@ -64,7 +64,7 @@ describe("while the page is OFF, no change and no send gets through any route", 
         }
       }
       expect(fetchCalls).toBe(0)
-      expect(seen.length).toBe(6) // links POST, revoke POST, kinds POST, kinds PATCH, preview POST, checks answer POST
+      expect(seen.length).toBe(7) // links POST, revoke POST, cancel-call POST, kinds POST, kinds PATCH, preview POST, checks answer POST
     })
   }
   it("anyone who is not staff is still refused first (the ordinary 403, not the 'Turned off' answer), off or not, and nothing is read", async () => {

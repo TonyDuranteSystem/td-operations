@@ -138,6 +138,8 @@ export interface CalendlyEventFacts {
   startTime: string | null
   endTime: string | null
   name: string | null
+  /** who cancelled it, as Calendly records it ("host" | "invitee"); null = not cancelled, or Calendly did not say */
+  cancelerType: string | null
 }
 
 /** One scheduled event. `eventUri` is the address we stored for a booking; only its uuid is used. */
@@ -148,7 +150,21 @@ export async function getScheduledEvent(ctx: CalendlyCtx, eventUri: string): Pro
   const r = isRec(json) && isRec(json.resource) ? json.resource : null
   const status = r ? str(r.status) : null
   if (!r || !status) throw new CalendlyError("bad_response", 200, "Calendly answered something we could not read.")
-  return { uri: str(r.uri) ?? `${CALENDLY_API}/scheduled_events/${uuid}`, status, startTime: str(r.start_time), endTime: str(r.end_time), name: str(r.name) }
+  const cancellation = isRec(r.cancellation) ? r.cancellation : null
+  return {
+    uri: str(r.uri) ?? `${CALENDLY_API}/scheduled_events/${uuid}`,
+    status,
+    startTime: str(r.start_time),
+    endTime: str(r.end_time),
+    name: str(r.name),
+    cancelerType: cancellation ? str(cancellation.canceler_type) : null,
+  }
+}
+
+/** One question the booker is asked on the Calendly booking page. */
+export interface CalendlyQuestion {
+  text: string
+  required: boolean
 }
 
 export interface CalendlyEventTypeFacts {
@@ -157,6 +173,17 @@ export interface CalendlyEventTypeFacts {
   active: boolean
   schedulingUrl: string | null
   durationMinutes: number | null
+  /** the questions the booker sees, in Calendly's order; a switched-off question is left out */
+  questions: CalendlyQuestion[]
+}
+
+/** The enabled questions of an event type. Anything that is not a readable list gives none. */
+export function questionsOf(raw: unknown): CalendlyQuestion[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter((q): q is Record<string, unknown> => isRec(q) && q.enabled !== false && typeof q.name === "string" && q.name.trim() !== "")
+    .sort((a, b) => (typeof a.position === "number" ? a.position : 0) - (typeof b.position === "number" ? b.position : 0))
+    .map((q) => ({ text: (q.name as string).trim(), required: q.required === true }))
 }
 
 export async function getEventType(ctx: CalendlyCtx, eventTypeUriText: string): Promise<CalendlyEventTypeFacts> {
@@ -171,5 +198,6 @@ export async function getEventType(ctx: CalendlyCtx, eventTypeUriText: string): 
     active: r.active === true,
     schedulingUrl: str(r.scheduling_url),
     durationMinutes: typeof r.duration === "number" && Number.isFinite(r.duration) ? r.duration : null,
+    questions: questionsOf(r.custom_questions),
   }
 }
