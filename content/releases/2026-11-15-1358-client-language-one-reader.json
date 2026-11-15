@@ -1,0 +1,6 @@
+{
+  "title": "A client's language is now read the same way everywhere: \"Italy\", \"Italiano\" and \"it\" all count as Italian",
+  "tag": "behind-the-scenes",
+  "text": "Before, some places only understood the exact word \"Italian\", so a client whose language was saved as \"Italy\", \"Italiano\" or \"it\" could get an English email or an English screen. Now one shared reader decides, and every email, portal screen and draft uses it. Nothing looks different: clients saved as \"Italian\" see exactly what they saw before, and the clients saved another way now get Italian as they should.",
+  "points": []
+}
