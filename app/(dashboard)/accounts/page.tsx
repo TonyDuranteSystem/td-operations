@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { AccountTable } from '@/components/accounts/account-table'
 import type { AccountListItem } from '@/lib/types'
+import type { PersonCardSource } from '@/lib/crm-lists/hover-cards'
 import type { MailingAddressRow } from '@/lib/addresses'
 import { accountFacetCounts, companyMatches, parseAccountFilters } from '@/lib/crm-lists/filters'
 import { fetchAllRows, loadInstallmentChips, loadInstallmentYears, loadOverdueCounts, newYorkToday, newYorkYear } from '@/lib/crm-lists/queries'
@@ -9,14 +10,15 @@ import { listYearOptions, parseListYear } from '@/lib/crm-lists/year'
 import { getColumnPref } from '@/lib/crm-lists/prefs'
 import { resolveColumns } from '@/lib/crm-lists/columns'
 import { accountExtras } from '@/lib/crm-lists/extras'
-import { currentMemberCounts, pickMainContacts, type AccountContactLink } from '@/lib/crm-lists/people'
+import { companiesByPerson, currentMemberCounts, pickMainContacts, type AccountContactLink, type PersonCompanyRow } from '@/lib/crm-lists/people'
+import { formatListDate } from '@/lib/crm-lists/format'
 
 const PAGE_SIZE = 50
 
 export default async function AccountsPage({
   searchParams,
 }: {
-  searchParams: { q?: string; status?: string; kind?: string; type?: string; letter?: string; year?: string; page?: string }
+  searchParams: { q?: string; status?: string; kind?: string; type?: string; overdue?: string; letter?: string; year?: string; page?: string }
 }) {
   const supabase = createClient()
   const query = searchParams.q?.trim() ?? ''
@@ -34,9 +36,12 @@ export default async function AccountsPage({
   const years = listYearOptions(yearsWithInvoices, defaultYear)
   const year = parseListYear(searchParams.year, years, defaultYear)
 
+  // Which companies have an overdue invoice: the "with overdue payments" pill is a filter like the others, so it is known up front.
+  const overdueMap = await loadOverdueCounts(supabase)
+
   // Every company that matches the search, with just the words the filters use. The filters, the counts on each choice and the
   // header all work off this one list, so they always agree (the old header counted only the 50 on the page).
-  const base = await fetchAllRows((from, to) => {
+  const baseRows = await fetchAllRows((from, to) => {
     let q = supabase
       .from('accounts')
       .select('id, company_name, status, account_type, entity_type')
@@ -46,6 +51,7 @@ export default async function AccountsPage({
     if (query) q = q.ilike('company_name', `%${query}%`)
     return q
   })
+  const base = baseRows.map(a => ({ ...a, overdue_count: overdueMap[a.id] ?? 0 }))
 
   // The letter is one more filter: the choices' counts follow it, and the letter buttons' own counts follow the other filters.
   const baseForLetter = base.filter(a => letterMatches(a.company_name, letter))
@@ -54,8 +60,6 @@ export default async function AccountsPage({
   const filtered = baseForLetter.filter(a => companyMatches(a, filters))
   const totalCount = filtered.length
   const totalPages = Math.ceil(totalCount / PAGE_SIZE)
-
-  const overdueMap = await loadOverdueCounts(supabase)
 
   const pageRows = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
   const accountIds = pageRows.map(a => a.id)
@@ -67,10 +71,13 @@ export default async function AccountsPage({
     installment_2_amount: number | null
     installment_2_currency: string | null
     updated_at: string
+    client_since: string | null
     extras: Record<string, string | null>
   }
   const detailById: Record<string, Detail> = {}
-  const contactMap: Record<string, { name: string; email: string | null }> = {}
+  const contactMap: ReturnType<typeof pickMainContacts> = {}
+  // The hover card of each company's main contact: their details and their companies.
+  const contactCards: Record<string, PersonCardSource> = {}
   let chipMap: Awaited<ReturnType<typeof loadInstallmentChips>> = {}
 
   if (accountIds.length > 0) {
@@ -83,7 +90,7 @@ export default async function AccountsPage({
         .in('id', accountIds),
       supabase
         .from('account_contacts')
-        .select('account_id, is_primary, ended_at, contact:contacts(full_name, email)')
+        .select('account_id, is_primary, ended_at, contact:contacts(id, full_name, email, phone, language, portal_tier)')
         .in('account_id', accountIds),
       loadInstallmentChips(supabase, accountIds, year),
     ])
@@ -102,6 +109,7 @@ export default async function AccountsPage({
         installment_2_amount: d.installment_2_amount,
         installment_2_currency: d.installment_2_currency,
         updated_at: d.updated_at ?? '',
+        client_since: d.client_since,
         // Only the chosen extra fields are turned into text, so nothing nobody asked for (the EIN) reaches the screen.
         extras: accountExtras(columns, {
           formation_date: d.formation_date,
@@ -124,6 +132,27 @@ export default async function AccountsPage({
     }
     Object.assign(contactMap, pickMainContacts((links ?? []) as unknown as AccountContactLink[]))
     chipMap = chips
+
+    // Each main contact's own companies (the same links the Contacts list shows), for the contact's hover card.
+    const mainIds = Array.from(new Set(Object.values(contactMap).map(c => c.id).filter((x): x is string => !!x)))
+    if (mainIds.length > 0) {
+      const { data: theirCompanies } = await supabase
+        .from('account_contacts')
+        .select('contact_id, account:accounts(company_name, status)')
+        .in('contact_id', mainIds)
+      const byPerson = companiesByPerson((theirCompanies ?? []) as unknown as PersonCompanyRow[])
+      for (const c of Object.values(contactMap)) {
+        if (!c.id || contactCards[c.id]) continue
+        contactCards[c.id] = {
+          full_name: c.name,
+          email: c.email,
+          phone: c.phone,
+          language: c.language,
+          portal_tier: c.portal_tier,
+          companies: byPerson[c.id] ?? [],
+        }
+      }
+    }
   }
 
   const items: AccountListItem[] = pageRows.map(a => {
@@ -145,6 +174,8 @@ export default async function AccountsPage({
       updated_at: d?.updated_at ?? '',
       chip_1: chipMap[a.id]?.first ?? { kind: 'not_invoiced', count: 0 },
       chip_2: chipMap[a.id]?.second ?? { kind: 'not_invoiced', count: 0 },
+      client_since: formatListDate(d?.client_since),
+      contact_card: contactMap[a.id]?.id ? (contactCards[contactMap[a.id].id as string] ?? null) : null,
       extras: d?.extras ?? {},
     }
   })
@@ -174,6 +205,7 @@ export default async function AccountsPage({
         statusFilter={filters.status}
         kindFilter={filters.kind}
         typeFilter={filters.type}
+        overdueOnly={!!filters.overdue}
         facets={facets}
         stats={stats}
         currentPage={currentPage}

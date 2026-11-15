@@ -1,5 +1,6 @@
 import type { MessageReaction } from './portal/reactions'
 import type { InstallmentChip } from './billing/installment-invoices'
+import type { PersonCardSource } from './crm-lists/hover-cards'
 
 export interface TaskAttachment {
   /** Publicly accessible URL (typically a Google Drive file URL). */
@@ -298,6 +299,10 @@ export interface AccountListItem {
   /** The chosen year's invoice chip for each installment. */
   chip_1: InstallmentChip
   chip_2: InstallmentChip
+  /** When they became a client, already worded ("13 Mar 2026") — for the hover card. */
+  client_since: string | null
+  /** The main contact's details for the hover card (null when the company has none). */
+  contact_card: PersonCardSource | null
   /**
    * Display text for the extra fields this person chose (formation date, EIN, address…), by field id. Only the chosen fields are filled
    * in: a field nobody asked for (the EIN above all) is never sent to the screen.
@@ -361,6 +366,12 @@ export interface ContactCompanyLine {
   updated_at: string
   chip_1: InstallmentChip
   chip_2: InstallmentChip
+  /** For the company's hover card. */
+  state_of_formation: string | null
+  client_since: string | null
+  contact_name: string | null
+  contact_email: string | null
+  payment_overdue: number
 }
 
 export interface ContactListItem {

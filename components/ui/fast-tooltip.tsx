@@ -42,6 +42,8 @@ export function FastTooltip({
   children,
   align = 'right',
   className,
+  delayMs = 0,
+  cardHeightPx = CARD_HEIGHT_PX,
 }: {
   /** Falsy (empty string / undefined) renders no label at all — e.g. a
    * `title={cond ? 'reason' : undefined}` conditional-explanation pattern
@@ -64,17 +66,53 @@ export function FastTooltip({
    * in a flex bar. Leave unset for a plain icon/button wrap.
    */
   className?: string
+  /**
+   * Wait this long after the pointer arrives before showing (default 0 = instant). A list of names uses a short wait so a card does not
+   * flash open for every name the mouse merely sweeps across. Keyboard focus is never delayed.
+   */
+  delayMs?: number
+  /** Room reserved for the card (px) when deciding whether it opens below or above the anchor. */
+  cardHeightPx?: number
 }) {
   const [show, setShow] = useState(false)
   const [canHover, setCanHover] = useState(false)
   const [pos, setPos] = useState<TooltipPosition | null>(null)
   const wrapperRef = useRef<HTMLDivElement>(null)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  const clearTimer = () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current)
+      timerRef.current = null
+    }
+  }
+  const close = () => {
+    clearTimer()
+    setShow(false)
+  }
   const open = () => {
+    clearTimer()
     const r = wrapperRef.current?.getBoundingClientRect()
-    if (r) setPos(tooltipPosition(r, align, window.innerHeight, card ? CARD_HEIGHT_PX : undefined))
+    if (r) setPos(tooltipPosition(r, align, window.innerHeight, card ? cardHeightPx : undefined))
     setShow(true)
   }
+  const openFromPointer = () => {
+    if (!canHover) return
+    if (delayMs > 0) {
+      clearTimer()
+      timerRef.current = setTimeout(open, delayMs)
+    } else {
+      open()
+    }
+  }
+
+  // A leftover wait must never fire after the row is gone.
+  useEffect(
+    () => () => {
+      if (timerRef.current) clearTimeout(timerRef.current)
+    },
+    [],
+  )
 
   useEffect(() => {
     const mq = window.matchMedia('(hover: hover) and (pointer: fine)')
@@ -99,11 +137,11 @@ export function FastTooltip({
     <div
       ref={wrapperRef}
       className={cn('relative inline-flex', className)}
-      onMouseEnter={() => canHover && open()}
-      onMouseLeave={() => setShow(false)}
+      onMouseEnter={openFromPointer}
+      onMouseLeave={close}
       onFocus={open}
-      onBlur={() => setShow(false)}
-      onClick={() => setShow(false)}
+      onBlur={close}
+      onClick={close}
     >
       {children}
       {show && (label || card) && pos && typeof document !== 'undefined' &&
