@@ -112,7 +112,7 @@ describe("reads", () => {
   })
   it("getEventType reads the name and the booking page", async () => {
     const { ctx } = fake([{ status: 200, body: { resource: { uri: TYPE, name: "New Meeting", active: true, scheduling_url: "https://calendly.com/x/new-meeting", duration: 30 } } }])
-    expect(await getEventType(ctx, TYPE)).toEqual({ uri: TYPE, name: "New Meeting", active: true, schedulingUrl: "https://calendly.com/x/new-meeting", durationMinutes: 30 })
+    expect(await getEventType(ctx, TYPE)).toEqual({ uri: TYPE, name: "New Meeting", active: true, schedulingUrl: "https://calendly.com/x/new-meeting", durationMinutes: 30, questions: [] })
   })
 })
 

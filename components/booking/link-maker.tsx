@@ -6,12 +6,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { KindDto } from "@/lib/booking/kinds-admin"
 import type { PersonHit } from "@/lib/booking/person"
 import type { PreviewLine } from "@/lib/booking/preview"
+import type { AllQuestions } from "@/lib/booking/questions"
 import { callApi, messageOf } from "@/components/booking/api"
 import type { MakeAgain } from "@/components/booking/booking-workspace"
 import { OFF_REASON } from "@/lib/booking/mode-text"
 
 type MadeLink = { id: string; publicId: string; url: string; email: string | null; language: "Italian" | "English" | null }
-type Preview = { ok: true; lines: PreviewLine[]; once: boolean; minutes: number; ready: boolean } | { ok: false; errors: string[] }
+type Preview = { ok: true; lines: PreviewLine[]; once: boolean; minutes: number; ready: boolean; template: "sales" | "plain"; autoTemplate: "sales" | "plain" } | { ok: false; errors: string[] }
+type QuestionsAnswer = { questions: AllQuestions; editUrl: string }
+
+const QUESTION_CHOICES: Array<["auto" | "full" | "short", string]> = [["auto", "Let the system decide"], ["full", "The full questions"], ["short", "Just the short note"]]
 
 const DURATIONS: Array<[string, string]> = [["30", "30 min"], ["45", "45 min"], ["60", "1 hour"], ["90", "90 min"], ["120", "2 hours"], ["other", "Other"]]
 
@@ -69,6 +73,9 @@ export function LinkMaker({
   const [durPick, setDurPick] = useState("30")
   const [durOther, setDurOther] = useState("")
   const [firstOnly, setFirstOnly] = useState(true)
+  const [questions, setQuestions] = useState<"auto" | "full" | "short">("auto")
+  const [asked, setAsked] = useState<QuestionsAnswer | null>(null)
+  const [askedError, setAskedError] = useState<string | null>(null)
   const [preview, setPreview] = useState<Preview | null>(null)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [making, setMaking] = useState(false)
@@ -109,6 +116,15 @@ export function LinkMaker({
     }
   }
 
+  // what each Calendly call type asks the booker, read from Calendly once when the maker opens
+  useEffect(() => {
+    let stop = false
+    callApi<QuestionsAnswer>("/api/booking/questions", {}, "The booker's questions could not be read. Try again.")
+      .then((r) => { if (!stop) { setAsked(r); setAskedError(null) } })
+      .catch((e) => { if (!stop) setAskedError(messageOf(e, "The booker's questions could not be read. Try again.")) })
+    return () => { stop = true }
+  }, [])
+
   // search as the person types
   useEffect(() => {
     if (off || who !== "old") return
@@ -136,17 +152,17 @@ export function LinkMaker({
     let stop = false
     const t = setTimeout(async () => {
       try {
-        const r = await callApi<Preview>("/api/booking/preview", { method: "POST", body: { person: personRef, kindSlug, minutes, firstBookingOnly: effectiveFirstOnly } }, "The preview could not be made. Try again.")
+        const r = await callApi<Preview>("/api/booking/preview", { method: "POST", body: { person: personRef, kindSlug, minutes, firstBookingOnly: effectiveFirstOnly, questions } }, "The preview could not be made. Try again.")
         if (!stop) { setPreview(r); setPreviewError(null) }
       } catch (e) {
         if (!stop) { setPreview(null); setPreviewError(messageOf(e, "The preview could not be made. Try again.")) }
       }
     }, 300)
     return () => { stop = true; clearTimeout(t) }
-  }, [personRef, kindSlug, kindOk, minutes, effectiveFirstOnly, off])
+  }, [personRef, kindSlug, kindOk, minutes, effectiveFirstOnly, questions, off])
 
   // a different choice means the link shown above is no longer the one on screen
-  useEffect(() => { setMade(null); setError(null) }, [personRef, kindSlug, minutes, effectiveFirstOnly])
+  useEffect(() => { setMade(null); setError(null) }, [personRef, kindSlug, minutes, effectiveFirstOnly, questions])
 
   const pickPerson = (h: PersonHit) => {
     setPicked({ type: h.type, id: h.id, name: h.name, sub: h.sub, badge: h.badge, suggestedKind: h.suggestedKind })
@@ -178,6 +194,7 @@ export function LinkMaker({
     const m = again.minutes ?? 30
     if (DURATIONS.some(([v]) => v === String(m))) { setDurPick(String(m)); setDurOther("") } else { setDurPick("other"); setDurOther(String(m)) }
     setFirstOnly(again.once)
+    setQuestions(again.asks ?? "auto")
     document.getElementById("make")?.scrollIntoView({ behavior: "smooth", block: "nearest" })
   }, [again])
 
@@ -186,7 +203,7 @@ export function LinkMaker({
     setMaking(true)
     setError(null)
     try {
-      const r = await callApi<{ link: MadeLink }>("/api/booking/links", { method: "POST", body: { person: personRef, kindSlug, minutes, firstBookingOnly: effectiveFirstOnly } }, "The link could not be made. Try again.")
+      const r = await callApi<{ link: MadeLink }>("/api/booking/links", { method: "POST", body: { person: personRef, kindSlug, minutes, firstBookingOnly: effectiveFirstOnly, questions } }, "The link could not be made. Try again.")
       setMade(r.link)
       await onMade()
     } catch (e) {
@@ -194,7 +211,7 @@ export function LinkMaker({
     } finally {
       setMaking(false)
     }
-  }, [personRef, kindOk, minutes, kindSlug, effectiveFirstOnly, onMade])
+  }, [personRef, kindOk, minutes, kindSlug, effectiveFirstOnly, questions, onMade])
 
   const flash = (t: string) => { setCopied(t); setTimeout(() => setCopied((c) => (c === t ? null : c)), 1800) }
   const copy = async () => {
@@ -339,6 +356,17 @@ export function LinkMaker({
           </p>
         </div>
 
+        {/* QUESTIONS FOR THE BOOKER */}
+        <div data-testid="questions-block">
+          <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-zinc-500">What is the booker asked?</span>
+          <div className="flex flex-wrap gap-1.5" data-testid="question-choices">
+            {QUESTION_CHOICES.map(([v, label]) => (
+              <button key={v} type="button" aria-pressed={questions === v} onClick={() => setQuestions(v)} className={`rounded-full border px-3 py-1 text-sm font-medium ${questions === v ? "border-blue-500 bg-blue-500/10 ring-1 ring-blue-500" : "hover:border-zinc-400"}`}>{label}</button>
+            ))}
+          </div>
+          <QuestionsList questions={questions} preview={preview} asked={asked} askedError={askedError} />
+        </div>
+
         {/* PREVIEW */}
         <div className="grid gap-2 rounded-lg border p-3" data-testid="preview">
           <h3 className="text-sm font-semibold">When it gets booked, the system will:</h3>
@@ -374,6 +402,41 @@ export function LinkMaker({
         </div>
       </fieldset>
     </section>
+  )
+}
+
+/** Under the three choices: what "let the system decide" means for this person, and the questions the chosen call type asks (read from Calendly). */
+function QuestionsList({ questions, preview, asked, askedError }: { questions: "auto" | "full" | "short"; preview: Preview | null; asked: QuestionsAnswer | null; askedError: string | null }) {
+  const role: "sales" | "plain" | null = questions === "full" ? "sales" : questions === "short" ? "plain" : preview && preview.ok ? preview.autoTemplate : null
+  const words = (r: "sales" | "plain") => (r === "sales" ? "the full questions" : "just the short note")
+  const shown = role && asked ? asked.questions[role] : null
+  return (
+    <div className="mt-1.5 text-xs text-zinc-500" data-testid="questions-list">
+      {questions === "auto" && <p>{role ? `Right now that means ${words(role)}, for this person and kind of call.` : "Choose who it is for and what kind of call it is, to see what the system would ask."}</p>}
+      {questions !== "auto" && <p>You chose {words(role as "sales" | "plain")}, whoever books.</p>}
+      {askedError && <p className="mt-1 text-red-700" role="alert">{askedError}</p>}
+      {role && shown && shown.ok === true && (
+        <div className="mt-1.5 rounded-md bg-zinc-100 p-2.5" data-testid="questions-shown">
+          <p className="mb-1 font-semibold text-zinc-700">The booker will be asked{shown.callName ? ` (${shown.callName})` : ""}:</p>
+          {shown.questions.length === 0 ? (
+            <p>Nothing: this call type has no questions.</p>
+          ) : (
+            <ol className="list-decimal space-y-0.5 pl-4">
+              {shown.questions.map((q) => (
+                <li key={q.text} title={q.text}>{q.text.split("\n")[0]}{q.required ? <span className="ml-1 font-semibold text-zinc-700">(required)</span> : <span className="ml-1">(optional)</span>}</li>
+              ))}
+            </ol>
+          )}
+        </div>
+      )}
+      {role && shown && shown.ok === false && <p className="mt-1 text-amber-800" role="status">{shown.error}</p>}
+      {asked && (
+        <p className="mt-1.5">
+          <a href={asked.editUrl} target="_blank" rel="noreferrer" className="font-semibold text-blue-700 underline" data-testid="edit-in-calendly">Edit the questions in Calendly</a>
+          {" "}— open the call type there. A change in Calendly applies to every link that uses that call type, and to the public booking page.
+        </p>
+      )}
+    </div>
   )
 }
 

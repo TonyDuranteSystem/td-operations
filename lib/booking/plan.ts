@@ -25,6 +25,13 @@ export type PersonState = "new" | "lead" | "contact"
 export type Recorder = "attach" | "lead" | "none"
 export type PayMode = "credit" | "revenue_only"
 export type TemplateRole = "sales" | "plain"
+/** What the booker is asked (Antonio, 15 Nov 2026): "auto" = the system decides (the old rule), "full" = the sales questions, "short" = just the one optional note. */
+export type QuestionsChoice = "auto" | "full" | "short"
+
+/** Anything that is not exactly "full" or "short" is "auto" (a request from an older page, or a made-up value, never changes the rule). */
+export function parseQuestionsChoice(raw: unknown): QuestionsChoice {
+  return raw === "full" || raw === "short" ? raw : "auto"
+}
 
 export interface LinkPlanInput {
   person: {
@@ -41,6 +48,8 @@ export interface LinkPlanInput {
    * closes it on our side (a later booking is saved as usual and a card asks). Any other length, a paid link and a referrer are one-time anyway.
    */
   firstBookingOnly?: boolean
+  /** what the booker is asked; left out = "auto" */
+  questions?: QuestionsChoice
 }
 
 export interface LinkPlan {
@@ -50,7 +59,10 @@ export interface LinkPlan {
   minutes: number
   /** true = a one-time link (one booking closes it); false = the standard reusable 30-minute link */
   once: boolean
+  /** the Calendly call type the link will use: what the person chose, else what the rules decide */
   template: TemplateRole
+  /** what the rules alone would decide, so the page can say what "let the system decide" means for this person */
+  autoTemplate: TemplateRole
   payment: { amountCents: number; currency: "USD" | "EUR"; label: string | null; payMode: PayMode } | null
   referrer: { contactId: string | null; code: string } | null
 }
@@ -126,11 +138,12 @@ export function decideLinkPlan(input: LinkPlanInput): LinkPlanResult {
 
   // A referrer earns a credit for whoever claims the link, so the link must close on its first booking (never the reusable standard link, even at 30 minutes).
   const once = minutes !== STANDARD_MINUTES || payment !== null || referrer !== null || input.firstBookingOnly === true
-  const template: TemplateRole = input.person.state === "new" && payment === null && rule.sales_template && recorder === "lead" ? "sales" : "plain"
+  const autoTemplate: TemplateRole = input.person.state === "new" && payment === null && rule.sales_template && recorder === "lead" ? "sales" : "plain"
+  const template: TemplateRole = input.questions === "full" ? "sales" : input.questions === "short" ? "plain" : autoTemplate
 
   return {
     ok: true,
     needsConfirm,
-    plan: { rule, snapshot: buildRuleSnapshot({ slug: input.kind.slug, label: input.kind.label }, rule), recorder, minutes, once, template, payment, referrer },
+    plan: { rule, snapshot: buildRuleSnapshot({ slug: input.kind.slug, label: input.kind.label }, rule), recorder, minutes, once, template, autoTemplate, payment, referrer },
   }
 }
