@@ -14,6 +14,7 @@ import { LetterBar } from '@/components/lists/letter-bar'
 import { LISTS_CONTAINER, ListStyles } from '@/components/lists/list-styles'
 import { YearSelect } from '@/components/lists/year-select'
 import { ListHoverCard } from '@/components/lists/hover-card'
+import { MessageContactButton } from '@/components/contacts/message-contact-button'
 import { useAmountOverrides, type AmountOverride } from '@/components/lists/use-amount-overrides'
 import { isAmountLocked } from '@/lib/crm-lists/amounts'
 import { chosenColumns, gridMinWidth, gridTemplate, hasColumn } from '@/lib/crm-lists/columns'
@@ -258,12 +259,16 @@ export function ContactsTable({ items, query, statusFilter, filters, linkCounts,
                   <div className="flex items-start gap-2 min-w-0 pt-0.5">
                     <User className="mt-0.5 h-4 w-4 text-muted-foreground shrink-0" />
                     <div className="min-w-0">
-                      <ListHoverCard
-                        card={personCard({ ...item, companies: item.companies.map(c => ({ company_name: c.company_name, status: c.status })) })}
-                        className="min-w-0 max-w-full"
-                      >
-                        <p className="truncate font-medium text-sm">{item.full_name}</p>
-                      </ListHoverCard>
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <ListHoverCard
+                          card={personCard({ ...item, companies: item.companies.map(c => ({ company_name: c.company_name, status: c.status })) })}
+                          className="min-w-0 max-w-full"
+                        >
+                          <p className="truncate font-medium text-sm">{item.full_name}</p>
+                        </ListHoverCard>
+                        {/* Write a portal chat message from here (Antonio 2026-11-15: "directly from the list"). */}
+                        <MessageContactButton contactId={item.id} contactName={item.full_name || ''} variant="icon" />
+                      </div>
                       <div className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
                         {item.language && !hasColumn(columns, 'language') && <span>{item.language}</span>}
                         {item.passport_on_file && (
