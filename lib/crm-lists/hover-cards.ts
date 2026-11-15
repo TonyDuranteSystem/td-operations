@@ -8,6 +8,7 @@
  */
 import { formatMoney } from '@/lib/crm-lists/amounts'
 import { INSTALLMENT_CHIP_LABEL, type InstallmentChip } from '@/lib/billing/installment-invoices'
+import type { ContractMismatch } from '@/lib/signed-contracts/types'
 
 export interface CardLine {
   label: string
@@ -16,10 +17,18 @@ export interface CardLine {
   tone?: 'bad'
 }
 
+/** An amber block at the top of a card: something the person looking at the list should check (a contract that does not match its company). */
+export interface CardAlert {
+  heading: string
+  blocks: { title: string; lines: string[] }[]
+}
+
 export interface CardModel {
   title: string
   /** The small grey line under the title. */
   subtitle: string | null
+  /** Drawn in amber right under the title, so it is read first. */
+  alert?: CardAlert
   lines: CardLine[]
   /** A list of short items under the lines (a person's companies). */
   items?: { heading: string; entries: string[] }
@@ -86,10 +95,34 @@ export interface PersonCardSource {
   language: string | null
   portal_tier: string | null
   companies: { company_name: string; status: string | null }[]
+  /** The amber findings about this person's signed contracts (the Contacts list only); none = no amber block. */
+  contract_mismatches?: ContractMismatch[]
 }
 
 /** More than this many companies are cut to "+ N more" so the card stays small. */
 export const PERSON_CARD_MAX_COMPANIES = 6
+/** More than this many amber findings are cut to "+ N more" so the card stays small. */
+export const PERSON_CARD_MAX_MISMATCHES = 4
+
+/** The amber block for a person's contract findings, in the same words as the amber note on the Contact page. */
+export function contractAlert(findings: ContractMismatch[] | undefined): CardAlert | undefined {
+  if (!findings || findings.length === 0) return undefined
+  const heading = findings.every((f) => f.kind === 'differs')
+    ? 'Contract amounts differ from the company'
+    : findings.every((f) => f.kind === 'company_empty')
+      ? 'The company has no amounts to compare'
+      : 'Check the contract amounts'
+  const blocks = findings.slice(0, PERSON_CARD_MAX_MISMATCHES).map((f) => ({
+    title: `${f.company} · ${f.contract} contract`,
+    lines: [
+      `Contract says: ${f.contractAmounts}`,
+      f.crmAmounts ? `Company in the CRM: ${f.crmAmounts}` : 'The company has no installment amounts saved in the CRM.',
+    ],
+  }))
+  const more = findings.length - blocks.length
+  if (more > 0) blocks.push({ title: `+ ${more} more`, lines: ['Open the contact to see them.'] })
+  return { heading, blocks }
+}
 
 export function personCard(p: PersonCardSource): CardModel {
   const stage = blank(p.portal_tier)
@@ -103,9 +136,11 @@ export function personCard(p: PersonCardSource): CardModel {
   const shown = p.companies.slice(0, PERSON_CARD_MAX_COMPANIES).map((c) => (blank(c.status) ? `${c.company_name} · ${c.status}` : c.company_name))
   const more = p.companies.length - shown.length
   if (more > 0) shown.push(`+ ${more} more`)
+  const alert = contractAlert(p.contract_mismatches)
   return {
     title: p.full_name,
     subtitle: stage ? `Portal stage: ${stage}` : null,
+    ...(alert ? { alert } : {}),
     lines,
     items: { heading: p.companies.length === 1 ? 'Company' : 'Companies', entries: shown.length > 0 ? shown : ['No company'] },
   }
