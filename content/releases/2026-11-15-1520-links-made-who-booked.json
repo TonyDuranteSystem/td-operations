@@ -1,0 +1,16 @@
+{
+  "title": "Booking: Links I made now shows who booked",
+  "tag": "improved",
+  "text": "On Booking, Links and calls, once someone books through a link, the row shows who they are: their name with their email underneath. A link made for \"Someone new\" now shows the real booker instead. If the booker is not the person the link was made for (a different email or name), the row says \"Booked by\" in amber so it is easy to spot. Pointing at the name also shows their phone, any answers they gave and, when Calendly sends them, their first and last name separately.",
+  "points": [
+    "Open Booking, then Links and calls, and look at the For column of a booked row",
+    "Point at the name to see the booker's phone, answers and first and last name"
+  ],
+  "stepsTitle": "What the For column shows",
+  "steps": [
+    { "name": "Link made", "detail": "The row shows who the link was made for, or Someone new." },
+    { "name": "Someone books", "detail": "The row shows the booker's name, with their email underneath.", "flag": "new" },
+    { "name": "A different person books", "detail": "The row says Booked by, in amber, with their name and email.", "flag": "new" },
+    { "name": "Point at the name", "detail": "The card adds their phone and their answers.", "flag": "new" }
+  ]
+}

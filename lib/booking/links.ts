@@ -6,7 +6,7 @@
 import { linkUrl } from "@/lib/booking/make-link"
 import { isMissingTable } from "@/lib/booking-links/missing-table"
 import { parseRuleSnapshot } from "@/lib/booking/kinds"
-import { bookingText, bookingUrisOf, canCancelBooking, decideBooking, loadStoredBookings, lookupEvents, type BookingState, type EventFacts } from "@/lib/booking/link-bookings"
+import { bookingText, bookingUrisOf, canCancelBooking, decideBooking, loadStoredBookings, lookupEvents, whoBooked, type Booker, type BookingState, type EventFacts, type WhoBooked } from "@/lib/booking/link-bookings"
 import { loadLinkCards } from "@/lib/booking/link-cards"
 import type { CardModel } from "@/lib/crm-lists/hover-cards"
 import type { CalendlyCtx } from "@/lib/calendly/api"
@@ -72,6 +72,8 @@ export interface LinkDto {
   asks: "full" | "short" | null
   /** the booking made through this link, if any */
   booking: LinkBookingDto | null
+  /** what the "For" column shows: who the link is for and, once someone has booked, who actually booked */
+  who: WhoBooked
   /** the little card shown on pointing at the name; null = nothing to show (someone new with no name or email) */
   card: CardModel | null
 }
@@ -118,7 +120,14 @@ export async function listLinks(db: Db, now: Date, limit = 100, baseUrl?: string
     const urisOf = new Map(rows.map((r) => [r.id, bookingUrisOf(storedOf(r), r.claimed_event_uri)] as const))
     const latest = rows.map((r) => urisOf.get(r.id)?.[0]).filter((u): u is string => !!u)
     const facts: Map<string, EventFacts | null> = calendly && latest.length ? await lookupEvents(calendly, latest) : new Map()
-    const cards = await loadLinkCards(db, rows)
+    // who booked: the booker named in the stored delivery of each link's latest booking
+    const bookerOf = new Map<string, Booker | null>(
+      rows.map((r) => {
+        const latestUri = urisOf.get(r.id)?.[0]
+        return [r.id, latestUri ? storedOf(r).find((s) => s.eventUri === latestUri)?.booker ?? null : null] as const
+      }),
+    )
+    const cards = await loadLinkCards(db, rows, bookerOf)
 
     // when each booked call starts (read from the call log the engine wrote); a failed read only leaves the time out
     const uris = rows.map((r) => r.claimed_event_uri).filter((u): u is string => !!u)
@@ -159,6 +168,7 @@ export async function listLinks(db: Db, now: Date, limit = 100, baseUrl?: string
           email: Array.isArray(r.person_emails) && r.person_emails.length ? r.person_emails[0] : null,
           asks: r.template_slug === "sales" ? "full" : r.template_slug === "plain" ? "short" : null,
           booking,
+          who: whoBooked({ personName: r.person_name, personEmails: r.person_emails }, bookerOf.get(r.id) ?? null),
           card: cards.get(r.id) ?? null,
         }
       }),
