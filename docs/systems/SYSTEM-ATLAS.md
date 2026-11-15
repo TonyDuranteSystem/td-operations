@@ -183,7 +183,7 @@ _Regenerated 2026-11-15. Every subsystem doc under `docs/systems/` (62 docs), wi
 
 - [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-11-13)_
 - [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-11-13)_
-- [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-11-06)_
+- [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-11-15)_
 - [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-11-09)_
 - [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-11-14)_
 - [bofa-intake.md](bofa-intake.md) — Bank Application Intake (Bank of America, one-time link) _(verified 2026-11-06)_
