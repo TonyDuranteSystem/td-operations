@@ -60,6 +60,17 @@ export function LinksMade({ links, error, off, onChanged, onMakeAgain }: { links
     setTimeout(() => setNote((n) => (n && n.id === l.id ? null : n)), 2200)
   }
 
+  const copyPay = async (l: LinkDto) => {
+    if (!l.pay) return
+    try {
+      await navigator.clipboard.writeText(l.pay.payUrl)
+      setNote({ id: l.id, text: "Payment link copied", bad: false })
+    } catch {
+      setNote({ id: l.id, text: "Could not copy. Select the link in the page and press Cmd+C.", bad: true })
+    }
+    setTimeout(() => setNote((n) => (n && n.id === l.id ? null : n)), 2200)
+  }
+
   const stop = async (l: LinkDto) => {
     if (sure !== l.id) {
       setSure(l.id)
@@ -139,10 +150,12 @@ export function LinksMade({ links, error, off, onChanged, onMakeAgain }: { links
                     <td className="border-b px-2.5 py-2 text-zinc-700">{madeText(l.madeAt)}</td>
                     <td className="border-b px-2.5 py-2">
                       <span className={`text-[12.5px] font-semibold ${bookingClass(l)}`} data-testid="link-what">{l.what}</span>
+                      {l.pay && <span className={`block text-xs font-semibold ${l.pay.state === "paid" ? "text-green-700" : l.pay.state === "not_charging" ? "text-zinc-500" : "text-amber-700"}`} data-testid="link-pay">{l.pay.text}</span>}
                       {note?.id === l.id && <span className={`mt-1 block max-w-[260px] text-xs font-semibold ${note.bad ? "text-red-700" : "text-green-700"}`} role={note.bad ? "alert" : "status"}>{note.text}</span>}
                       {handCancel?.id === l.id && <a href={handCancel.url} target="_blank" rel="noreferrer" className="mt-1 block text-xs font-semibold text-blue-700 underline" data-testid="hand-cancel">Open the booker&apos;s cancel page</a>}
                     </td>
                     <td className="whitespace-nowrap border-b px-2.5 py-2 text-right">
+                      {l.pay?.state === "unpaid" && booked && <button type="button" onClick={() => copyPay(l)} className={`mr-1.5 ${BTN}`} data-testid="copy-pay">Copy payment link</button>}
                       {booked && (
                         <>
                           {!l.once && <button type="button" onClick={() => copy(l)} className={`mr-1.5 ${BTN}`}>Copy</button>}

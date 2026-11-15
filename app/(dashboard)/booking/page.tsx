@@ -4,6 +4,8 @@ import { isBookingStaff } from "@/lib/auth/booking-access"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { readBookingMode } from "@/lib/booking-links/switch"
 import { loadOpenChecks } from "@/lib/booking/checks"
+import { loadPaidCalls, mergeCards } from "@/lib/booking/paid-calls"
+import { calendlyCtxFromEnv } from "@/lib/calendly/api"
 import { parseBookingTab } from "@/lib/leads/leads-url"
 import { BookingTabs } from "@/components/booking/booking-tabs"
 import { LinksAndCallsTab } from "@/components/booking/links-and-calls-tab"
@@ -35,7 +37,11 @@ export default async function BookingPage({
 
   const now = new Date()
   // read once: the count on the tab bar (so a waiting call is noticed from the Leads tab) and, on the Links and calls tab, the cards themselves. Never throws.
-  const checks = await loadOpenChecks(supabaseAdmin, now)
+  // The cards are the bookings that need a look (stored) plus the paid calls nobody has paid yet (worked out now, from the stored bookings and Calendly).
+  // The Leads tab is daily work and must never wait for Calendly: there the paid calls are counted from the stored bookings alone (a call cancelled in Calendly still counts
+  // until the Links and calls tab is opened, where Calendly is asked).
+  const [openChecks, paidCalls] = await Promise.all([loadOpenChecks(supabaseAdmin, now), loadPaidCalls(supabaseAdmin, now, tab === "leads" ? undefined : calendlyCtxFromEnv())])
+  const checks = mergeCards(openChecks, paidCalls)
 
   return (
     <div data-testid="booking-shell">

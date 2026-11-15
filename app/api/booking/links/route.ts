@@ -2,12 +2,12 @@ import { NextRequest } from "next/server"
 import { requireBookingStaffRoute, requireBookingStaffJsonRoute } from "@/lib/auth/require-booking-staff-route"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { calendlyCtxFromEnv } from "@/lib/calendly/api"
-import { makeFreeLink } from "@/lib/booking/make-link"
+import { makeLink } from "@/lib/booking/make-link"
 import { listLinks } from "@/lib/booking/links"
 import { parseQuestionsChoice } from "@/lib/booking/plan"
-import { BAD_BODY, currentAdmin, fail, ok, personRefFrom, readJsonObject, refuseWhileOff } from "@/lib/booking/route-helpers"
+import { BAD_BODY, currentAdmin, fail, ok, paymentFrom, personRefFrom, readJsonObject, refuseWhileOff } from "@/lib/booking/route-helpers"
 
-/** Booking page: "Links I made" (GET) and making a new FREE link (POST). Any staff (administrator or team). */
+/** Booking page: "Links I made" (GET) and making a new link, free or paid (POST). Any staff (administrator or team). */
 export const dynamic = "force-dynamic"
 
 export async function GET() {
@@ -25,12 +25,13 @@ export async function POST(req: NextRequest) {
   if (off) return off
   const body = await readJsonObject(req)
   const person = body ? personRefFrom(body.person) : null
-  if (!body || !person || typeof body.kindSlug !== "string") return fail(400, BAD_BODY)
+  const payment = body ? paymentFrom(body.payment) : null
+  if (!body || !person || !payment || !payment.ok || typeof body.kindSlug !== "string") return fail(400, BAD_BODY)
   const who = await currentAdmin()
-  const r = await makeFreeLink(
+  const r = await makeLink(
     { db: supabaseAdmin, calendly: calendlyCtxFromEnv(), createdBy: who.email },
-    { person, kindSlug: body.kindSlug, minutes: body.minutes, firstBookingOnly: body.firstBookingOnly === true, questions: parseQuestionsChoice(body.questions) },
+    { person, kindSlug: body.kindSlug, minutes: body.minutes, firstBookingOnly: body.firstBookingOnly === true, questions: parseQuestionsChoice(body.questions), payment: payment.value },
   )
-  if ("errors" in r) return fail(422, r.errors.join(" "), { errors: r.errors })
+  if ("errors" in r) return fail(422, r.errors.join(" "), { errors: r.errors, ...(r.needsConfirm ? { needsConfirm: true } : {}) })
   return ok({ link: r.link, lines: r.lines })
 }

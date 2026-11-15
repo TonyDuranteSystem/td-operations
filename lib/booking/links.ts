@@ -8,6 +8,8 @@ import { isMissingTable } from "@/lib/booking-links/missing-table"
 import { parseRuleSnapshot } from "@/lib/booking/kinds"
 import { bookingText, bookingUrisOf, canCancelBooking, decideBooking, loadStoredBookings, lookupEvents, whoBooked, type Booker, type BookingState, type EventFacts, type WhoBooked } from "@/lib/booking/link-bookings"
 import { loadLinkCards } from "@/lib/booking/link-cards"
+import { isPaidLink, moneyText, payStateOf, payUrl, type PayState } from "@/lib/booking/payment"
+import { stopChargingIfPaidLink } from "@/lib/booking/pay-actions"
 import type { CardModel } from "@/lib/crm-lists/hover-cards"
 import type { CalendlyCtx } from "@/lib/calendly/api"
 
@@ -37,6 +39,31 @@ export interface LinkRow {
   created_at: string
   /** "sales" = the full questions, "plain" = the short note; null on a link made before this was kept */
   template_slug?: string | null
+  /** the payment columns of a PAID link (Stage 3); all null / absent on a free link and on a database that does not have them yet */
+  pay_amount_cents?: number | null
+  pay_currency?: string | null
+  pay_label?: string | null
+  pay_mode?: string | null
+  pay_code?: string | null
+  sent_at?: string | null
+  sent_count?: number | null
+  paid_session_id?: string | null
+  paid_at?: string | null
+  not_charging_at?: string | null
+}
+
+/** The money side of a paid link's row on the page. Null on a free link. */
+export interface LinkPayDto {
+  state: PayState
+  amountText: string
+  /** plain words for the "What happened" column: "$397.00 · not paid yet", "$397.00 · paid", ... */
+  text: string
+  /** our own payment page's address (Copy payment link) */
+  payUrl: string
+  /** to pre-fill "Make again" with the same price (a made-again link must never silently turn free) */
+  amount: string
+  currency: "USD" | "EUR"
+  label: string | null
 }
 
 /** What happened to the booking made through a link (read from the stored booking and from Calendly). Null on a link nobody has booked with. */
@@ -76,6 +103,26 @@ export interface LinkDto {
   who: WhoBooked
   /** the little card shown on pointing at the name; null = nothing to show (someone new with no name or email) */
   card: CardModel | null
+  /** the price and whether it was paid; null on a free link */
+  pay: LinkPayDto | null
+}
+
+/** What the row says about the money. PURE. Null for a free link. */
+export function payDtoOf(row: Pick<LinkRow, "pay_amount_cents" | "pay_currency" | "pay_code" | "pay_label" | "paid_session_id" | "not_charging_at" | "sent_at">, baseUrl?: string): LinkPayDto | null {
+  if (!isPaidLink({ pay_amount_cents: row.pay_amount_cents ?? null, pay_currency: row.pay_currency ?? null, pay_code: row.pay_code ?? null })) return null
+  const state = payStateOf({ paid_session_id: row.paid_session_id ?? null, not_charging_at: row.not_charging_at ?? null })
+  const amountText = moneyText(row.pay_amount_cents as number, row.pay_currency as string)
+  const words = state === "paid" ? "paid" : state === "not_charging" ? "not charging" : row.sent_at ? "not paid yet · link sent" : "not paid yet"
+  const cents = row.pay_amount_cents as number
+  return {
+    state,
+    amountText,
+    text: `${amountText} · ${words}`,
+    payUrl: payUrl(row.pay_code as string, baseUrl),
+    amount: (cents / 100).toFixed(2),
+    currency: row.pay_currency === "EUR" ? "EUR" : "USD",
+    label: row.pay_label?.trim() || null,
+  }
 }
 
 /** open | claimed | revoked | expired. Revoked wins; a claimed link stays claimed whatever its expiry says (expiry only stops a link nobody has claimed). */
@@ -103,6 +150,15 @@ export function describeLinkState(status: LinkStatus, row: Pick<LinkRow, "once" 
 
 const COLUMNS =
   "id, public_id, kind_label, rule_snapshot, contact_id, lead_id, person_name, person_emails, duration_minutes, once, status, revoked_at, expires_at, claimed_event_uri, claimed_at, open_count, last_opened_at, created_at, template_slug"
+/** The payment columns arrive with the Stage 3 migration. A database that does not have them yet (the code is deployed first) is read without them: every link is then a free link. */
+const PAY_COLUMNS = ", pay_amount_cents, pay_currency, pay_label, pay_mode, pay_code, sent_at, sent_count, paid_session_id, paid_at, not_charging_at"
+const UNDEFINED_COLUMN = "42703"
+
+async function selectLinks(db: Db, limit: number): Promise<{ data: unknown; error: { code?: unknown } | null }> {
+  const first = await db.from("booking_links").select(COLUMNS + PAY_COLUMNS).order("created_at", { ascending: false }).limit(limit)
+  if (first.error && (first.error as { code?: unknown }).code === UNDEFINED_COLUMN) return db.from("booking_links").select(COLUMNS).order("created_at", { ascending: false }).limit(limit)
+  return first
+}
 
 /**
  * The list. With a Calendly client, each link's latest booking is read from Calendly too (booked, or cancelled and by whom); without one every booking
@@ -110,7 +166,7 @@ const COLUMNS =
  */
 export async function listLinks(db: Db, now: Date, limit = 100, baseUrl?: string, calendly?: CalendlyCtx): Promise<{ ok: true; links: LinkDto[] } | { ok: false; error: string }> {
   try {
-    const { data, error } = await db.from("booking_links").select(COLUMNS).order("created_at", { ascending: false }).limit(limit)
+    const { data, error } = await selectLinks(db, limit)
     if (error) return isMissingTable(error) ? { ok: true, links: [] } : { ok: false, error: "The links could not be read. Try again." }
     const rows = (data ?? []) as LinkRow[]
 
@@ -170,6 +226,7 @@ export async function listLinks(db: Db, now: Date, limit = 100, baseUrl?: string
           booking,
           who: whoBooked({ personName: r.person_name, personEmails: r.person_emails }, bookerOf.get(r.id) ?? null),
           card: cards.get(r.id) ?? null,
+          pay: payDtoOf(r, baseUrl),
         }
       }),
     }
@@ -192,7 +249,11 @@ export async function revokeLink(db: Db, id: string, now: Date): Promise<RevokeR
       .is("revoked_at", null)
       .select("id")
     if (error) return { ok: false, status: 500, error: "The link could not be stopped. Try again." }
-    if (Array.isArray(data) && data.length > 0) return { ok: true, message: "The link is stopped. Anyone opening it now lands on the normal booking page." }
+    if (Array.isArray(data) && data.length > 0) {
+      // a PAID link that is stopped must also stop taking money: a card page the person already opened is closed too (best effort, never blocks the stop)
+      await stopChargingIfPaidLink(db, id, now)
+      return { ok: true, message: "The link is stopped. Anyone opening it now lands on the normal booking page." }
+    }
     const { data: row, error: readErr } = await db.from("booking_links").select("status, revoked_at").eq("id", id).maybeSingle()
     if (readErr) return { ok: false, status: 500, error: "The link could not be stopped. Try again." }
     if (!row) return { ok: false, status: 404, error: "That link could not be found." }

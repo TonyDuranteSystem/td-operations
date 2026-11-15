@@ -382,7 +382,7 @@ describe("every real Booking route, page and layout keeps one of the two named g
     expect(bad).toEqual([])
   })
   it("the walk finds the real files (a silent empty walk would test nothing)", () => {
-    expect(routes.length).toBe(9) // + cancel-call and questions (dev job a9285887)
+    expect(routes.length).toBe(11) // + cancel-call and questions (dev job a9285887), + sent and not-charging (paid links, dev job 74432428)
     expect(pages.length).toBeGreaterThanOrEqual(1)
   })
   it("the Leads list is reachable ONLY through the Booking page, whose staff check comes first (no other file renders the shared Leads body)", () => {

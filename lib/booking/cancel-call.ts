@@ -15,6 +15,7 @@ import { CalendlyError, type CalendlyCtx } from "@/lib/calendly/api"
 import { cancelEvent } from "@/lib/calendly/api-write"
 import { isPlainCalendlyUrl } from "@/lib/booking-links/destination"
 import { bookingUrisOf, loadStoredBookings } from "@/lib/booking/link-bookings"
+import { stopChargingIfPaidLink } from "@/lib/booking/pay-actions"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- booking_links: untyped until the production migration is applied
 type Db = any
@@ -60,6 +61,8 @@ export async function cancelLinkCall(deps: { db: Db; calendly: CalendlyCtx }, id
 
     try {
       const r = await cancelEvent(deps.calendly, uri, CANCEL_REASON)
+      // a paid call that was never paid: stop charging for it, so nobody can still pay for a call that no longer exists (best effort, never blocks the cancel)
+      await stopChargingIfPaidLink(db, id, new Date())
       return { ok: true, message: r.alreadyCancelled ? "That call was already cancelled." : "The call is cancelled. Calendly is telling the booker." }
     } catch (err) {
       const hand = bookings.find((b) => b.eventUri === uri)?.cancelUrl ?? null
