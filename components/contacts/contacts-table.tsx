@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useEffect, useRef, useState, useTransition } from 'react'
-import { ChevronLeft, ChevronRight, User, Shield } from 'lucide-react'
+import { ChevronLeft, ChevronRight, User, Shield, TriangleAlert } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { ContactCompanyLine, ContactListItem } from '@/lib/types'
 import { SegmentedFilter } from '@/components/lists/segmented-filter'
@@ -256,7 +256,16 @@ export function ContactsTable({ items, query, statusFilter, filters, linkCounts,
                           card={personCard({ ...item, companies: item.companies.map(c => ({ company_name: c.company_name, status: c.status })) })}
                           className="min-w-0 max-w-full"
                         >
-                          <p className="truncate font-medium text-sm">{item.full_name}</p>
+                          {/* Amber when a signed contract does not match the company (Antonio 2026-11-15): the card on hover says which. */}
+                          {item.contract_mismatches.length > 0 ? (
+                            <p className="truncate font-medium text-sm text-amber-700" data-testid="contract-mismatch-name">
+                              <TriangleAlert className="mr-1 inline h-3.5 w-3.5 -translate-y-px text-amber-600" aria-hidden="true" />
+                              <span className="sr-only">Check the contract amounts: </span>
+                              {item.full_name}
+                            </p>
+                          ) : (
+                            <p className="truncate font-medium text-sm">{item.full_name}</p>
+                          )}
                         </ListHoverCard>
                         {/* Write a portal chat message from here (Antonio 2026-11-15: "directly from the list"). */}
                         <MessageContactButton contactId={item.id} contactName={item.full_name || ''} variant="icon" />
