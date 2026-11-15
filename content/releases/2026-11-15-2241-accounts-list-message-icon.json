@@ -1,0 +1,12 @@
+{
+  "title": "Message a company straight from the Accounts list",
+  "tag": "new",
+  "text": "Each company in the Accounts list now has a small chat icon next to its name. Click it and the Message window opens right over the list with that company's chat already chosen: pick the topic (and who it is addressed to, for a company with several members), write the message and send. You never leave the list.",
+  "points": [
+    "The window says plainly that everyone linked to the company can read the message, and who the portal alert and email go to: only one person, not the whole company.",
+    "If nobody at the company can read the chat yet (no working portal login and no active teammate), the window says so. The message is still saved in the chat.",
+    "A company whose chat the client can't see (closed, cancelled, offboarding or still being formed) has the icon greyed out, with the reason when you point at it.",
+    "The same check now also covers people who log in with a different email than the one on their record, so the Contacts list and Contact page no longer warn about them by mistake."
+  ],
+  "screenshot": "accounts-list-message-icon.png"
+}
