@@ -261,7 +261,8 @@ describe("Links I made", () => {
     const db = miniDb(seed({ booking_links: [row({ status: "claimed", claimed_event_uri: uri })] }), { failing: { contact_calls: "x", lead_calls: "x" } })
     const r = await listLinks(db, NOW)
     expect(r).toMatchObject({ ok: true })
-    if (r.ok) expect(r.links[0]).toMatchObject({ status: "claimed", what: "Booked", bookedStart: null })
+    // no Calendly client was given, so the booking is shown as booked but unchecked (it is never shown as "still waiting", and never hidden)
+    if (r.ok) expect(r.links[0]).toMatchObject({ status: "claimed", what: "Booked · could not check Calendly", bookedStart: null })
   })
   it("revoke: stops an open link, repeating it is fine, a booked link cannot be stopped", async () => {
     const db = miniDb(seed({ booking_links: [row({ id: "b0000000-0000-4000-8000-000000000001" }), row({ id: "b0000000-0000-4000-8000-000000000002", status: "claimed" })] }))

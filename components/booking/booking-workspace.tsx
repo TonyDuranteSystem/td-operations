@@ -26,6 +26,8 @@ export interface MakeAgain {
   kindSlug: string | null
   minutes: number | null
   once: boolean
+  /** what the old link asked the booker, so "Make again" asks the same */
+  asks: "full" | "short" | null
 }
 
 export function BookingWorkspace({
@@ -93,7 +95,7 @@ export function BookingWorkspace({
 
       <div className="grid grid-cols-[minmax(380px,460px)_minmax(0,1fr)] items-start gap-5">
         <LinkMaker kinds={kinds} kindsError={kindsError} refreshKinds={refreshKinds} onMade={refreshLinks} again={again} callTypesReady={callTypesReady} off={off} />
-        <LinksMade links={links} error={linksProblem} off={off} onChanged={refreshLinks} onMakeAgain={(l) => setAgain({ nonce: Date.now(), contactId: l.contactId, leadId: l.leadId, name: l.personName, email: l.email, kindSlug: l.kindSlug, minutes: l.minutes, once: l.once })} />
+        <LinksMade links={links} error={linksProblem} off={off} onChanged={refreshLinks} onMakeAgain={(l) => setAgain({ nonce: Date.now(), contactId: l.contactId, leadId: l.leadId, name: l.personName, email: l.email, kindSlug: l.kindSlug, minutes: l.minutes, once: l.once, asks: l.asks })} />
       </div>
 
       <section id="calls" className="space-y-3" data-testid="calls-section">
