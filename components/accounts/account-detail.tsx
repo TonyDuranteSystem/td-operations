@@ -42,11 +42,14 @@ import { FileManager } from './file-manager'
 import { MoveToStorePanel } from '@/components/storage/move-to-store-panel'
 import { AccountDocumentsList } from './account-documents-list'
 import { BecameClientRow } from './became-client-row'
+import { SignedContractsCard } from './signed-contracts-card'
+import type { AccountContractLine } from '@/lib/signed-contracts/account-lines'
 import type { GuessSummary } from '@/lib/accounts/became-client'
 import { StoreBusyScope, STORE_BUSY_HINT } from './store-busy'
 import { CorrespondenceUpload } from './correspondence-upload'
 import { AccountOfferPanel, type OfferData } from '@/components/offers/account-offer-panel'
 import { AccountJourney } from './account-journey'
+import { BankReferralsPanel } from './bank-referrals-panel'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { ClosureNotifyCheckbox, isClosureServiceType, showClosurePromptToast } from '@/components/services/closure-notify'
@@ -171,6 +174,8 @@ interface DocumentRecord {
 interface AccountDetailProps {
   /** the guess for "How they became our client" worked out from the contract and dates (null when it could not be read) */
   becameClientGuess?: GuessSummary | null
+  /** the company's signed contracts for the "Signed contract" line (null = could not be read; undefined = not loaded) */
+  signedContractLines?: AccountContractLine[] | null
   account: Account
   /** Client-facing base URL for the current environment (server-computed). */
   appBaseUrl?: string
@@ -697,7 +702,7 @@ function ContactsSection({
   )
 }
 
-export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.us', contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offers = [], partnerName = null, pendingActivations = {}, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [], ss4Applications = [], ss4ServiceDeliveries = [], stepperDeliveries = [], stagesByServiceType = {}, dbaServiceDeliveries = [], flows = [], becameClientGuess = null }: AccountDetailProps) {
+export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.us', contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offers = [], partnerName = null, pendingActivations = {}, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [], ss4Applications = [], ss4ServiceDeliveries = [], stepperDeliveries = [], stagesByServiceType = {}, dbaServiceDeliveries = [], flows = [], becameClientGuess = null, signedContractLines }: AccountDetailProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
   // AccountJourney's progress tracker (Signed/Paid/Activated) still wants
@@ -878,7 +883,6 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
         hasSetupPayment={payments.some(p => p.status === 'Paid' && (p.description?.toLowerCase().includes('setup') || p.period === 'One-Time'))}
         hasPaidPayment={payments.some(p => p.status === 'Paid' && (p.amount_paid ?? 0) > 0)}
         allWizards={allWizards}
-        bankReferrals={bankReferrals}
       />
 
       {/* Offer Panel */}
@@ -891,7 +895,14 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
         offers={offers}
         isAdmin={isAdmin}
         pendingActivations={pendingActivations}
+        startClosed
       />
+
+      {/* Signed contracts — closed by default; opens each contract in the floating window */}
+      {signedContractLines !== undefined && <SignedContractsCard lines={signedContractLines} />}
+
+      {/* Partner Bank Applications: its own closed card (it used to sit inside the Account journey card) */}
+      <BankReferralsPanel entries={bankReferrals} standalone />
 
       {/* Documents to Sign Panel */}
       <DocumentsPanel

@@ -1,0 +1,12 @@
+{
+  "title": "Hover cards on names, and a clickable overdue count",
+  "tag": "new",
+  "text": "In the Accounts and Contacts lists, rest the mouse on a company name or a person's name and a small card shows their details. A company card shows its type, status, state, client since, main contact, this year's installments and overdue payments. A person card shows email, phone, language, portal stage and their companies. On Accounts, the red \"with overdue payments\" count is now clickable: it opens the companies with an overdue payment in a floating window. Clicking a name still opens the record.",
+  "points": [
+    "The card opens after a short pause, so moving across the list shows nothing.",
+    "Cards never show an EIN, passport, ITIN number or date of birth.",
+    "The overdue window follows your filters (status, kind, type, letter, search). Click the red count inside it to show every company again.",
+    "Mouse only: a touch screen shows no card."
+  ],
+  "screenshot": "hover-cards-and-overdue-window.png"
+}
