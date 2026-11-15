@@ -1,0 +1,13 @@
+{
+  "title": "A contact turns amber in the Contacts list when their signed contract does not match the company",
+  "tag": "new",
+  "text": "In the Contacts list, a person whose signed contract amounts differ from their company's installment amounts in the CRM now shows an amber name with a small warning mark. Point at the name and the card opens with an amber block that names the company, what the contract says and what the CRM says, so you can read the gap without opening the contact. It uses the same check as the amber note on the person's page. A person with nothing to check looks exactly as before.",
+  "points": [
+    "Open Contacts and look for an amber name with a warning mark.",
+    "Rest the pointer on it: the card shows the company, the contract's January and June and the CRM's January and June.",
+    "It also turns amber when the company has no amounts saved at all.",
+    "Once the company is corrected, the amber goes away on its own.",
+    "Hover cards open with a mouse only, so on a phone the name is amber but the card does not open."
+  ],
+  "screenshot": "contacts-amber-contract-mismatch.png"
+}
