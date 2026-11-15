@@ -6,6 +6,10 @@
 import { linkUrl } from "@/lib/booking/make-link"
 import { isMissingTable } from "@/lib/booking-links/missing-table"
 import { parseRuleSnapshot } from "@/lib/booking/kinds"
+import { bookingText, bookingUrisOf, canCancelBooking, decideBooking, loadStoredBookings, lookupEvents, type BookingState, type EventFacts } from "@/lib/booking/link-bookings"
+import { loadLinkCards } from "@/lib/booking/link-cards"
+import type { CardModel } from "@/lib/crm-lists/hover-cards"
+import type { CalendlyCtx } from "@/lib/calendly/api"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- booking_links / contact_calls: untyped until the production migration is applied
 type Db = any
@@ -31,6 +35,17 @@ export interface LinkRow {
   open_count: number | null
   last_opened_at: string | null
   created_at: string
+  /** "sales" = the full questions, "plain" = the short note; null on a link made before this was kept */
+  template_slug?: string | null
+}
+
+/** What happened to the booking made through a link (read from the stored booking and from Calendly). Null on a link nobody has booked with. */
+export interface LinkBookingDto {
+  state: BookingState
+  startTime: string | null
+  count: number
+  /** the page may offer "Cancel the call" */
+  canCancel: boolean
 }
 
 export interface LinkDto {
@@ -53,6 +68,12 @@ export interface LinkDto {
   contactId: string | null
   leadId: string | null
   email: string | null
+  /** what the booker is asked: "full" = the sales questions, "short" = the one optional note; null = not known (an older link) */
+  asks: "full" | "short" | null
+  /** the booking made through this link, if any */
+  booking: LinkBookingDto | null
+  /** the little card shown on pointing at the name; null = nothing to show (someone new with no name or email) */
+  card: CardModel | null
 }
 
 /** open | claimed | revoked | expired. Revoked wins; a claimed link stays claimed whatever its expiry says (expiry only stops a link nobody has claimed). */
@@ -79,13 +100,25 @@ export function describeLinkState(status: LinkStatus, row: Pick<LinkRow, "once" 
 }
 
 const COLUMNS =
-  "id, public_id, kind_label, rule_snapshot, contact_id, lead_id, person_name, person_emails, duration_minutes, once, status, revoked_at, expires_at, claimed_event_uri, claimed_at, open_count, last_opened_at, created_at"
+  "id, public_id, kind_label, rule_snapshot, contact_id, lead_id, person_name, person_emails, duration_minutes, once, status, revoked_at, expires_at, claimed_event_uri, claimed_at, open_count, last_opened_at, created_at, template_slug"
 
-export async function listLinks(db: Db, now: Date, limit = 100, baseUrl?: string): Promise<{ ok: true; links: LinkDto[] } | { ok: false; error: string }> {
+/**
+ * The list. With a Calendly client, each link's latest booking is read from Calendly too (booked, or cancelled and by whom); without one every booking
+ * is shown as "could not check Calendly". Reading the stored bookings, the cards or Calendly can fail without ever hiding a link.
+ */
+export async function listLinks(db: Db, now: Date, limit = 100, baseUrl?: string, calendly?: CalendlyCtx): Promise<{ ok: true; links: LinkDto[] } | { ok: false; error: string }> {
   try {
     const { data, error } = await db.from("booking_links").select(COLUMNS).order("created_at", { ascending: false }).limit(limit)
     if (error) return isMissingTable(error) ? { ok: true, links: [] } : { ok: false, error: "The links could not be read. Try again." }
     const rows = (data ?? []) as LinkRow[]
+
+    // the bookings made through these links (the webhook stores every one with the link's id), then what Calendly says about the latest of each
+    const stored = await loadStoredBookings(db, rows.map((r) => r.public_id))
+    const storedOf = (r: LinkRow) => (stored.ok ? stored.byTag.get(r.public_id) ?? [] : [])
+    const urisOf = new Map(rows.map((r) => [r.id, bookingUrisOf(storedOf(r), r.claimed_event_uri)] as const))
+    const latest = rows.map((r) => urisOf.get(r.id)?.[0]).filter((u): u is string => !!u)
+    const facts: Map<string, EventFacts | null> = calendly && latest.length ? await lookupEvents(calendly, latest) : new Map()
+    const cards = await loadLinkCards(db, rows)
 
     // when each booked call starts (read from the call log the engine wrote); a failed read only leaves the time out
     const uris = rows.map((r) => r.claimed_event_uri).filter((u): u is string => !!u)
@@ -106,6 +139,8 @@ export async function listLinks(db: Db, now: Date, limit = 100, baseUrl?: string
       links: rows.map((r) => {
         const status = linkStatusOf(r, now)
         const booked = r.claimed_event_uri ? start.get(r.claimed_event_uri) ?? null : null
+        const found = decideBooking({ uris: urisOf.get(r.id) ?? [], stored: storedOf(r), facts, claimedStart: booked })
+        const booking: LinkBookingDto | null = found ? { state: found.state, startTime: found.startTime, count: found.count, canCancel: canCancelBooking(found.state) } : null
         return {
           id: r.id,
           url: linkUrl(r.public_id, baseUrl),
@@ -115,13 +150,16 @@ export async function listLinks(db: Db, now: Date, limit = 100, baseUrl?: string
           minutes: r.duration_minutes,
           once: r.once,
           status,
-          what: describeLinkState(status, r, booked),
+          what: found ? bookingText(found, found.startTime ? nyWhen(found.startTime) : null) : describeLinkState(status, r, booked),
           opens: r.open_count ?? 0,
           madeAt: r.created_at,
-          bookedStart: booked,
+          bookedStart: found?.startTime ?? booked,
           contactId: r.contact_id,
           leadId: r.lead_id,
           email: Array.isArray(r.person_emails) && r.person_emails.length ? r.person_emails[0] : null,
+          asks: r.template_slug === "sales" ? "full" : r.template_slug === "plain" ? "short" : null,
+          booking,
+          card: cards.get(r.id) ?? null,
         }
       }),
     }

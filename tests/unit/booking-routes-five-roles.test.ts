@@ -59,21 +59,23 @@ async function call(fn: (req: NextRequest, c: typeof ctx) => Promise<Response>, 
   }
 }
 
-/** Every real route is pinned to its level: all seven are "staff" today (Antonio, 14 Nov: use it like the admin). To narrow one to admin, change its gate AND this table. */
+/** Every real route is pinned to its level: all nine are "staff" today (Antonio, 14 Nov: use it like the admin). To narrow one to admin, change its gate AND this table. */
 const PINNED: Record<string, Record<string, BookingAccess>> = {
   "app/api/booking/checks/[id]/answer/route.ts": { POST: "staff" },
   "app/api/booking/kinds/[slug]/route.ts": { PATCH: "staff" },
   "app/api/booking/kinds/route.ts": { GET: "staff", POST: "staff" },
+  "app/api/booking/links/[id]/cancel-call/route.ts": { POST: "staff" },
   "app/api/booking/links/[id]/revoke/route.ts": { POST: "staff" },
   "app/api/booking/links/route.ts": { GET: "staff", POST: "staff" },
   "app/api/booking/people/route.ts": { GET: "staff" },
   "app/api/booking/preview/route.ts": { POST: "staff" },
+  "app/api/booking/questions/route.ts": { GET: "staff" },
 }
 
 beforeEach(() => { h.user = null; h.touched = 0 })
 
 describe("every booking route is found, declares a level, and is pinned to it", () => {
-  it("the walk finds the seven routes (a silent empty walk would test nothing)", () => {
+  it("the walk finds the nine routes (a silent empty walk would test nothing)", () => {
     expect(routeFiles.map(relOf)).toEqual(Object.keys(PINNED).sort())
   })
   for (const file of routeFiles) {
