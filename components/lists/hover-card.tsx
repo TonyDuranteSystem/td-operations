@@ -44,12 +44,13 @@ export function HoverCardBody({ card }: { card: CardModel }) {
 /**
  * Wraps a name so that resting the mouse on it opens a small card with the record's details (Antonio 2026-11-14). Reads only what the
  * list already loaded, so nothing is fetched on hover. A mouse-only convenience: clicking the name still opens the record, and a touch
- * screen shows no card (FastTooltip gates on a real hover pointer). `card` null draws no card at all.
+ * screen shows no card (FastTooltip gates on a real hover pointer). `card` null draws no card at all. The card is interactive (Antonio
+ * 2026-11-15): the pointer can move onto it and its text can be selected and copied; it closes a moment after the pointer leaves both.
  */
 export function ListHoverCard({ card, children, className }: { card: CardModel | null; children: React.ReactNode; className?: string }) {
   if (!card) return <>{children}</>
   return (
-    <FastTooltip label={undefined} card={<HoverCardBody card={card} />} align="left" delayMs={HOVER_DELAY_MS} cardHeightPx={CARD_HEIGHT} className={className}>
+    <FastTooltip label={undefined} card={<HoverCardBody card={card} />} align="left" delayMs={HOVER_DELAY_MS} cardHeightPx={CARD_HEIGHT} interactive className={className}>
       {children}
     </FastTooltip>
   )
