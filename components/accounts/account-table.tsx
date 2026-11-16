@@ -16,6 +16,8 @@ import { LISTS_CONTAINER, ListStyles } from '@/components/lists/list-styles'
 import { YearSelect } from '@/components/lists/year-select'
 import { ListHoverCard } from '@/components/lists/hover-card'
 import { ListSearchBox } from '@/components/lists/list-search-box'
+import { MessageContactButton } from '@/components/contacts/message-contact-button'
+import { isChatClosedStatus } from '@/lib/portal/document-share-text'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { OpenInWindowLink } from '@/components/windows/open-in-window-link'
 import { useAmountOverrides } from '@/components/lists/use-amount-overrides'
@@ -278,6 +280,13 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
                           {item.company_name}
                         </Link>
                       </ListHoverCard>
+                      {/* Write a portal chat message to this company from here (Antonio 2026-11-15). Greyed, with the reason, when the client cannot see the chat. */}
+                      <MessageContactButton
+                        accountId={item.id}
+                        accountName={item.company_name}
+                        variant="icon"
+                        disabledReason={isChatClosedStatus(item.status) ? `The client can't see this company's chat (status: ${item.status || 'not set'}), so no message can be sent.` : undefined}
+                      />
                       {!hasColumn(columns, 'kind') && <KindChip kind={item.account_type} />}
                       {/* A greyed, locked company always says why, even when the Status column is not chosen. */}
                       {locked && !hasColumn(columns, 'status') && <StatusChip status={item.status} />}

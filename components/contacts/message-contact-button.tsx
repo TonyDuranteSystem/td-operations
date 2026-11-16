@@ -14,6 +14,11 @@
  * list") a small chat icon beside a person's name in the Contacts list. The "no portal login" line is worked out by the server when the
  * pop-up opens, so a list of 50 rows costs nothing extra. In a list row the pop-up lives inside a clickable row, so the wrapper stops
  * clicks (and is marked data-no-nav) — otherwise a click inside the pop-up would open the person's page behind it.
+ *
+ * The same button also serves the ACCOUNTS list (Antonio 2026-11-15: yes to the same icon on companies): pass accountId + accountName
+ * instead of a contact, and it asks GET /api/accounts/:id/message-context — the company's own chat is the only choice and is already
+ * selected (the row is the choice), with a grey line saying who the portal alert goes to and an amber one when nobody can read it yet.
+ * `disabledReason` greys the icon with that reason (a company whose chat the client cannot see).
  */
 import { useState } from 'react'
 import { MessageSquare, Loader2 } from 'lucide-react'
@@ -28,25 +33,32 @@ type Askable = Extract<ShareContext, { askable: true }>
 /** Fired on window after a message is sent from the Contact page, so an open Chat tab can reload its timeline. */
 export const CONTACT_CHAT_SENT_EVENT = 'td:contact-chat-sent'
 
-async function fetchMessageContext(contactId: string): Promise<Askable> {
-  const res = await fetch(`/api/contacts/${encodeURIComponent(contactId)}/message-context`, { cache: 'no-store' })
+async function fetchMessageContext(target: { kind: 'contact' | 'account'; id: string }): Promise<Askable> {
+  const url = target.kind === 'account' ? `/api/accounts/${encodeURIComponent(target.id)}/message-context` : `/api/contacts/${encodeURIComponent(target.id)}/message-context`
+  const res = await fetch(url, { cache: 'no-store' })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error((data as { error?: string }).error || 'Could not work out who the message can go to — please try again.')
   const ctx = data as ShareContext
-  if (!ctx.askable) throw new Error('This contact has nobody a message can go to.')
+  if (!ctx.askable) throw new Error(target.kind === 'account' ? 'This company has nobody a message can go to.' : 'This contact has nobody a message can go to.')
   return ctx
 }
 
-export function MessageContactButton({ contactId, contactName, variant = 'button' }: { contactId: string; contactName: string; variant?: 'button' | 'icon' }) {
+export function MessageContactButton({ contactId, contactName, accountId, accountName, variant = 'button', disabledReason }: {
+  contactId?: string; contactName?: string; accountId?: string; accountName?: string
+  variant?: 'button' | 'icon'; disabledReason?: string
+}) {
   const [loading, setLoading] = useState(false)
   const [ctx, setCtx] = useState<Askable | null>(null)
+  const isAccount = !!accountId
+  const id = (isAccount ? accountId : contactId) ?? ''
+  const name = (isAccount ? accountName : contactName) ?? ''
 
   const open = async () => {
-    if (loading) return
+    if (loading || disabledReason || !id) return
     setLoading(true)
     try {
-      const c = await fetchMessageContext(contactId)
-      setCtx({ ...c, recipientName: c.recipientName || contactName || undefined })
+      const c = await fetchMessageContext({ kind: isAccount ? 'account' : 'contact', id })
+      setCtx({ ...c, recipientName: c.recipientName || name || undefined })
     } catch (e) {
       toast.error(e instanceof Error && e.message ? e.message : 'Could not open the message window — please try again.')
     } finally {
@@ -58,20 +70,21 @@ export function MessageContactButton({ contactId, contactName, variant = 'button
     await sendShareMessage(r) // throws with the server's reason; the pop-up shows it and stays open
     toast.success(`Message sent to ${r.target.label}`)
     setCtx(null)
-    window.dispatchEvent(new CustomEvent(CONTACT_CHAT_SENT_EVENT, { detail: { contactId } }))
+    if (!isAccount) window.dispatchEvent(new CustomEvent(CONTACT_CHAT_SENT_EVENT, { detail: { contactId } }))
   }
 
-  const label = 'Write a portal chat message to this person or to one of their companies.'
+  const label = isAccount ? 'Write a portal chat message to this company.' : 'Write a portal chat message to this person or to one of their companies.'
+  const tip = disabledReason ?? (variant === 'icon' ? `Message ${name || (isAccount ? 'this company' : 'this person')}` : label)
   return (
     <span data-no-nav className="inline-flex" onClick={(e) => e.stopPropagation()}>
-      <FastTooltip label={variant === 'icon' ? `Message ${contactName || 'this person'}` : label}>
+      <FastTooltip label={tip}>
         {variant === 'icon' ? (
           <button
             type="button"
             onClick={open}
-            disabled={loading}
-            aria-label={label}
-            className="inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-blue-50 hover:text-blue-700 focus-visible:text-blue-700 disabled:opacity-60"
+            disabled={loading || !!disabledReason}
+            aria-label={disabledReason ?? label}
+            className="inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-blue-50 hover:text-blue-700 focus-visible:text-blue-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground/60"
           >
             {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MessageSquare className="h-3.5 w-3.5" />}
           </button>
@@ -79,8 +92,8 @@ export function MessageContactButton({ contactId, contactName, variant = 'button
           <button
             type="button"
             onClick={open}
-            disabled={loading}
-            aria-label={label}
+            disabled={loading || !!disabledReason}
+            aria-label={disabledReason ?? label}
             className="inline-flex items-center gap-1.5 rounded-lg border border-blue-300 px-3 py-1 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-50 disabled:opacity-60"
           >
             {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MessageSquare className="h-3.5 w-3.5" />}
