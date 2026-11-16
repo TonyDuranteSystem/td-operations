@@ -45,6 +45,10 @@ import { isActivationEffectivelyPaid } from '@/lib/operations/activation-paid'
 import { EditableField } from '@/components/accounts/editable-field'
 import { ContactNameEditor } from '@/components/contacts/contact-name-editor'
 import { EntityActivitySummary } from '@/components/dashboard/entity-activity-summary'
+import { useWindowsAvailable, canOpenWindowNow, requestOpenWindow } from '@/lib/windows/windows-context'
+import { isWindowLinkClick } from '@/lib/windows/open-intent'
+import { isWindowableUrl } from '@/lib/windows/window-model'
+import { chatWindowHref, chatWindowTitle } from '@/lib/windows/chat-window'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { useStoreOwnerForContact, useStoreOwnerForAccount } from '@/components/storage/new-store-browser'
@@ -78,7 +82,7 @@ const TABS = [
   { key: 'invoices', label: 'Invoices', icon: CreditCard, tooltip: 'All invoices and payment history for this client.' },
   { key: 'documents', label: 'Documents', icon: FolderOpen, tooltip: 'Uploaded files — IDs, contracts, certificates, and more.' },
   { key: 'emails', label: 'Emails', icon: Mail, tooltip: 'All Gmail with this contact — auto-matched by their addresses plus manually linked emails.' },
-  { key: 'chat', label: 'Chat', icon: MessageSquare, tooltip: 'All communication — portal messages and email threads in one timeline.' },
+  { key: 'chat', label: 'Chat', icon: MessageSquare, tooltip: "Opens this person's chat in a window, with all the chat tools. Hold Ctrl/Cmd while clicking to see all portal messages and email threads in one timeline here instead." },
   { key: 'portal', label: 'Portal', icon: KeyRound, tooltip: 'Client portal access — login status, tier, and portal settings.' },
   { key: 'health', label: 'Health', icon: Stethoscope, tooltip: 'Chain audit — lead, offer, activation, account, services, portal, and profile completeness.' },
   { key: 'activity', label: 'Activity', icon: MessageSquare, tooltip: 'Account communications timeline — grouped by channel.' },
@@ -337,6 +341,7 @@ export function ContactDetail({
   const [showMergeContact, setShowMergeContact] = useState(false)
   const [showWhatsApp, setShowWhatsApp] = useState(false)
   const [chatUnread, setChatUnread] = useState(0)
+  const windowsAvailable = useWindowsAvailable()
 
   const makeContactSaver = (field: string) => async (value: string) => {
     const result = await updateContactField(contact.id, field, value, contact.updated_at)
@@ -491,7 +496,7 @@ export function ContactDetail({
       <LifecycleTimeline events={timelineEvents} defaultOpen={false} />
 
       {/* Notification Center roll-up: What's New + To-Do + Workflow for this contact */}
-      <EntityActivitySummary contactId={contact.id} />
+      <EntityActivitySummary contactId={contact.id} name={contact.full_name} />
 
       {/* Referrals GIVEN by this person (or their companies) — renders only when there are any */}
       <ReferralsGivenCard contactId={contact.id} />
@@ -511,7 +516,18 @@ export function ContactDetail({
             return (
               <FastTooltip key={tab.key} label={storeBusy && activeTab !== tab.key ? STORE_BUSY_HINT : tab.tooltip}>
                 <button
-                  onClick={() => setActiveTab(tab.key)}
+                  onClick={e => {
+                    // The Chat button opens this person's Portal Chats in a floating window (all its tools); Ctrl/Cmd-click, a narrow
+                    // screen or windows being off keep the in-page timeline as before.
+                    if (tab.key === 'chat' && isWindowLinkClick(e) && canOpenWindowNow(windowsAvailable)) {
+                      const href = chatWindowHref({ contactId: contact.id })
+                      if (isWindowableUrl(href)) {
+                        requestOpenWindow(href, chatWindowTitle(contact.full_name))
+                        return
+                      }
+                    }
+                    setActiveTab(tab.key)
+                  }}
                   disabled={storeBusy && activeTab !== tab.key}
                   aria-label={storeBusy && activeTab !== tab.key ? `${tab.tooltip} — ${STORE_BUSY_HINT}` : tab.tooltip}
                   className={cn(

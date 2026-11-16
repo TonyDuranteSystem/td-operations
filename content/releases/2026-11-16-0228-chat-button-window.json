@@ -1,0 +1,12 @@
+{
+  "title": "The Chat button opens the client's chat in a window",
+  "tag": "improved",
+  "text": "On a Contact page, clicking Chat now opens that person's Portal Chats in a floating window, right on their chat, with all the chat tools: emoji, scan or photo attach, AI polish and suggestions, voice notes, To-Do and the Worker. The page behind stays where it was. The same happens when you click \"Open in chat\" in the Activity & to-dos box, on a Contact, a company or a partner page.",
+  "points": [
+    "Clicking Chat again brings the same window to the front instead of opening a second one. Each person gets their own window, titled with their name.",
+    "Hold Ctrl or Cmd while clicking Chat to see all portal messages and email threads in one timeline in the page, as before.",
+    "On a small screen, or where windows are off, Chat shows the in-page timeline as before.",
+    "The window shows the whole Portal Chats screen, opened on that person's own chat. Their companies' chats are one click away in its list."
+  ],
+  "screenshot": "chat-button-window.png"
+}

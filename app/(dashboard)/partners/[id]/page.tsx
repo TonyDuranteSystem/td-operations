@@ -349,7 +349,7 @@ export default async function PartnerDetailPage({ params }: { params: { id: stri
       <PartnerPayoutsSection partnerId={partner.id} payouts={payouts} />
 
       {/* Notification Center roll-up for the partner's underlying contact */}
-      {contact?.id && <EntityActivitySummary contactId={contact.id} />}
+      {contact?.id && <EntityActivitySummary contactId={contact.id} name={contact.full_name} />}
     </div>
   )
 }
