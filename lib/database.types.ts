@@ -2616,8 +2616,16 @@ export type Database = {
           kind_label: string
           last_opened_at: string | null
           lead_id: string | null
+          not_charging_at: string | null
           once: boolean
           open_count: number
+          paid_at: string | null
+          paid_session_id: string | null
+          pay_amount_cents: number | null
+          pay_code: string | null
+          pay_currency: string | null
+          pay_label: string | null
+          pay_mode: string | null
           person_emails: string[]
           person_language: string | null
           person_name: string | null
@@ -2628,8 +2636,13 @@ export type Database = {
           revoked_at: string | null
           rule_snapshot: Json
           rule_version: number
+          sent_at: string | null
+          sent_count: number
+          session_claim_at: string | null
+          session_expires_at: string | null
           share_url: string | null
           status: string
+          stripe_session_id: string | null
           template_slug: string | null
           updated_at: string
         }
@@ -2650,8 +2663,16 @@ export type Database = {
           kind_label: string
           last_opened_at?: string | null
           lead_id?: string | null
+          not_charging_at?: string | null
           once?: boolean
           open_count?: number
+          paid_at?: string | null
+          paid_session_id?: string | null
+          pay_amount_cents?: number | null
+          pay_code?: string | null
+          pay_currency?: string | null
+          pay_label?: string | null
+          pay_mode?: string | null
           person_emails?: string[]
           person_language?: string | null
           person_name?: string | null
@@ -2662,8 +2683,13 @@ export type Database = {
           revoked_at?: string | null
           rule_snapshot?: Json
           rule_version?: number
+          sent_at?: string | null
+          sent_count?: number
+          session_claim_at?: string | null
+          session_expires_at?: string | null
           share_url?: string | null
           status?: string
+          stripe_session_id?: string | null
           template_slug?: string | null
           updated_at?: string
         }
@@ -2684,8 +2710,16 @@ export type Database = {
           kind_label?: string
           last_opened_at?: string | null
           lead_id?: string | null
+          not_charging_at?: string | null
           once?: boolean
           open_count?: number
+          paid_at?: string | null
+          paid_session_id?: string | null
+          pay_amount_cents?: number | null
+          pay_code?: string | null
+          pay_currency?: string | null
+          pay_label?: string | null
+          pay_mode?: string | null
           person_emails?: string[]
           person_language?: string | null
           person_name?: string | null
@@ -2696,8 +2730,13 @@ export type Database = {
           revoked_at?: string | null
           rule_snapshot?: Json
           rule_version?: number
+          sent_at?: string | null
+          sent_count?: number
+          session_claim_at?: string | null
+          session_expires_at?: string | null
           share_url?: string | null
           status?: string
+          stripe_session_id?: string | null
           template_slug?: string | null
           updated_at?: string
         }
