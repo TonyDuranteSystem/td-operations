@@ -38,12 +38,33 @@ export type CalendlyErrorKind = "not_configured" | "auth" | "forbidden" | "not_f
 export class CalendlyError extends Error {
   readonly kind: CalendlyErrorKind
   readonly status: number | null
+  /**
+   * A short, SAFE hint of what Calendly objected to ("Invalid Argument; parameters: tracking.utm_campaign"): only its title and the NAMES of the parameters it names, never its
+   * message text (a message can echo what we sent). For staff-facing reports only; it is never shown to a visitor.
+   */
+  detail: string | null = null
   constructor(kind: CalendlyErrorKind, status: number | null, message: string) {
     super(message)
     this.name = "CalendlyError"
     this.kind = kind
     this.status = status
   }
+}
+
+/** The safe hint of an error answer: Calendly's own title (at most 80 plain characters) and up to 5 parameter names. Anything else in the answer is ignored. */
+export function safeErrorDetail(body: unknown): string | null {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null
+  const b = body as Record<string, unknown>
+  const title = typeof b.title === "string" ? b.title.replace(/[^\w .,'()/-]/g, "").trim().slice(0, 80) : ""
+  const params: string[] = []
+  if (Array.isArray(b.details)) {
+    for (const d of b.details) {
+      const p = d && typeof d === "object" ? (d as Record<string, unknown>).parameter : null
+      if (typeof p === "string" && /^[A-Za-z0-9_.[\]-]{1,60}$/.test(p) && params.length < 5) params.push(p)
+    }
+  }
+  const out = [title, params.length ? `parameters: ${params.join(", ")}` : ""].filter(Boolean).join("; ")
+  return out || null
 }
 
 /** The real client: fetch with a timeout. Tests pass their own. */
@@ -119,7 +140,15 @@ export async function calendlyRequest(ctx: CalendlyCtx, method: "GET" | "POST", 
   } catch {
     throw new CalendlyError("network", null, "Calendly could not be reached. Try again in a moment.")
   }
-  if (res.status < 200 || res.status >= 300) throw errorForStatus(res.status)
+  if (res.status < 200 || res.status >= 300) {
+    const err = errorForStatus(res.status)
+    try {
+      err.detail = safeErrorDetail(await res.json())
+    } catch {
+      /* no readable answer: the status alone has to do */
+    }
+    throw err
+  }
   try {
     return await res.json()
   } catch {

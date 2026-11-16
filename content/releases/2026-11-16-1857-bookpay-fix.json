@@ -1,0 +1,15 @@
+{
+  "title": "Booking: the book-and-pay page now shows what went wrong",
+  "tag": "fixed",
+  "text": "On the page where a person books and pays a paid call, a refused booking used to look like nothing happened: the times reloaded and the message was wiped. Now the message stays on screen, the time you picked is written out under the times (for example Tuesday, November 17 at 10:00 AM), and the request to Calendly is sent in the exact shape Calendly lists its times in. If Calendly refuses a booking for any other reason, the system now records what it objected to, so it can be fixed.",
+  "points": [
+    "Open a paid link, pick a time and check the line that names it",
+    "If a booking is refused, the message stays under the button"
+  ],
+  "stepsTitle": "What the person sees now",
+  "steps": [
+    { "name": "Pick a time", "detail": "The chosen time is written out under the times.", "flag": "new" },
+    { "name": "Press Book and pay", "detail": "The call is booked and the card payment opens." },
+    { "name": "If it is refused", "detail": "The message stays on screen and the times reload.", "flag": "new" }
+  ]
+}

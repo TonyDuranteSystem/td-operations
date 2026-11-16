@@ -44,7 +44,7 @@ export const BOOK_SAYS: Record<BookNo, string> = {
   invalid: "Please check your details and try again.",
   calendly: "The calendar could not be reached. Please try again in a moment.",
   setup: "Booking is not available right now. Please contact us and we will book it for you.",
-  error: "We could not book your call right now. Please try again in a minute.",
+  error: "We could not book that time. Please pick another time, or try again in a minute.",
 }
 
 export const BOOK_STATUS: Record<BookNo, number> = { none: 404, closed: 410, paid: 200, booked: 409, busy: 503, taken: 409, invalid: 400, calendly: 502, setup: 503, error: 503 }
@@ -101,11 +101,22 @@ export async function readBookable(deps: BookDeps, code: unknown): Promise<Booka
   return { ok: true, row, template }
 }
 
+/** The kind and status of a Calendly failure, for a staff-facing report. */
+function what(err: unknown): string {
+  return err instanceof CalendlyError ? `${err.kind} ${err.status ?? ""}`.trim() : "unknown"
+}
+
+/** Calendly's own title and the names of the parameters it objected to (never its message text), or null. */
+function detailOf(err: unknown): string | null {
+  return err instanceof CalendlyError ? err.detail : null
+}
+
 /** What a Calendly failure means to the person: a time that is gone, a calendar that is busy, or something only we can fix. */
 function failureReason(err: unknown): BookNo {
   if (!(err instanceof CalendlyError)) return "error"
   switch (err.kind) {
-    case "bad_request": return "taken"
+    // only Calendly's "conflict" answer means the time is gone; any other refused request is OUR problem (reported with what Calendly named), never blamed on the visitor
+    case "bad_request": return err.status === 409 ? "taken" : "error"
     case "not_configured":
     case "auth":
     case "forbidden": return "setup"
@@ -131,7 +142,7 @@ export async function loadSlots(deps: BookDeps, code: unknown): Promise<SlotsRes
     return { ok: true, slots, minutes: typeof b.row.duration_minutes === "number" && b.row.duration_minutes > 0 ? b.row.duration_minutes : 30 }
   } catch (err) {
     const reason = failureReason(err)
-    if (reason === "setup" || reason === "error") await report(deps, `The free times of a paid link could not be read from Calendly (${err instanceof CalendlyError ? err.kind : "unknown"}).`, { link: b.row.public_id })
+    if (reason === "setup" || reason === "error") await report(deps, `The free times of a paid link could not be read from Calendly (${what(err)}).`, { link: b.row.public_id, detail: detailOf(err) })
     return no(reason === "taken" ? "error" : reason)
   }
 }
@@ -215,7 +226,7 @@ export async function bookSlot(deps: BookDeps, code: unknown, raw: BookInputRaw)
     locationKind = place.kind
   } catch (err) {
     const reason = failureReason(err)
-    if (reason === "setup" || reason === "error") await report(deps, `A paid link could not be booked: the call type could not be read from Calendly (${err instanceof CalendlyError ? err.kind : "unknown"}).`, { link: row.public_id })
+    if (reason === "setup" || reason === "error") await report(deps, `A paid link could not be booked: the call type could not be read from Calendly (${what(err)}).`, { link: row.public_id, detail: detailOf(err) })
     return no(reason === "taken" ? "error" : reason)
   }
 
@@ -246,7 +257,7 @@ export async function bookSlot(deps: BookDeps, code: unknown, raw: BookInputRaw)
   } catch (err) {
     await releaseLease(db, row.id, lease)
     const reason = failureReason(err)
-    if (reason === "setup" || reason === "error") await report(deps, `A paid call could not be booked in Calendly (${err instanceof CalendlyError ? `${err.kind} ${err.status ?? ""}`.trim() : "unknown"}).`, { link: row.public_id })
+    if (reason === "setup" || reason === "error") await report(deps, `A paid call could not be booked in Calendly (${what(err)}).`, { link: row.public_id, detail: detailOf(err) })
     return no(reason)
   }
 

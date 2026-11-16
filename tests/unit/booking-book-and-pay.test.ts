@@ -125,10 +125,11 @@ describe("booking a time", () => {
     const post = c.posts()[0]
     expect(JSON.parse(post.body as string)).toEqual({
       event_type: `https://api.calendly.com/event_types/${TYPE_UUID}`,
-      start_time: PICK,
+      start_time: "2026-11-17T18:00:00Z", // the same shape Calendly lists it in: no fraction of a second
       invitee: { name: "Maria Rossi", email: "Maria@Example.com", timezone: "Europe/Rome" },
       location: { kind: "zoom_conference" },
-      tracking: { utm_term: PUBLIC_ID },
+      // Calendly's reference lists all six tracking fields: all are sent, only the tag is filled
+      tracking: { utm_campaign: null, utm_source: null, utm_medium: null, utm_content: null, utm_term: PUBLIC_ID, salesforce_uuid: null },
     })
     expect(db.tables.booking_links[0]).toMatchObject({ status: "claimed", claimed_invitee_uri: INVITEE_URI, claimed_event_uri: EVENT_URI, claimed_email: "maria@example.com", session_claim_at: null })
     // the link is one call: a second booking on it is refused and Calendly is not asked again
@@ -142,14 +143,31 @@ describe("booking a time", () => {
     }
     expect(c.calls).toHaveLength(0)
   })
-  it("a time somebody else just took is 'taken' (Calendly's text is never shown), the lease is let go and the link stays open for another pick", async () => {
+  it("a time somebody else just took (Calendly's conflict answer, 409) is 'taken' (Calendly's text is never shown), the lease is let go and the link stays open for another pick", async () => {
     const db = seed()
-    const c = calendly({ book: () => ({ status: 400, body: { title: "Invalid Argument", message: "that slot is no longer available" } }) })
-    const r = await bookSlot(deps(db, c), CODE, input())
+    const reports: string[] = []
+    const c = calendly({ book: () => ({ status: 409, body: { title: "Conflict", message: "that slot is no longer available" } }) })
+    const r = await bookSlot(deps(db, c, reports), CODE, input())
     expect(r).toMatchObject({ ok: false, reason: "taken" })
     expect(JSON.stringify(r)).not.toContain("no longer available")
+    expect(reports).toHaveLength(0) // a taken time is normal life, not an error
     expect(db.tables.booking_links[0]).toMatchObject({ status: "open", session_claim_at: null, claimed_event_uri: null })
     expect(await bookSlot(deps(db, calendly()), CODE, input())).toMatchObject({ ok: true })
+  })
+  it("any OTHER refused request (400, 422) is OUR problem, not the visitor's: a plain 'pick another time or try again' sentence, and a report that names what Calendly objected to (its title and parameter names only, never its message text)", async () => {
+    for (const status of [400, 422]) {
+      const db = seed()
+      const reports: Array<{ message: string; context: Record<string, unknown> }> = []
+      const c = calendly({ book: () => ({ status, body: { title: "Invalid Argument", message: "secret echo maria@example.com", details: [{ parameter: "tracking.utm_campaign", message: "can't be blank" }, { parameter: "bad param!", message: "x" }] } }) })
+      const r = await bookSlot({ db, calendly: c.ctx, now: NOW, reportError: async (message, context) => { reports.push({ message, context }) } }, CODE, input())
+      expect(r, String(status)).toMatchObject({ ok: false, reason: "error" })
+      expect(JSON.stringify(r)).not.toMatch(/secret|maria@/)
+      expect(reports).toHaveLength(1)
+      expect(reports[0].message).toContain(`bad_request ${status}`)
+      expect(reports[0].context.detail).toBe("Invalid Argument; parameters: tracking.utm_campaign")
+      expect(JSON.stringify(reports)).not.toMatch(/secret|maria@/)
+      expect(db.tables.booking_links[0]).toMatchObject({ status: "open", session_claim_at: null })
+    }
   })
   it("two taps at the same moment make ONE booking: while the lease is held the second is told to wait and Calendly is not asked", async () => {
     const c = calendly()

@@ -55,7 +55,25 @@ describe("bookInvitee", () => {
     expect(await bookInvitee(ctx, input)).toEqual({ inviteeUri: INVITEE, eventUri: EVENT, cancelUrl: "https://calendly.com/cancellations/abc" })
     expect(calls[0].method).toBe("POST")
     expect(calls[0].url).toBe("https://api.calendly.com/invitees")
-    expect(JSON.parse(calls[0].body as string)).toEqual({ event_type: TYPE, start_time: input.startTime, invitee: { name: "Maria Rossi", email: "maria@example.com", timezone: "Europe/Rome" }, location: { kind: "zoom_conference" }, tracking: { utm_term: input.tag } })
+    expect(JSON.parse(calls[0].body as string)).toEqual({
+      event_type: TYPE,
+      start_time: "2026-11-17T18:00:00Z", // the shape Calendly lists the time in: no fraction of a second
+      invitee: { name: "Maria Rossi", email: "maria@example.com", timezone: "Europe/Rome" },
+      location: { kind: "zoom_conference" },
+      tracking: { utm_campaign: null, utm_source: null, utm_medium: null, utm_content: null, utm_term: input.tag, salesforce_uuid: null }, // all six, only the tag filled
+    })
+  })
+  it("a refused request carries a SAFE hint: Calendly's title and the NAMES of the parameters it objected to, never its message text", async () => {
+    const body = { title: "Invalid Argument", message: "echo maria@example.com SECRET", details: [{ parameter: "tracking.utm_campaign", message: "can't be blank" }, { parameter: "invitee.email", message: "maria@example.com is bad" }] }
+    const err = await bookInvitee(fake(400, body).ctx, input).catch((e) => e)
+    expect(err.detail).toBe("Invalid Argument; parameters: tracking.utm_campaign, invitee.email")
+    expect(String(err.message)).not.toMatch(/SECRET|maria@/)
+    expect(String(err.detail)).not.toMatch(/SECRET|maria@/)
+    for (const odd of [null, "text", [], { title: 5 }, { details: "x" }, { title: "<script>alert(1)</script>" }]) {
+      const e = await bookInvitee(fake(400, odd).ctx, input).catch((x) => x)
+      expect(String(e.detail ?? ""), JSON.stringify(odd)).not.toMatch(/[<>"]/) // no markup characters survive
+    }
+    expect((await bookInvitee(fake(400, { title: "x".repeat(500) }).ctx, input).catch((e) => e)).detail.length).toBeLessThanOrEqual(80)
   })
   it("no place named: none is sent; a cancel address that is not Calendly's is dropped", async () => {
     const { ctx, calls } = fake(201, { resource: { uri: INVITEE, event: EVENT, cancel_url: "https://evil.example/x" } })

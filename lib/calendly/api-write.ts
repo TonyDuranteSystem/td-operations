@@ -72,10 +72,12 @@ export async function bookInvitee(ctx: CalendlyCtx, input: BookInput): Promise<B
   if (!uuid) throw new CalendlyError("bad_request", null, "The Calendly event type address was not valid.")
   const json = await calendlyRequest(ctx, "POST", "/invitees", {
     event_type: eventTypeUri(uuid),
-    start_time: input.startTime,
+    // the time in the same shape Calendly lists it in ("2026-11-17T15:00:00Z"): its own reference says to pass the listed time on as it is, so the fraction of a second is left off
+    start_time: input.startTime.replace(/\.0+Z$/, "Z"),
     invitee: { name: input.name, email: input.email, timezone: input.timezone },
     ...(input.locationKind ? { location: { kind: input.locationKind } } : {}),
-    tracking: { utm_term: input.tag },
+    // Calendly's reference lists all six tracking fields (each may be null): all six are sent, only the tag is filled
+    tracking: { utm_campaign: null, utm_source: null, utm_medium: null, utm_content: null, utm_term: input.tag, salesforce_uuid: null },
   })
   const r = isRec(json) && isRec(json.resource) ? json.resource : null
   const inviteeUri = r && typeof r.uri === "string" ? r.uri : null
