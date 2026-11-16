@@ -60,6 +60,9 @@ export interface BookedInvitee {
   cancelUrl: string | null
 }
 
+/** Calendly makes the Zoom link while it books, which can take longer than a plain read: a booking is given 25 seconds (the plain calls 10). */
+const BOOK_TIMEOUT_MS = 25_000
+
 const INVITEE_URI_RE = /^https:\/\/api\.calendly\.com\/scheduled_events\/[0-9a-fA-F-]{36}\/invitees\/[0-9a-fA-F-]{36}$/
 
 /**
@@ -72,11 +75,13 @@ export async function bookInvitee(ctx: CalendlyCtx, input: BookInput): Promise<B
   if (!uuid) throw new CalendlyError("bad_request", null, "The Calendly event type address was not valid.")
   const json = await calendlyRequest(ctx, "POST", "/invitees", {
     event_type: eventTypeUri(uuid),
-    start_time: input.startTime,
+    // the time in the same shape Calendly lists it in ("2026-11-17T15:00:00Z"): its own reference says to pass the listed time on as it is, so the fraction of a second is left off
+    start_time: input.startTime.replace(/\.0+Z$/, "Z"),
     invitee: { name: input.name, email: input.email, timezone: input.timezone },
     ...(input.locationKind ? { location: { kind: input.locationKind } } : {}),
-    tracking: { utm_term: input.tag },
-  })
+    // Calendly's reference lists all six tracking fields (each may be null): all six are sent, only the tag is filled
+    tracking: { utm_campaign: null, utm_source: null, utm_medium: null, utm_content: null, utm_term: input.tag, salesforce_uuid: null },
+  }, undefined, BOOK_TIMEOUT_MS)
   const r = isRec(json) && isRec(json.resource) ? json.resource : null
   const inviteeUri = r && typeof r.uri === "string" ? r.uri : null
   const eventUri = r && typeof r.event === "string" ? r.event : null

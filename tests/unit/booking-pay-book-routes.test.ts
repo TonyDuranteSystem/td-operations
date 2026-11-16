@@ -99,7 +99,7 @@ describe("POST /pay/b/<code>/book", () => {
     expect(await res.json()).toMatchObject({ ok: true })
     expect(h.db.tables.booking_links[0]).toMatchObject({ status: "claimed", claimed_event_uri: EVENT_URI })
     expect(h.posts).toHaveLength(1)
-    expect(JSON.parse(h.posts[0]).tracking).toEqual({ utm_term: PUBLIC_ID })
+    expect(JSON.parse(h.posts[0]).tracking).toMatchObject({ utm_term: PUBLIC_ID })
   })
   it("a request from another site is refused (403) before anything is read or asked; the same site and no Origin at all are accepted", async () => {
     const foreign = await bookPOST(bookReq(good(), { origin: "https://evil.example" }), ctx(CODE))
@@ -122,10 +122,14 @@ describe("POST /pay/b/<code>/book", () => {
     const noName = await bookPOST(bookReq(good({ name: "" })), ctx(CODE))
     expect(noName.status).toBe(400)
     expect(await noName.json()).toMatchObject({ ok: false, reason: "invalid", message: "Please write your name." })
-    h.ctx = calendlyCtx({ book: 400 })
+    h.ctx = calendlyCtx({ book: 409 })
     const taken = await bookPOST(bookReq(good()), ctx(CODE))
     expect(taken.status).toBe(409)
     expect(await taken.json()).toMatchObject({ ok: false, reason: "taken" })
+    h.ctx = calendlyCtx({ book: 400 })
+    const refused = await bookPOST(bookReq(good()), ctx(CODE))
+    expect(refused.status).toBe(503)
+    expect(await refused.json()).toMatchObject({ ok: false, reason: "error", message: "We could not book that time. Please pick another time, or try again in a minute." })
     expect(h.db.tables.booking_links[0]).toMatchObject({ status: "open", claimed_event_uri: null })
   })
   it("a second booking on the same link is refused (409): a paid link is one call", async () => {
@@ -147,18 +151,32 @@ describe("the redirect for a paid link", () => {
       expect(r).toEqual({ kind: "redirect", location: payUrl(CODE), tagged: true })
     }
   })
-  it("a paid link that is already booked still goes to the page (it shows the payment); a stopped or expired one does not reach it", async () => {
-    expect(await decide(miniDb({ booking_links: [linkRow({ status: "claimed", claimed_event_uri: EVENT_URI })], app_settings: settings }))).toMatchObject({ kind: "redirect", location: payUrl(CODE) })
-    for (const over of [{ revoked_at: "2026-11-15T10:00:00Z" }, { expires_at: "2026-11-15T10:00:00Z" }]) {
+  it("a paid link goes to OUR page in EVERY state (booked, stopped, expired, paid, Not charging): the page says what is true, and the FREE Meet & Greet page is never the answer", async () => {
+    for (const over of [{ status: "claimed", claimed_event_uri: EVENT_URI }, { revoked_at: "2026-11-15T10:00:00Z" }, { expires_at: "2026-11-15T10:00:00Z" }, { paid_session_id: "cs_1" }, { not_charging_at: "2026-11-15T10:00:00Z" }]) {
       const r = await decide(miniDb({ booking_links: [linkRow(over)], app_settings: settings }))
-      expect(r).toMatchObject({ kind: "redirect", tagged: false })
-      expect((r as { location: string }).location).not.toContain("/pay/b/")
+      expect(r, JSON.stringify(over)).toMatchObject({ kind: "redirect", location: payUrl(CODE) })
     }
   })
-  it("with the Booking switch off a paid link behaves as before: the plain public booking page, no tag", async () => {
-    const r = await decide(miniDb({ booking_links: [linkRow()], app_settings: [{ key: "booking", value: { mode: "off" } }] }))
+  it("with the Booking switch off, or the setting unreadable, a PAID link still goes to our page; a FREE link goes to the plain public booking page, no tag, as before", async () => {
+    const off = [{ key: "booking", value: { mode: "off" } }]
+    expect(await decide(miniDb({ booking_links: [linkRow()], app_settings: off }))).toMatchObject({ kind: "redirect", location: payUrl(CODE) })
+    expect(await decide(miniDb({ booking_links: [linkRow()] }))).toMatchObject({ kind: "redirect", location: payUrl(CODE) }) // no setting row = off
+    const free = linkRow({ pay_amount_cents: null, pay_currency: null, pay_code: null, share_url: "https://calendly.com/d/abc-123/new-meeting" })
+    const r = await decide(miniDb({ booking_links: [free], app_settings: off }))
     expect(r).toMatchObject({ kind: "redirect", tagged: false })
-    expect((r as { location: string }).location).not.toContain("/pay/b/")
+    expect((r as { location: string }).location).not.toContain("abc-123")
+  })
+  it("a stopped or expired FREE link still goes to the plain public booking page, no tag", async () => {
+    for (const over of [{ revoked_at: "2026-11-15T10:00:00Z" }, { expires_at: "2026-11-15T10:00:00Z" }]) {
+      const free = linkRow({ pay_amount_cents: null, pay_currency: null, pay_code: null, share_url: "https://calendly.com/d/abc-123/new-meeting", ...over })
+      const r = await decide(miniDb({ booking_links: [free], app_settings: settings }))
+      expect(r).toMatchObject({ kind: "redirect", tagged: false })
+      expect((r as { location: string }).location).not.toContain("abc-123")
+    }
+  })
+  it("a database that fails on a PAID link is 'try again' (503), never the free page; with the switch off a failing read gives the plain page as before", async () => {
+    expect(await decide(miniDb({ booking_links: [linkRow()], app_settings: settings }, { failing: { booking_links: "boom" } }))).toEqual({ kind: "retry" })
+    expect(await decide(miniDb({ booking_links: [linkRow()], app_settings: [{ key: "booking", value: { mode: "off" } }] }, { failing: { booking_links: "boom" } }))).toMatchObject({ kind: "redirect", tagged: false })
   })
   it("a FREE link is unchanged: it still goes to Calendly with its tag", async () => {
     const free = linkRow({ pay_amount_cents: null, pay_currency: null, pay_code: null, pay_label: null, pay_mode: null, share_url: "https://calendly.com/d/abc-123/new-meeting", once: true })

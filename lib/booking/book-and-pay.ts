@@ -19,7 +19,7 @@
 import { CalendlyError, getEventType, listAvailableTimes, type CalendlyCtx } from "@/lib/calendly/api"
 import { bookInvitee, cancelEvent } from "@/lib/calendly/api-write"
 import { findPayLink, LEASE_MS, type PayRow } from "@/lib/booking/pay-session"
-import { isPlainEmail, payStateOf } from "@/lib/booking/payment"
+import { isBookableEmail, payStateOf } from "@/lib/booking/payment"
 import { linkStatusOf } from "@/lib/booking/links"
 import { loadTemplates, templateFor, type BookingTemplate } from "@/lib/booking/templates"
 import { isUniqueViolation } from "@/lib/booking-links/missing-table"
@@ -32,7 +32,7 @@ export const SLOT_DAYS = 21
 /** the earliest start asked of Calendly (its own minimum notice still applies) */
 const SOON_MS = 2 * 60_000
 
-export type BookNo = "none" | "closed" | "paid" | "booked" | "busy" | "taken" | "invalid" | "calendly" | "setup" | "error"
+export type BookNo = "none" | "closed" | "paid" | "booked" | "busy" | "taken" | "invalid" | "calendly" | "unsure" | "setup" | "error"
 
 export const BOOK_SAYS: Record<BookNo, string> = {
   none: "This link is not valid. Please ask the person who sent it for a new one.",
@@ -43,11 +43,12 @@ export const BOOK_SAYS: Record<BookNo, string> = {
   taken: "That time was just taken. Please pick another one.",
   invalid: "Please check your details and try again.",
   calendly: "The calendar could not be reached. Please try again in a moment.",
+  unsure: "We could not confirm your booking. Please wait a minute and check your email for a Calendly confirmation before you try again. If none arrives, try again.",
   setup: "Booking is not available right now. Please contact us and we will book it for you.",
-  error: "We could not book your call right now. Please try again in a minute.",
+  error: "We could not book that time. Please pick another time, or try again in a minute.",
 }
 
-export const BOOK_STATUS: Record<BookNo, number> = { none: 404, closed: 410, paid: 200, booked: 409, busy: 503, taken: 409, invalid: 400, calendly: 502, setup: 503, error: 503 }
+export const BOOK_STATUS: Record<BookNo, number> = { none: 404, closed: 410, paid: 200, booked: 409, busy: 503, taken: 409, invalid: 400, calendly: 502, unsure: 503, setup: 503, error: 503 }
 
 export interface BookDeps {
   db: Db
@@ -55,6 +56,8 @@ export interface BookDeps {
   now?: Date
   reportError?: (message: string, context: Record<string, unknown>) => Promise<void>
 }
+
+const text = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null)
 
 const no = <T extends { ok: false; reason: BookNo; message: string }>(reason: BookNo, message?: string): T => ({ ok: false, reason, message: message ?? BOOK_SAYS[reason] }) as T
 
@@ -101,11 +104,27 @@ export async function readBookable(deps: BookDeps, code: unknown): Promise<Booka
   return { ok: true, row, template }
 }
 
+/** The kind and status of a Calendly failure, for a staff-facing report. */
+function what(err: unknown): string {
+  return err instanceof CalendlyError ? `${err.kind} ${err.status ?? ""}`.trim() : "unknown"
+}
+
+/** Calendly's own title and the names of the parameters it objected to (never its message text), or null. */
+function detailOf(err: unknown): string | null {
+  return err instanceof CalendlyError ? err.detail : null
+}
+
 /** What a Calendly failure means to the person: a time that is gone, a calendar that is busy, or something only we can fix. */
-function failureReason(err: unknown): BookNo {
-  if (!(err instanceof CalendlyError)) return "error"
+/**
+ * `mayHaveBooked` = the call was a BOOKING: when Calendly timed out, had a problem on its side or gave an answer we cannot read, the call may exist anyway ("unsure": the person
+ * is told to look for Calendly's email instead of being sent straight back to try again, and staff get a report).
+ */
+function failureReason(err: unknown, mayHaveBooked = false): BookNo {
+  if (!(err instanceof CalendlyError)) return mayHaveBooked ? "unsure" : "error"
+  if (mayHaveBooked && (err.kind === "network" || err.kind === "server" || err.kind === "bad_response")) return "unsure"
   switch (err.kind) {
-    case "bad_request": return "taken"
+    // only Calendly's "conflict" answer means the time is gone; any other refused request is OUR problem (reported with what Calendly named), never blamed on the visitor
+    case "bad_request": return err.status === 409 ? "taken" : "error"
     case "not_configured":
     case "auth":
     case "forbidden": return "setup"
@@ -131,7 +150,7 @@ export async function loadSlots(deps: BookDeps, code: unknown): Promise<SlotsRes
     return { ok: true, slots, minutes: typeof b.row.duration_minutes === "number" && b.row.duration_minutes > 0 ? b.row.duration_minutes : 30 }
   } catch (err) {
     const reason = failureReason(err)
-    if (reason === "setup" || reason === "error") await report(deps, `The free times of a paid link could not be read from Calendly (${err instanceof CalendlyError ? err.kind : "unknown"}).`, { link: b.row.public_id })
+    if (reason === "setup" || reason === "error") await report(deps, `The free times of a paid link could not be read from Calendly (${what(err)}).`, { link: b.row.public_id, detail: detailOf(err) })
     return no(reason === "taken" ? "error" : reason)
   }
 }
@@ -195,7 +214,7 @@ export async function bookSlot(deps: BookDeps, code: unknown, raw: BookInputRaw)
   const email = typeof raw.email === "string" ? raw.email.trim() : ""
   if (!start) return no("invalid", "Please pick one of the times shown.")
   if (!name) return no("invalid", "Please write your name.")
-  if (!isPlainEmail(email) || email.length > 200) return no("invalid", "Please write a valid email address.")
+  if (!isBookableEmail(email) || email.length > 200) return no("invalid", "Please write a valid email address.")
   if (!deps.calendly) return no("setup")
 
   const b = await readBookable(deps, code)
@@ -215,7 +234,7 @@ export async function bookSlot(deps: BookDeps, code: unknown, raw: BookInputRaw)
     locationKind = place.kind
   } catch (err) {
     const reason = failureReason(err)
-    if (reason === "setup" || reason === "error") await report(deps, `A paid link could not be booked: the call type could not be read from Calendly (${err instanceof CalendlyError ? err.kind : "unknown"}).`, { link: row.public_id })
+    if (reason === "setup" || reason === "error") await report(deps, `A paid link could not be booked: the call type could not be read from Calendly (${what(err)}).`, { link: row.public_id, detail: detailOf(err) })
     return no(reason === "taken" ? "error" : reason)
   }
 
@@ -245,8 +264,14 @@ export async function bookSlot(deps: BookDeps, code: unknown, raw: BookInputRaw)
     booked = await bookInvitee(deps.calendly, { eventTypeUri: template.eventTypeUri, startTime: start, name, email, timezone: cleanTimezone(raw.timezone), tag: row.public_id, locationKind })
   } catch (err) {
     await releaseLease(db, row.id, lease)
-    const reason = failureReason(err)
-    if (reason === "setup" || reason === "error") await report(deps, `A paid call could not be booked in Calendly (${err instanceof CalendlyError ? `${err.kind} ${err.status ?? ""}`.trim() : "unknown"}).`, { link: row.public_id })
+    const reason = failureReason(err, true)
+    if (reason === "unsure") {
+      // Calendly timed out, had a problem or gave an answer we cannot read: the call MAY exist in Calendly although the page was told it failed. Staff are told which time to look at
+      // (never the person's email), so a silent booking is never left behind (bug hunter H1).
+      await report(deps, `A paid call MAY have been booked in Calendly although the page was told it failed (${what(err)}). Look in Calendly at ${start} and cancel it if it is there.`, { link: row.public_id, start })
+    } else if (reason === "setup" || reason === "error") {
+      await report(deps, `A paid call could not be booked in Calendly (${what(err)}).`, { link: row.public_id, detail: detailOf(err) })
+    }
     return no(reason)
   }
 
@@ -255,7 +280,7 @@ export async function bookSlot(deps: BookDeps, code: unknown, raw: BookInputRaw)
   try {
     const { data, error } = await db
       .from("booking_links")
-      .update({ status: "claimed", claimed_invitee_uri: booked.inviteeUri, claimed_event_uri: booked.eventUri, claimed_email: email.toLowerCase(), claimed_at: now.toISOString(), session_claim_at: null, updated_at: now.toISOString() })
+      .update({ status: "claimed", claimed_invitee_uri: booked.inviteeUri, claimed_event_uri: booked.eventUri, claimed_email: email.toLowerCase(), claimed_at: now.toISOString(), session_claim_at: null, updated_at: now.toISOString(), ...(text(row.person_name) ? {} : { person_name: name }) })
       .eq("id", row.id)
       .eq("status", "open")
       .eq("session_claim_at", lease)

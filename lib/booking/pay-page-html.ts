@@ -43,10 +43,10 @@ function $(i){return document.getElementById(i)}
 function say(t){$('msg').textContent=t||''}
 function fmt(o,d){return new Intl.DateTimeFormat('en-US',Object.assign({timeZone:tz},o)).format(d)}
 function key(d){return new Intl.DateTimeFormat('en-CA',{timeZone:tz,year:'numeric',month:'2-digit',day:'2-digit'}).format(d)}
-function ready(){var n=$('name').value.trim(),e=$('email').value.trim();$('go').disabled=busy||!chosen||!n||!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$/.test(e)}
+function ready(){var n=$('name').value.trim(),e=$('email').value.trim();$('pick').textContent=chosen?'Your time: '+fmt({weekday:'long',month:'long',day:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'},new Date(chosen)):'';$('go').disabled=busy||!chosen||!n||!/^[^\\s@<>()",;:\\\\]+@[^\\s@<>()",;:\\\\]+\\.[^\\s@<>()",;:\\\\]{2,}$/.test(e)}
 function showTimes(){var box=$('times');box.innerHTML='';(byDay[day]||[]).forEach(function(s){var b=document.createElement('button');b.type='button';b.textContent=fmt({hour:'numeric',minute:'2-digit'},new Date(s));if(s===chosen)b.className='on';b.onclick=function(){chosen=s;showTimes();ready()};box.appendChild(b)})}
 function showDays(){var box=$('days');box.innerHTML='';days.forEach(function(k){var b=document.createElement('button');b.type='button';b.textContent=fmt({weekday:'short',month:'short',day:'numeric'},new Date(byDay[k][0]));if(k===day)b.className='on';b.onclick=function(){day=k;chosen=null;showDays();showTimes();ready()};box.appendChild(b)})}
-function load(){say('');$('days').textContent='Loading free times…';$('times').innerHTML='';
+function load(keep){if(!keep)say('');$('days').textContent='Loading free times…';$('times').innerHTML='';
 fetch('/pay/b/'+CODE+'/times',{cache:'no-store'}).then(function(r){return r.json()}).then(function(j){
 if(!j.ok){$('days').textContent='';say(j.message||'Please try again.');if(j.reason==='booked'||j.reason==='paid')location.reload();return}
 byDay={};days=[];j.slots.forEach(function(s){var k=key(new Date(s));if(!byDay[k]){byDay[k]=[];days.push(k)}byDay[k].push(s)});
@@ -57,7 +57,7 @@ $('go').onclick=function(){if(busy||!chosen)return;busy=true;ready();say('');$('
 fetch('/pay/b/'+CODE+'/book',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({start:chosen,name:$('name').value,email:$('email').value,timezone:tz})}).then(function(r){return r.json()}).then(function(j){
 if(j.ok){$('go').textContent='Booked. Opening the card page…';$('payform').submit();return}
 busy=false;$('go').textContent='Book and pay '+MONEY;say(j.message||'Please try again.');
-if(j.reason==='taken')load();else if(j.reason==='booked'||j.reason==='paid')location.reload();else ready()}).catch(function(){busy=false;$('go').textContent='Book and pay '+MONEY;say('Please try again in a moment.');ready()})};
+if(j.reason==='taken'||j.reason==='error')load(true);else if(j.reason==='booked'||j.reason==='paid')location.reload();else ready()}).catch(function(){busy=false;$('go').textContent='Book and pay '+MONEY;say('Please try again in a moment.');ready()})};
 load()})();`
 }
 
@@ -65,7 +65,7 @@ load()})();`
 export function bookViewHtml(i: BookViewInput): string {
   return (
     `<div class="box"><div class="muted">Tony Durante LLC</div><div class="amt">${esc(i.money)}</div><div>${esc(i.label)}</div><div class="muted">${esc(String(i.minutes))}-minute video call</div></div>` +
-    `<h2>1. Pick a time</h2><div class="muted">Times are shown in your own time zone.</div><div class="chips" id="days"></div><div class="chips" id="times"></div>` +
+    `<h2>1. Pick a time</h2><div class="muted">Times are shown in your own time zone.</div><div class="chips" id="days"></div><div class="chips" id="times"></div><div class="muted" id="pick"></div>` +
     `<h2>2. Your details</h2><input id="name" autocomplete="name" placeholder="Your name" maxlength="100" value="${esc(i.name)}"><input id="email" type="email" autocomplete="email" placeholder="Your email" maxlength="200" value="${esc(i.email)}">` +
     `<button id="go" type="button" disabled>Book and pay ${esc(i.money)}</button><div class="err" id="msg" role="alert"></div>` +
     `<p class="muted">Your call is booked as soon as you press the button, and you then pay by card on Stripe, our secure payment page. Nothing is charged until you confirm there.</p>` +

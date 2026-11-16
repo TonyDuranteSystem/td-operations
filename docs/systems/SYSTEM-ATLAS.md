@@ -187,7 +187,7 @@ _Regenerated 2026-11-16. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-11-13)_
 - [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-11-15)_
 - [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-11-09)_
-- [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-11-15)_
+- [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-11-16)_
 - [bofa-intake.md](bofa-intake.md) — Bank Application Intake (Bank of America, one-time link) _(verified 2026-11-06)_
 - [booking.md](booking.md) — Booking page — Calendly links per audience (Stage 1a engine + Stage 1b screens + Stage 3 paid links) _(verified 2026-11-16)_
 - [captures.md](captures.md) — Capture / Share (screenshot tool) _(verified 2026-11-05)_
@@ -224,7 +224,7 @@ _Regenerated 2026-11-16. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [portal-translation.md](portal-translation.md) — Portal Translation (any-language AI translation) _(verified 2026-09-23)_
 - [portal.md](portal.md) — Client Portal _(verified 2026-11-13)_
 - [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-11-12)_
-- [referrals-circleback.md](referrals-circleback.md) — Referrals & Circleback _(verified 2026-11-15)_
+- [referrals-circleback.md](referrals-circleback.md) — Referrals & Circleback _(verified 2026-11-16)_
 - [releases.md](releases.md) — Releases (what each release does — update bar panel + history page) _(verified 2026-11-12)_
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_
 - [scan-document.md](scan-document.md) — Scan document (the chat attach tool) _(verified 2026-11-10)_

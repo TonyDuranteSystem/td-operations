@@ -24,6 +24,15 @@ export function isPlainEmail(v: unknown): v is string {
   return typeof v === "string" && /^[^\s@,;?&=<>()"']+@[^\s@,;?&=<>()"']+\.[^\s@,;?&=<>()"']{2,}$/.test(v)
 }
 
+/**
+ * An email a person may BOOK with: one "@", no spaces, and none of `< > ( ) " \ , ; :`. Unlike isPlainEmail it allows an apostrophe, "&", "=" and "?" (d'amico@x.it is a real address):
+ * the booking goes to Calendly, which has the last word, and nothing here is ever put in a mail link or a Stripe prefill unless isPlainEmail also says yes (those two still use it).
+ * The page's own check uses the same characters, so the button never enables for an address the server will refuse.
+ */
+export function isBookableEmail(v: unknown): v is string {
+  return typeof v === "string" && /^[^\s@<>()"\\,;:]+@[^\s@<>()"\\,;:]+\.[^\s@<>()"\\,;:]{2,}$/.test(v)
+}
+
 /** Only a code of our exact shape is ever looked up. */
 export const isPayCode = isStrictLinkId
 

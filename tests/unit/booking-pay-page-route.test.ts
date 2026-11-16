@@ -50,6 +50,8 @@ describe("GET /pay/b/<code>", () => {
     expect(html).toContain('value="Secret Person Name"') // pre-filled in a field the person can change, escaped; never printed as page text
     expect(html).toContain('value="secret@example.com"')
     expect(html).toContain("30-minute video call")
+    expect(html).toContain('id="pick"') // the chosen time is written out under the chips, so a pick is always visible
+    expect(html).toContain("load(true)") // after a refused booking the times reload but the message stays on screen
     expect(html).not.toContain("Pay by card") // the card button only exists once a time is booked
     expect(html).toContain(`/pay/b/'+CODE+'/times`) // the script talks to this page's own two addresses only
     expect(h.open).not.toHaveBeenCalled() // a mail scanner or a chat app opening the link never books or makes a card page

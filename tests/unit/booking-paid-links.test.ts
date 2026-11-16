@@ -6,7 +6,7 @@ import { describe, it, expect, vi } from "vitest"
 import { miniDb } from "./helpers/mini-db"
 import { decideLinkPlan, PAID_LENGTH_TEXT } from "@/lib/booking/plan"
 import { describePlan } from "@/lib/booking/preview"
-import { isPaidLink, moneyText, parsePayMode, payModeText, payStateOf, payUrl, paymentDraft } from "@/lib/booking/payment"
+import { isBookableEmail, isPaidLink, isPlainEmail, moneyText, parsePayMode, payModeText, payStateOf, payUrl, paymentDraft } from "@/lib/booking/payment"
 import { makeLink, judgeLink, LARGE_AMOUNT_TEXT } from "@/lib/booking/make-link"
 import { openPayment, findPayLink, identityEmail, identityName, SAYS, type StripeOps } from "@/lib/booking/pay-session"
 import { recordBookingLinkPayment, type BookingPaySession } from "@/lib/booking/pay-record"
@@ -410,6 +410,26 @@ describe("who the payment is recorded on", () => {
     const row = ({ ...paidRow({ contact_id: null, person_emails: ["mario@gmial.com"] }) }) as never
     expect(await identityEmail(withDeliveries(miniDb({}), [delivery({ payload: { payload: { event: EV, name: "Mario", email: "mario@gmail.com", tracking: { utm_term: TAG }, scheduled_event: { start_time: "2026-11-17T15:00:00Z" } } } })]), row)).toBe("mario@gmail.com")
     expect(await identityEmail(miniDb({}), row)).toBe("mario@gmial.com") // nobody has booked yet: the typed one
+  })
+  it("someone who booked on OUR page: the email they typed THERE (kept on the link at the moment they booked) beats the typed-by-staff typo even before Calendly's delivery arrives; a contact's or lead's own email is unchanged (bug hunter B2)", async () => {
+    const row = (over: Record<string, unknown>) => ({ ...paidRow(over) }) as never
+    expect(await identityEmail(miniDb({}), row({ contact_id: null, person_emails: ["tonny@gmial.com"], claimed_email: "Tony@Real.com" }))).toBe("tony@real.com")
+    expect(await identityEmail(withDeliveries(miniDb({}), [delivery()]), row({ contact_id: null, person_emails: ["tonny@gmial.com"], claimed_email: "tony@real.com" }))).toBe("tony@real.com")
+    expect(await identityEmail(miniDb({ contacts: [{ id: C1, email: "maria@example.com" }] }), row({ claimed_email: "someone@else.com" }))).toBe("maria@example.com")
+    expect(await identityEmail(miniDb({ leads: [{ id: L1, email: "daniel@example.com" }] }), row({ contact_id: null, lead_id: L1, claimed_email: "someone@else.com" }))).toBe("daniel@example.com")
+    expect(await identityEmail(miniDb({}), row({ contact_id: null, person_emails: ["a@b.com"], claimed_email: "   " }))).toBe("a@b.com") // an empty claim is no claim
+  })
+  it("a link made for someone new with a typo email: the card page and the payment's identity carry the address and name the person typed on our page", async () => {
+    const db = miniDb({ booking_links: [paidRow({ contact_id: null, person_name: "Tony Real", person_emails: ["tonny@gmial.com"], claimed_email: "tony@real.com", status: "claimed", claimed_event_uri: "https://api.calendly.com/scheduled_events/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" })] })
+    const s = fakeStripe()
+    await openPayment({ db, now: NOW, stripe: s.ops }, PAYCODE)
+    expect(s.created[0]).toMatchObject({ clientEmail: "tony@real.com", metadata: { client_email: "tony@real.com", client_name: "Tony Real" } })
+  })
+  it("isBookableEmail allows what a real address can hold (apostrophe, &, =) and refuses markup and separators; isPlainEmail (Stripe, mail links) stays strict", () => {
+    for (const e of ["d'amico@example.it", "r&d@example.com", "a=b@example.com", "maria@example.com"]) expect(isBookableEmail(e), e).toBe(true)
+    for (const e of ["a<b@example.com", "a,b@example.com", "a b@example.com", 'a"b@example.com', "a;b@example.com", "a(b)@example.com", "ab@example", "", null, 5]) expect(isBookableEmail(e), String(e)).toBe(false)
+    for (const e of ["d'amico@example.it", "r&d@example.com", "a=b@example.com"]) expect(isPlainEmail(e), e).toBe(false)
+    expect(isPlainEmail("maria@example.com")).toBe(true)
   })
   it("the name a new contact would get: the link's own name, else the booker's — never the name on the card", async () => {
     const row = (over: Record<string, unknown>) => ({ ...paidRow(over) }) as never
