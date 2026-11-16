@@ -13,6 +13,7 @@ import { accountExtras } from '@/lib/crm-lists/extras'
 import { companiesByPerson, currentMemberCounts, pickMainContacts, type AccountContactLink, type PersonCompanyRow } from '@/lib/crm-lists/people'
 import { formatListDate } from '@/lib/crm-lists/format'
 import { accountMatchesSearch } from '@/lib/crm-lists/search-match'
+import { loadContractMismatchesForCompanies } from '@/lib/signed-contracts/load'
 
 const PAGE_SIZE = 50
 
@@ -78,6 +79,12 @@ export default async function AccountsPage({
 
   const pageRows = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
   const accountIds = pageRows.map(a => a.id)
+  // The companies whose signed contract does not match their own installment amounts get the amber flag (dev job a2a663cf). The same rule
+  // as the Contact page and the Contacts list; only the offers filed on THESE companies are read.
+  const contractMismatches = await loadContractMismatchesForCompanies({
+    accountIds,
+    companyNames: new Map(pageRows.map(a => [a.id, a.company_name])),
+  })
 
   type Detail = {
     state_of_formation: string | null
@@ -191,6 +198,7 @@ export default async function AccountsPage({
       chip_2: chipMap[a.id]?.second ?? { kind: 'not_invoiced', count: 0 },
       client_since: formatListDate(d?.client_since),
       contact_card: contactMap[a.id]?.id ? (contactCards[contactMap[a.id].id as string] ?? null) : null,
+      contract_mismatches: contractMismatches.kind === 'ok' ? (contractMismatches.byCompany.get(a.id) ?? []) : [],
       extras: d?.extras ?? {},
     }
   })
@@ -213,6 +221,11 @@ export default async function AccountsPage({
           {stats.total} companies — {stats.smllc} SMLLC, {stats.mmllc} MMLLC, {stats.corp} Corp
           {stats.typeNotSet > 0 ? `, ${stats.typeNotSet} type not set` : ''}
         </p>
+        {contractMismatches.kind === 'failed' && (
+          <p className="mt-1 text-xs text-muted-foreground" data-testid="contract-check-failed">
+            Could not check the contract amounts just now, so no company is marked. Reload the page to try again.
+          </p>
+        )}
       </div>
       <AccountTable
         items={items}

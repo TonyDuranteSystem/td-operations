@@ -14,7 +14,7 @@ import { fetchAllRows } from '@/lib/crm-lists/queries'
 import type { CompanyAmountsRow, CompanyLookup } from './company-check'
 import { buildEntries, type AgreementRow, type ContractRow, type CorrectionRow, type OfferRow } from './entries'
 import { INSTALLMENT_CONTRACT_TYPES, hasInstallmentAmounts } from './labels'
-import { contractMismatchesByPerson, type MismatchPerson, type OfferWithOwners } from './list-mismatches'
+import { contractMismatchesByCompany, contractMismatchesByPerson, type MismatchPerson, type OfferWithOwners } from './list-mismatches'
 import { AMOUNTS_CORRECTED_ACTION, type ContractMismatch, type SignedContractEntry } from './types'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -131,6 +131,20 @@ const OFFER_OWNER_COLUMNS = `${OFFER_COLUMNS}, contact_id, client_email, lead_id
 /** a short list of tokens per request keeps the address of each request small */
 const TOKENS_PER_REQUEST = 100
 
+/** The signed contracts of these offers, read in short batches of tokens. A failed read throws (the callers turn that into `failed`). */
+async function readContractsOf(offers: OfferRow[]): Promise<ContractRow[]> {
+  const tokens = offers.map((o) => o.token).filter(Boolean)
+  const chunks: string[][] = []
+  for (let i = 0; i < tokens.length; i += TOKENS_PER_REQUEST) chunks.push(tokens.slice(i, i + TOKENS_PER_REQUEST))
+  const results = await Promise.all(chunks.map((chunk) => db.from('contracts').select(CONTRACT_COLUMNS).in('offer_token', chunk)))
+  const contracts: ContractRow[] = []
+  for (const r of results) {
+    if (r.error) throw new Error(`Could not read the signed contracts: ${r.error.message}`)
+    contracts.push(...((r.data ?? []) as ContractRow[]))
+  }
+  return contracts
+}
+
 /**
  * For the Contacts list: which of these people have a signed contract that does not match their company (the amber note on the Contact
  * page). ONE bulk read, not the card's per-person lookup: the offers that can be compared are few (formation + onboarding), so they are
@@ -152,21 +166,49 @@ export async function loadContractMismatchesForPeople(input: { people: MismatchP
       if (l.converted_to_contact_id) leadPerson.set(l.id, l.converted_to_contact_id)
     }
 
-    const tokens = offers.map((o) => o.token).filter(Boolean)
-    const chunks: string[][] = []
-    for (let i = 0; i < tokens.length; i += TOKENS_PER_REQUEST) chunks.push(tokens.slice(i, i + TOKENS_PER_REQUEST))
-    const contractResults = await Promise.all(chunks.map((chunk) => db.from('contracts').select(CONTRACT_COLUMNS).in('offer_token', chunk)))
-    const contracts: ContractRow[] = []
-    for (const r of contractResults) {
-      if (r.error) throw new Error(`Could not read the signed contracts: ${r.error.message}`)
-      contracts.push(...((r.data ?? []) as ContractRow[]))
-    }
-
+    const contracts = await readContractsOf(offers)
     const companies = await lookUpCompanies(offers, contracts)
     if (companies.kind === 'failed') return { kind: 'failed' }
     return { kind: 'ok', byPerson: contractMismatchesByPerson({ ...input, leadPerson, offers, contracts, companies }) }
   } catch (err) {
     console.error('[signed-contracts] the contract amount check for the Contacts list could not run:', err instanceof Error ? err.message : err)
+    return { kind: 'failed' }
+  }
+}
+
+/** What the Accounts list and the company page get: the amber findings per company, or `failed` (never an empty answer that looks like "all fine"). */
+export type CompanyMismatchLoad = { kind: 'ok'; byCompany: Map<string, ContractMismatch[]> } | { kind: 'failed' }
+
+/** a short list of companies per request keeps the address of each request small */
+const COMPANIES_PER_REQUEST = 100
+
+/**
+ * For the Accounts list and the company page: which of these companies have a signed contract whose amounts do not match the company's
+ * own installment amounts (the same amber finding as on the Contact page and the Contacts list — see `list-mismatches.ts`). Only the
+ * formation / onboarding offers FILED ON these companies are read, with their contracts and the companies' installment columns; nothing
+ * else. Any failed read returns `failed`, so a screen can say so instead of showing no company amber as if everything matched.
+ */
+export async function loadContractMismatchesForCompanies(input: { accountIds: string[]; companyNames: Map<string, string> }): Promise<CompanyMismatchLoad> {
+  if (input.accountIds.length === 0) return { kind: 'ok', byCompany: new Map() }
+  try {
+    const chunks: string[][] = []
+    for (let i = 0; i < input.accountIds.length; i += COMPANIES_PER_REQUEST) chunks.push(input.accountIds.slice(i, i + COMPANIES_PER_REQUEST))
+    const results = await Promise.all(
+      chunks.map((chunk) => db.from('offers').select(OFFER_COLUMNS).in('account_id', chunk).in('contract_type', COMPARED_OFFER_TYPES)),
+    )
+    const offers: OfferRow[] = []
+    for (const r of results) {
+      if (r.error) throw new Error(`Could not read the offers of these companies: ${r.error.message}`)
+      offers.push(...((r.data ?? []) as OfferRow[]))
+    }
+    if (offers.length === 0) return { kind: 'ok', byCompany: new Map() }
+
+    const contracts = await readContractsOf(offers)
+    const companies = await lookUpCompanies(offers, contracts)
+    if (companies.kind === 'failed') return { kind: 'failed' }
+    return { kind: 'ok', byCompany: contractMismatchesByCompany({ ...input, offers, contracts, companies }) }
+  } catch (err) {
+    console.error('[signed-contracts] the contract amount check for the companies could not run:', err instanceof Error ? err.message : err)
     return { kind: 'failed' }
   }
 }

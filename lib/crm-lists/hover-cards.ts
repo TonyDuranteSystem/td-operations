@@ -59,6 +59,8 @@ export interface CompanyCardSource {
   installment_2_currency: string | null
   chip_1: InstallmentChip
   chip_2: InstallmentChip
+  /** The amber findings about this company's signed contracts (the Accounts list only); none = no amber block. */
+  contract_mismatches?: ContractMismatch[]
 }
 
 /** "$1,250 · Paid" / "$1,250" / "Not set". The chip is only the chosen year's invoice, so no chip means no invoice yet. */
@@ -84,7 +86,8 @@ export function companyCard(c: CompanyCardSource, year: number): CardModel {
   if (c.payment_overdue > 0) {
     lines.push({ label: 'Overdue', value: `${c.payment_overdue} ${c.payment_overdue === 1 ? 'payment' : 'payments'}`, tone: 'bad' })
   }
-  return { title: c.company_name, subtitle: subtitle || null, lines }
+  const alert = contractAlert(c.contract_mismatches, { forCompany: true })
+  return { title: c.company_name, subtitle: subtitle || null, ...(alert ? { alert } : {}), lines }
 }
 
 /** What a person card needs. */
@@ -104,8 +107,11 @@ export const PERSON_CARD_MAX_COMPANIES = 6
 /** More than this many amber findings are cut to "+ N more" so the card stays small. */
 export const PERSON_CARD_MAX_MISMATCHES = 4
 
-/** The amber block for a person's contract findings, in the same words as the amber note on the Contact page. */
-export function contractAlert(findings: ContractMismatch[] | undefined): CardAlert | undefined {
+/**
+ * The amber block for contract findings, in the same words as the amber note on the Contact page. On a COMPANY's card the company is
+ * already the title, so a block is named by its contract alone and a long list points at the company page.
+ */
+export function contractAlert(findings: ContractMismatch[] | undefined, options: { forCompany?: boolean } = {}): CardAlert | undefined {
   if (!findings || findings.length === 0) return undefined
   const heading = findings.every((f) => f.kind === 'differs')
     ? 'Contract amounts differ from the company'
@@ -113,14 +119,14 @@ export function contractAlert(findings: ContractMismatch[] | undefined): CardAle
       ? 'The company has no amounts to compare'
       : 'Check the contract amounts'
   const blocks = findings.slice(0, PERSON_CARD_MAX_MISMATCHES).map((f) => ({
-    title: `${f.company} · ${f.contract} contract`,
+    title: options.forCompany ? `${f.contract} contract` : `${f.company} · ${f.contract} contract`,
     lines: [
       `Contract says: ${f.contractAmounts}`,
       f.crmAmounts ? `Company in the CRM: ${f.crmAmounts}` : 'The company has no installment amounts saved in the CRM.',
     ],
   }))
   const more = findings.length - blocks.length
-  if (more > 0) blocks.push({ title: `+ ${more} more`, lines: ['Open the contact to see them.'] })
+  if (more > 0) blocks.push({ title: `+ ${more} more`, lines: [options.forCompany ? 'Open the company to see them.' : 'Open the contact to see them.'] })
   return { heading, blocks }
 }
 
