@@ -6,7 +6,7 @@
  * Pointing at a name shows the same little card as the Contacts list.
  */
 
-import { useState } from "react"
+import { useRef, useState } from "react"
 import type { LinkDto } from "@/lib/booking/links"
 import { callApi, dataOf, messageOf } from "@/components/booking/api"
 import { ListHoverCard } from "@/components/lists/hover-card"
@@ -27,6 +27,9 @@ function bookingClass(l: LinkDto): string {
   if (state === "booked_unchecked") return "text-amber-700"
   return "text-zinc-500"
 }
+
+/** a second click sooner than this after the first one is a double-click, not a confirmation */
+const SECOND_CLICK_MS = 700
 
 const BADGE = "rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-semibold text-zinc-700"
 const BTN = "rounded-md border px-2.5 py-1 text-xs font-medium disabled:opacity-50"
@@ -60,12 +63,28 @@ export function LinksMade({ links, error, off, onChanged, onMakeAgain }: { links
     setTimeout(() => setNote((n) => (n && n.id === l.id ? null : n)), 2200)
   }
 
+  const copyPay = async (l: LinkDto) => {
+    if (!l.pay) return
+    try {
+      await navigator.clipboard.writeText(l.pay.payUrl)
+      setNote({ id: l.id, text: "Payment link copied", bad: false })
+    } catch {
+      setNote({ id: l.id, text: "Could not copy. Select the link in the page and press Cmd+C.", bad: true })
+    }
+    setTimeout(() => setNote((n) => (n && n.id === l.id ? null : n)), 2200)
+  }
+
+  // a mouse double-click must not count as the deliberate second click ("Sure?" never read)
+  const armedAt = useRef(0)
+
   const stop = async (l: LinkDto) => {
     if (sure !== l.id) {
+      armedAt.current = Date.now()
       setSure(l.id)
       setTimeout(() => setSure((s) => (s === l.id ? null : s)), 4000)
       return
     }
+    if (Date.now() - armedAt.current < SECOND_CLICK_MS) return
     setBusy(l.id)
     setSure(null)
     try {
@@ -81,10 +100,12 @@ export function LinksMade({ links, error, off, onChanged, onMakeAgain }: { links
 
   const cancelCall = async (l: LinkDto) => {
     if (sureCancel !== l.id) {
+      armedAt.current = Date.now()
       setSureCancel(l.id)
       setTimeout(() => setSureCancel((s) => (s === l.id ? null : s)), 6000)
       return
     }
+    if (Date.now() - armedAt.current < SECOND_CLICK_MS) return
     setBusy(l.id)
     setSureCancel(null)
     setHandCancel(null)
@@ -139,10 +160,12 @@ export function LinksMade({ links, error, off, onChanged, onMakeAgain }: { links
                     <td className="border-b px-2.5 py-2 text-zinc-700">{madeText(l.madeAt)}</td>
                     <td className="border-b px-2.5 py-2">
                       <span className={`text-[12.5px] font-semibold ${bookingClass(l)}`} data-testid="link-what">{l.what}</span>
+                      {l.pay && <span className={`block text-xs font-semibold ${l.pay.state === "paid" ? "text-green-700" : l.pay.state === "not_charging" ? "text-zinc-500" : "text-amber-700"}`} data-testid="link-pay">{l.pay.text}</span>}
                       {note?.id === l.id && <span className={`mt-1 block max-w-[260px] text-xs font-semibold ${note.bad ? "text-red-700" : "text-green-700"}`} role={note.bad ? "alert" : "status"}>{note.text}</span>}
                       {handCancel?.id === l.id && <a href={handCancel.url} target="_blank" rel="noreferrer" className="mt-1 block text-xs font-semibold text-blue-700 underline" data-testid="hand-cancel">Open the booker&apos;s cancel page</a>}
                     </td>
                     <td className="whitespace-nowrap border-b px-2.5 py-2 text-right">
+                      {l.pay?.state === "unpaid" && booked && <button type="button" onClick={() => copyPay(l)} className={`mr-1.5 ${BTN}`} data-testid="copy-pay">Copy payment link</button>}
                       {booked && (
                         <>
                           {!l.once && <button type="button" onClick={() => copy(l)} className={`mr-1.5 ${BTN}`}>Copy</button>}

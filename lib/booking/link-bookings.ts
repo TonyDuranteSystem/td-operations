@@ -181,9 +181,9 @@ const CHECK_MAX = 25
 const CHECK_TIMEOUT_MS = 4_000
 
 /** Reads these bookings from Calendly (at most 25, all at once, each given 4 seconds). A booking Calendly could not answer for is `null`. Never throws. */
-export async function lookupEvents(ctx: CalendlyCtx, uris: string[]): Promise<Map<string, EventFacts | null>> {
+export async function lookupEvents(ctx: CalendlyCtx, uris: string[], max: number = CHECK_MAX): Promise<Map<string, EventFacts | null>> {
   const out = new Map<string, EventFacts | null>()
-  const wanted = Array.from(new Set(uris)).slice(0, CHECK_MAX)
+  const wanted = Array.from(new Set(uris)).slice(0, max)
   await Promise.all(
     wanted.map(async (uri) => {
       let timer: ReturnType<typeof setTimeout> | undefined

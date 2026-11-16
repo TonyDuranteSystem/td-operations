@@ -53,6 +53,8 @@ describe("while the page is OFF, no change and no send gets through any route", 
       for (const file of routeFiles) {
         for (const [method, fn] of await handlersOf(file)) {
           if (method === "GET") continue
+          // "Not charging" is the ONE exception: switching Booking off must never take away the way to stop a paid link's money (tested below)
+          if (file.endsWith(path.join("links", "[id]", "not-charging", "route.ts"))) continue
           const db: MiniDb = miniDb({ app_settings: settings, booking_links: [], call_checks: [], contacts: [], leads: [] })
           h.db = db
           const res = await fn(req(method, { person: { type: "new" }, kindSlug: "client", minutes: 45, answer: "dismiss", name: "X", choice: "record", rename: "Y" }), ctx)
@@ -64,9 +66,26 @@ describe("while the page is OFF, no change and no send gets through any route", 
         }
       }
       expect(fetchCalls).toBe(0)
-      expect(seen.length).toBe(7) // links POST, revoke POST, cancel-call POST, kinds POST, kinds PATCH, preview POST, checks answer POST
+      expect(seen.length).toBe(8) // links POST, revoke POST, cancel-call POST, sent POST, kinds POST, kinds PATCH, preview POST, checks answer POST (not-charging is exempt)
     })
   }
+  it("'Not charging' still works while the page is OFF (the switch does not stop a paid link that was already sent): staff only, and it only stops charging", async () => {
+    const { POST } = await import("../../app/api/booking/links/[id]/not-charging/route")
+    for (const [, settings] of OFF_SETTINGS) {
+      const link = { id: "d0000000-0000-4000-8000-000000000001", pay_amount_cents: 5000, pay_currency: "USD", pay_code: "A".repeat(22), paid_session_id: null, not_charging_at: null, stripe_session_id: null, sent_count: 0 }
+      const db: MiniDb = miniDb({ app_settings: settings, booking_links: [link] })
+      h.db = db
+      h.user = ROLES.team
+      const res = await POST(req("POST"), ctx)
+      expect(res.status).toBe(200)
+      expect(db.tables.booking_links[0].not_charging_at).toBeTruthy()
+      expect(fetchCalls).toBe(0)
+    }
+    // anyone who is not staff is still refused
+    h.user = ROLES.client
+    h.db = miniDb({ app_settings: [], booking_links: [] })
+    expect((await POST(req("POST"), ctx)).status).toBe(403)
+  })
   it("anyone who is not staff is still refused first (the ordinary 403, not the 'Turned off' answer), off or not, and nothing is read", async () => {
     for (const role of ["partner", "client", "marketing", "anonymous", "selfDeclaredAdmin", "selfDeclaredTeam", "unknownRole", "noRole"] as const) {
       h.user = ROLES[role]

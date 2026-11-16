@@ -1,6 +1,6 @@
 "use client"
 
-/** Booking page — "Make a link". Who is it for, what kind of call, how long, then the live "When it gets booked, the system will:" and the link. FREE links only. */
+/** Booking page — "Make a link". Who is it for, what kind of call, free or paid, how long, then the live "When it gets booked, the system will:" and the link. */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { KindDto } from "@/lib/booking/kinds-admin"
@@ -11,8 +11,9 @@ import { callApi, messageOf } from "@/components/booking/api"
 import type { MakeAgain } from "@/components/booking/booking-workspace"
 import { OFF_REASON } from "@/lib/booking/mode-text"
 
-type MadeLink = { id: string; publicId: string; url: string; email: string | null; language: "Italian" | "English" | null }
-type Preview = { ok: true; lines: PreviewLine[]; once: boolean; minutes: number; ready: boolean; template: "sales" | "plain"; autoTemplate: "sales" | "plain" } | { ok: false; errors: string[] }
+/** `paidText` is the price AS IT WAS when the link was made ("$397"), kept with the link: the form may be edited while the request is on its way. */
+type MadeLink = { id: string; publicId: string; url: string; email: string | null; language: "Italian" | "English" | null; paidText?: string | null }
+type Preview = { ok: true; lines: PreviewLine[]; once: boolean; minutes: number; ready: boolean; template: "sales" | "plain"; autoTemplate: "sales" | "plain"; needsConfirm?: boolean; paid?: boolean } | { ok: false; errors: string[] }
 type QuestionsAnswer = { questions: AllQuestions; editUrl: string }
 
 const QUESTION_CHOICES: Array<["auto" | "full" | "short", string]> = [["auto", "Let the system decide"], ["full", "The full questions"], ["short", "Just the short note"]]
@@ -73,6 +74,12 @@ export function LinkMaker({
   const [durPick, setDurPick] = useState("30")
   const [durOther, setDurOther] = useState("")
   const [firstOnly, setFirstOnly] = useState(true)
+  // free or paid (Stage 3): the price of a paid call
+  const [paid, setPaid] = useState(false)
+  const [amount, setAmount] = useState("")
+  const [currency, setCurrency] = useState<"USD" | "EUR">("USD")
+  const [payLabel, setPayLabel] = useState("")
+  const [confirmed, setConfirmed] = useState(false)
   const [questions, setQuestions] = useState<"auto" | "full" | "short">("auto")
   const [asked, setAsked] = useState<QuestionsAnswer | null>(null)
   const [askedError, setAskedError] = useState<string | null>(null)
@@ -91,7 +98,11 @@ export function LinkMaker({
 
   const minutes = parseMinutes(durPick, durOther)
   const standard = minutes === 30
-  const effectiveFirstOnly = minutes !== null && minutes !== 30 ? true : firstOnly
+  // a paid call is always a one-time link: a payment must belong to ONE booking
+  const effectiveFirstOnly = paid || (minutes !== null && minutes !== 30) ? true : firstOnly
+  /** what the server is told about the price; null = a free link */
+  const payment = useMemo(() => (paid ? { amount, currency, label: payLabel, confirmed } : null), [paid, amount, currency, payLabel, confirmed])
+  const priceMissing = paid && amount.trim() === ""
 
   const activeKinds = useMemo(() => (kinds ?? []).filter((k) => k.status === "active"), [kinds])
   const kindOk = activeKinds.some((k) => k.slug === kindSlug && k.ready)
@@ -133,21 +144,24 @@ export function LinkMaker({
 
   // the live preview, from the same rules the link will be made with
   useEffect(() => {
-    if (off || !personRef || !kindOk || minutes === null) { setPreview(null); setPreviewError(null); return }
+    if (off || !personRef || !kindOk || minutes === null || priceMissing) { setPreview(null); setPreviewError(null); return }
     let stop = false
     const t = setTimeout(async () => {
       try {
-        const r = await callApi<Preview>("/api/booking/preview", { method: "POST", body: { person: personRef, kindSlug, minutes, firstBookingOnly: effectiveFirstOnly, questions } }, "The preview could not be made. Try again.")
+        const r = await callApi<Preview>("/api/booking/preview", { method: "POST", body: { person: personRef, kindSlug, minutes, firstBookingOnly: effectiveFirstOnly, questions, payment } }, "The preview could not be made. Try again.")
         if (!stop) { setPreview(r); setPreviewError(null) }
       } catch (e) {
         if (!stop) { setPreview(null); setPreviewError(messageOf(e, "The preview could not be made. Try again.")) }
       }
     }, 300)
     return () => { stop = true; clearTimeout(t) }
-  }, [personRef, kindSlug, kindOk, minutes, effectiveFirstOnly, questions, off])
+  }, [personRef, kindSlug, kindOk, minutes, effectiveFirstOnly, questions, payment, priceMissing, off])
 
   // a different choice means the link shown above is no longer the one on screen
-  useEffect(() => { setMade(null); setError(null) }, [personRef, kindSlug, minutes, effectiveFirstOnly, questions])
+  useEffect(() => { setMade(null); setError(null) }, [personRef, kindSlug, minutes, effectiveFirstOnly, questions, payment])
+
+  // a new amount or currency means the "this amount is right" tick must be given again
+  useEffect(() => { setConfirmed(false) }, [amount, currency])
 
   const pickPerson = (h: PersonHit) => {
     setPicked({ type: h.type, id: h.id, name: h.name, sub: h.sub, badge: h.badge, suggestedKind: h.suggestedKind })
@@ -179,6 +193,11 @@ export function LinkMaker({
     if (DURATIONS.some(([v]) => v === String(m))) { setDurPick(String(m)); setDurOther("") } else { setDurPick("other"); setDurOther(String(m)) }
     setFirstOnly(again.once)
     setQuestions(again.asks ?? "auto")
+    // a paid link made again stays paid, with the same price (the tick for a large amount is given again on purpose)
+    setPaid(!!again.pay)
+    setAmount(again.pay?.amount ?? "")
+    setCurrency(again.pay?.currency ?? "USD")
+    setPayLabel(again.pay?.label ?? "")
     document.getElementById("make")?.scrollIntoView({ behavior: "smooth", block: "nearest" })
   }, [again])
 
@@ -187,15 +206,15 @@ export function LinkMaker({
     setMaking(true)
     setError(null)
     try {
-      const r = await callApi<{ link: MadeLink }>("/api/booking/links", { method: "POST", body: { person: personRef, kindSlug, minutes, firstBookingOnly: effectiveFirstOnly, questions } }, "The link could not be made. Try again.")
-      setMade(r.link)
+      const r = await callApi<{ link: MadeLink }>("/api/booking/links", { method: "POST", body: { person: personRef, kindSlug, minutes, firstBookingOnly: effectiveFirstOnly, questions, payment } }, "The link could not be made. Try again.")
+      setMade({ ...r.link, paidText: paid ? `${currency === "EUR" ? "€" : "$"}${amount.trim()}` : null })
       await onMade()
     } catch (e) {
       setError(messageOf(e, "The link could not be made. Try again."))
     } finally {
       setMaking(false)
     }
-  }, [personRef, kindOk, minutes, kindSlug, effectiveFirstOnly, questions, onMade])
+  }, [personRef, kindOk, minutes, kindSlug, effectiveFirstOnly, questions, payment, paid, currency, amount, onMade])
 
   const flash = (t: string) => { setCopied(t); setTimeout(() => setCopied((c) => (c === t ? null : c)), 1800) }
   const copy = async () => {
@@ -234,7 +253,9 @@ export function LinkMaker({
     }
   }
 
-  const canMake = !off && !!personRef && kindOk && minutes !== null && !!preview && preview.ok && preview.ready && !making && callTypesReady
+  const needsTick = !!preview && preview.ok === true && preview.needsConfirm === true
+  const canMake = !off && !!personRef && kindOk && minutes !== null && !priceMissing && !!preview && preview.ok && preview.ready && (!needsTick || confirmed) && !making && callTypesReady
+  const symbol = currency === "EUR" ? "€" : "$"
   const shownName = who === "old" ? picked?.name : newName.trim()
   const draft = made ? draftTexts(made.url, made.language) : null
 
@@ -314,6 +335,32 @@ export function LinkMaker({
           </details>
         </div>
 
+        {/* FREE OR PAID */}
+        <div data-testid="price-block">
+          <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-zinc-500">Free or paid?</span>
+          <div className="inline-flex overflow-hidden rounded-md border" role="group" aria-label="Free or paid">
+            {([[false, "Free"], [true, "Paid"]] as const).map(([k, label]) => (
+              <button key={label} type="button" aria-pressed={paid === k} onClick={() => setPaid(k)} className={`px-3 py-1.5 text-sm font-medium ${paid === k ? "bg-zinc-900 text-white" : "text-zinc-600 hover:bg-zinc-50"}`} data-testid={`price-${label.toLowerCase()}`}>{label}</button>
+            ))}
+          </div>
+          {paid && (
+            <div className="mt-2 grid gap-2" data-testid="price-fields">
+              <div className="grid grid-cols-[minmax(0,1fr)_96px] gap-2">
+                <input type="text" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Amount, for example 397" aria-label="Amount" className="rounded-md border px-3 py-2 text-sm" data-testid="pay-amount" />
+                <select value={currency} onChange={(e) => setCurrency(e.target.value === "EUR" ? "EUR" : "USD")} aria-label="Currency" className="rounded-md border bg-white px-2 py-2 text-sm" data-testid="pay-currency">
+                  <option value="USD">USD $</option>
+                  <option value="EUR">EUR €</option>
+                </select>
+              </div>
+              <input type="text" value={payLabel} onChange={(e) => setPayLabel(e.target.value)} maxLength={80} placeholder="What it is for (optional), for example Strategic call" aria-label="What the payment is for" className="rounded-md border px-3 py-2 text-sm" data-testid="pay-label" />
+              {needsTick && (
+                <label className="flex items-center gap-2 text-sm font-semibold text-amber-900"><input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} data-testid="pay-confirm" /> Yes, {symbol}{amount.trim()} is the right amount</label>
+              )}
+              <p className="text-xs text-zinc-500">The person books a time first, then pays by card on our own page. A card in Calls to check lets you send or copy the payment link.</p>
+            </div>
+          )}
+        </div>
+
         {/* LENGTH */}
         <div>
           <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-zinc-500">How long?</span>
@@ -324,15 +371,15 @@ export function LinkMaker({
           </div>
           {durPick === "other" && <input type="text" inputMode="numeric" value={durOther} onChange={(e) => setDurOther(e.target.value)} placeholder="Minutes, for example 90" aria-label="Minutes" className="mt-2 w-full rounded-md border px-3 py-2 text-sm" data-testid="minutes-other" />}
           <p className="mt-1.5 text-xs text-zinc-500">
-            {minutes === null ? "Type a number of minutes from 1 to 720." : standard ? "30 minutes is the standard length. Any other length makes a one-time link." : `Made as a one-time Calendly link of ${lengthWords(minutes)}. Calendly closes it after the first booking, even if that booking is cancelled, so you would make a new link.`}
+            {minutes === null ? "Type a number of minutes from 1 to 720." : standard && !paid ? "30 minutes is the standard length. Any other length makes a one-time link." : `Made as a one-time Calendly link of ${lengthWords(minutes)}. Calendly closes it after the first booking, even if that booking is cancelled, so you would make a new link.`}
           </p>
         </div>
 
         {/* USE */}
         <div className="grid gap-1.5">
-          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={effectiveFirstOnly} disabled={minutes !== 30} onChange={(e) => setFirstOnly(e.target.checked)} data-testid="first-only" /> Attach to the first booking only</label>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={effectiveFirstOnly} disabled={minutes !== 30 || paid} onChange={(e) => setFirstOnly(e.target.checked)} data-testid="first-only" /> Attach to the first booking only</label>
           <p className="text-xs text-zinc-500">
-            {minutes !== 30 ? "A link with its own length is closed by Calendly after one booking." : effectiveFirstOnly ? "A standard 30-minute link cannot be closed by Calendly, so a later booking on it is saved as usual and a card asks you." : "The link stays open: every booking on it is attached the same way."} Their name and email are filled in by us when they open the link; they never appear in the link you send.
+            {paid ? "A paid link is closed by Calendly after one booking, so the payment belongs to one call." : minutes !== 30 ? "A link with its own length is closed by Calendly after one booking." : effectiveFirstOnly ? "A standard 30-minute link cannot be closed by Calendly, so a later booking on it is saved as usual and a card asks you." : "The link stays open: every booking on it is attached the same way."} Their name and email are filled in by us when they open the link; they never appear in the link you send.
           </p>
         </div>
 
@@ -359,7 +406,7 @@ export function LinkMaker({
             </ul>
           )}
           {preview && preview.ok === false && <ul className="grid gap-1 text-sm text-red-700" role="alert">{preview.errors.map((e) => <li key={e}>{e}</li>)}</ul>}
-          {!preview && !previewError && <p className="text-sm text-zinc-500">{off ? "Turned off. Nothing is live yet." : !personRef ? "Choose who it is for." : !kindOk ? "Choose what kind of call it is." : minutes === null ? "Choose how long it is." : "…"}</p>}
+          {!preview && !previewError && <p className="text-sm text-zinc-500">{off ? "Turned off. Nothing is live yet." : !personRef ? "Choose who it is for." : !kindOk ? "Choose what kind of call it is." : minutes === null ? "Choose how long it is." : priceMissing ? "Type the amount." : "…"}</p>}
         </div>
 
         {/* MAKE + THE LINK */}
@@ -370,7 +417,7 @@ export function LinkMaker({
             <div className="grid gap-2.5 rounded-lg bg-zinc-100 p-3.5" aria-live="polite" data-testid="made-link">
               <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Your link</span>
               <div className="break-all text-sm font-semibold" data-testid="made-url">{made.url}</div>
-              <p className="text-xs text-zinc-500">For {shownName || "someone new"} · {lengthWords(minutes ?? 30)} · {effectiveFirstOnly ? "first booking only" : "every booking"}. Nothing personal is in the link you send, only a random id.</p>
+              <p className="text-xs text-zinc-500">For {shownName || "someone new"} · {lengthWords(minutes ?? 30)} · {made.paidText ? `paid ${made.paidText} · ` : ""}{effectiveFirstOnly ? "first booking only" : "every booking"}. Nothing personal is in the link you send, only a random id.</p>
               <div className="flex flex-wrap items-center gap-2">
                 <button type="button" onClick={copy} className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white" data-testid="copy-link">Copy link</button>
                 {draft && <a href={`mailto:${made.email ?? ""}?subject=${encodeURIComponent(draft.subject)}&body=${encodeURIComponent(draft.body)}`} className="rounded-md border bg-white px-3 py-1.5 text-sm font-medium">Email it</a>}
