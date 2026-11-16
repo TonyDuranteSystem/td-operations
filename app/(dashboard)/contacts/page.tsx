@@ -8,6 +8,7 @@ import { listYearOptions, parseListYear } from '@/lib/crm-lists/year'
 import { getColumnPref } from '@/lib/crm-lists/prefs'
 import { resolveColumns } from '@/lib/crm-lists/columns'
 import { formatListDate } from '@/lib/crm-lists/format'
+import { contactMatchesSearch } from '@/lib/crm-lists/search-match'
 import { contactsWithPassportFile, passportOnFile } from '@/lib/contacts/passport-on-file'
 import { pickMainContacts, type AccountContactLink } from '@/lib/crm-lists/people'
 import { loadContractMismatchesForPeople } from '@/lib/signed-contracts/load'
@@ -37,11 +38,10 @@ export default async function ContactsPage({
   const years = listYearOptions(yearsWithInvoices, defaultYear)
   const year = parseListYear(searchParams.year, years, defaultYear)
 
-  // 1. Every person that matches the search, in name order.
-  const people = await fetchAllRows((from, to) => {
-    let q = supabase.from('contacts').select('id, full_name, email').order('full_name', { ascending: true }).order('id', { ascending: true }).range(from, to)
+  // 1. Every person, in name order (the search below is applied once we know their companies).
+  const everyone = await fetchAllRows((from, to) => {
+    let q = supabase.from('contacts').select('id, full_name, email, phone').order('full_name', { ascending: true }).order('id', { ascending: true }).range(from, to)
     if (statusFilter && statusFilter !== 'all') q = q.eq('status', statusFilter)
-    if (query) q = q.or(`full_name.ilike.%${query}%,email.ilike.%${query}%`)
     return q
   })
 
@@ -67,6 +67,8 @@ export default async function ContactsPage({
   }
   for (const list of Array.from(companiesByContact.values())) list.sort((x, y) => x.company_name.localeCompare(y.company_name))
 
+  // The search matches the same things the search dropdown shows: a person's name, email or phone, or the name of one of their companies.
+  const people = query ? everyone.filter(p => contactMatchesSearch(query, p, (companiesByContact.get(p.id) ?? []).map(c => c.company_name))) : everyone
   const withCompanies = people.map(p => ({ ...p, companies: companiesByContact.get(p.id) ?? [] }))
   // The letter is one more filter: the Companies counts follow it, and the letter buttons' own counts follow the other filters.
   const letterCountsForView = letterCounts(withCompanies.filter(p => contactMatches(p.companies.map(c => c.filter), filters)).map(p => p.full_name))

@@ -16,6 +16,7 @@ import { LISTS_CONTAINER, ListStyles } from '@/components/lists/list-styles'
 import { YearSelect } from '@/components/lists/year-select'
 import { ListHoverCard } from '@/components/lists/hover-card'
 import { ListSearchBox } from '@/components/lists/list-search-box'
+import { classifyIncomingQuery } from '@/lib/crm-lists/search-dropdown'
 import { MessageContactButton } from '@/components/contacts/message-contact-button'
 import { isChatClosedStatus } from '@/lib/portal/document-share-text'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
@@ -79,16 +80,24 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
   const overdueParam = overdueOnly ? '1' : ''
   const lastFiltersRef = useRef<Record<FilterKey, string>>({ q: query, status: statusFilter, kind: kindFilter, type: typeFilter, overdue: overdueParam, letter, year: yearParam })
 
+  // Every search text we sent while typing (see handleLiveSearch): a slow answer to an EARLIER keystroke must not overwrite the box.
+  const sentQsRef = useRef<Set<string>>(new Set())
+
   // Resync when the URL changed for a reason OTHER than our own action —
   // browser back/forward, or a link elsewhere setting these params. See
   // leads-table.tsx for why this is guarded on the ref, not a plain
   // "prop changed" check.
   useEffect(() => {
     const last = lastFiltersRef.current
-    if (query !== last.q || statusFilter !== last.status || kindFilter !== last.kind || typeFilter !== last.type || overdueParam !== last.overdue || letter !== last.letter || yearParam !== last.year) {
-      lastFiltersRef.current = { q: query, status: statusFilter, kind: kindFilter, type: typeFilter, overdue: overdueParam, letter, year: yearParam }
-      setSearch(query)
+    const othersChanged = statusFilter !== last.status || kindFilter !== last.kind || typeFilter !== last.type || overdueParam !== last.overdue || letter !== last.letter || yearParam !== last.year
+    if (!othersChanged) {
+      const kind = classifyIncomingQuery(query, last.q, sentQsRef.current)
+      if (kind === 'settled') { sentQsRef.current.clear(); return }
+      if (kind === 'stale-echo') return // an old answer to something typed a moment ago — keep what is in the box now
     }
+    lastFiltersRef.current = { q: query, status: statusFilter, kind: kindFilter, type: typeFilter, overdue: overdueParam, letter, year: yearParam }
+    sentQsRef.current.clear()
+    setSearch(query)
   }, [query, statusFilter, kindFilter, typeFilter, overdueParam, letter, yearParam])
 
   function buildParams(overridesParams: Record<string, string> = {}) {
@@ -115,6 +124,7 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
 
   function updateFilter(key: FilterKey, value: string) {
     lastFiltersRef.current = { ...lastFiltersRef.current, [key]: value }
+    if (key === 'q') sentQsRef.current.add(value)
     startTransition(() => {
       router.push(`/accounts?${buildParams({ [key]: value, page: '1' })}`)
     })
@@ -123,6 +133,18 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
   function goToPage(page: number) {
     startTransition(() => {
       router.push(`/accounts?${buildParams({ page: String(page) })}`)
+    })
+  }
+
+  // The list follows what is typed once typing pauses (the search box calls this): same filter as pressing Enter, but it REPLACES the
+  // address instead of adding to the Back history for every pause.
+  function handleLiveSearch(typed: string) {
+    const v = typed.trim()
+    if (v === lastFiltersRef.current.q) return
+    lastFiltersRef.current = { ...lastFiltersRef.current, q: v }
+    sentQsRef.current.add(v)
+    startTransition(() => {
+      router.replace(`/accounts?${buildParams({ q: v, page: '1' })}`)
     })
   }
 
@@ -166,7 +188,7 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
     <div className="space-y-4">
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3">
-        <ListSearchBox kind="account" value={search} onChange={handleSearchChange} onSubmit={handleSearch} placeholder="Search company..." />
+        <ListSearchBox kind="account" value={search} onChange={handleSearchChange} onSubmit={handleSearch} onLive={handleLiveSearch} placeholder="Search company or person..." />
         <div className="ml-auto flex items-center gap-2">
           <ColumnsMenu list="accounts" selected={columns} always="Company, 1st Inst, 2nd Inst, Per year" />
           <button
