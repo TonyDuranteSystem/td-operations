@@ -1,0 +1,18 @@
+{
+  "title": "Start a new company",
+  "tag": "new",
+  "text": "When the state refuses a company's name after the company already exists, the Wizard card on the Contact page now has a \"Start a new company\" button. A pop-up shows which company is replaced, what will happen and the client's message (in their language, editable). When you confirm, a new formation opens for the same person on the same paid offer, with nothing charged again, and the client's wizard reopens with the company names cleared. The old company is cancelled and closed, and the payment part that waits for the EIN now follows the new company. A company with unpaid invoices or an office lease is left alone, and the pop-up says why.",
+  "points": [
+    "Open a Contact page and look for \"Start a new company\" in the Wizard card",
+    "Pressing the blue button sends the message you read in the pop-up to the client",
+    "Pressing again on the same company finishes an earlier attempt and does not send the message twice"
+  ],
+  "stepsTitle": "What happens when you press it",
+  "steps": [
+    { "name": "Press the button", "detail": "In the Wizard card on the Contact page. A pop-up shows the company and what will happen." },
+    { "name": "A new formation opens", "detail": "Same person, same paid offer, nothing charged again. The client's wizard reopens with the names cleared.", "flag": "new" },
+    { "name": "The old company closes", "detail": "Its formation job, open to-dos and upcoming deadlines are cancelled and the company is marked Closed.", "flag": "auto" },
+    { "name": "The client is told", "detail": "Your message goes into their portal chat, with a notification that opens the wizard.", "flag": "auto" },
+    { "name": "The payment follows", "detail": "The part that waits for the EIN is now counted from the new company's formation.", "flag": "auto" }
+  ]
+}
