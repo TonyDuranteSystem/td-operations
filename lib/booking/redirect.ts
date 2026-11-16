@@ -20,6 +20,7 @@ import { buildDestination } from "@/lib/booking-links/destination"
 import { isMissingTable } from "@/lib/booking-links/missing-table"
 import { loadTemplates, templateFor } from "@/lib/booking/templates"
 import { linkStatusOf } from "@/lib/booking/links"
+import { isPaidLink, payUrl } from "@/lib/booking/payment"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic service client
 type Db = any
@@ -48,16 +49,20 @@ export async function decideRedirect(db: Db, rawId: unknown, opts: { now: Date; 
 
   let stored: string | null = null
   try {
-    const { data, error } = await db.from("booking_links").select("share_url, template_slug, person_name, person_emails").eq("id", row.id).maybeSingle()
+    const { data, error } = await db.from("booking_links").select("share_url, template_slug, person_name, person_emails, pay_code, pay_amount_cents, pay_currency").eq("id", row.id).maybeSingle()
     if (error) return isMissingTable(error) ? plain : { kind: "retry" }
     if (!data) return plain
-    let base: string | null = typeof data.share_url === "string" && data.share_url ? data.share_url : null
-    if (!base) {
-      const role = data.template_slug === "sales" ? "sales" : data.template_slug === "plain" ? "plain" : null
-      base = role ? templateFor(await loadTemplates(db), role)?.schedulingUrl ?? null : null
+    // A PAID link never goes to Calendly's page: the person books and pays on OUR page (lib/booking/book-and-pay.ts).
+    if (isPaidLink(data)) stored = payUrl(data.pay_code as string)
+    let base: string | null = stored ? null : typeof data.share_url === "string" && data.share_url ? data.share_url : null
+    if (!stored) {
+      if (!base) {
+        const role = data.template_slug === "sales" ? "sales" : data.template_slug === "plain" ? "plain" : null
+        base = role ? templateFor(await loadTemplates(db), role)?.schedulingUrl ?? null : null
+      }
+      const email = Array.isArray(data.person_emails) && data.person_emails.length ? String(data.person_emails[0]) : null
+      stored = base ? buildDestination(base, { linkId: row.public_id, name: (data.person_name as string | null) ?? null, email }) : null
     }
-    const email = Array.isArray(data.person_emails) && data.person_emails.length ? String(data.person_emails[0]) : null
-    stored = base ? buildDestination(base, { linkId: row.public_id, name: (data.person_name as string | null) ?? null, email }) : null
   } catch {
     return { kind: "retry" }
   }

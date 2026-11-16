@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { decideLinkPlan, parseMinutes, recorderFor, payModeFor, type LinkPlanInput, type LinkPlanResult } from "@/lib/booking/plan"
+import { decideLinkPlan, parseMinutes, recorderFor, payModeFor, PAID_LENGTH_TEXT, type LinkPlanInput, type LinkPlanResult } from "@/lib/booking/plan"
 import type { KindRule } from "@/lib/booking/kinds"
 
 const META = {
@@ -82,7 +82,7 @@ describe("template (derived, never chosen)", () => {
 
 describe("money", () => {
   const paid = (amount: unknown, currency: unknown = "USD", person: LinkPlanInput["person"] = { state: "new" }) =>
-    plan({ person, kind: kind("lead"), minutes: 45, payment: { amount, currency } })
+    plan({ person, kind: kind("lead"), minutes: 30, payment: { amount, currency } })
   it("uses the same amount parser as the CRM payment-link maker", () => {
     const r = paid("397.50")
     expect(r.ok && r.plan.payment?.amountCents).toBe(39750)
@@ -103,7 +103,7 @@ describe("money", () => {
   it("a typo like 3970 for 397 asks for a confirmation tick (above 2,000)", () => {
     const r = paid("3970")
     expect(r.ok && r.needsConfirm).toBe(true)
-    const r2 = plan({ minutes: 45, payment: { amount: "3970", currency: "USD", confirmed: true } })
+    const r2 = plan({ minutes: 30, payment: { amount: "3970", currency: "USD", confirmed: true } })
     expect(r2.ok && r2.needsConfirm).toBe(false)
     const r3 = paid("397")
     expect(r3.ok && r3.needsConfirm).toBe(false)
@@ -116,16 +116,30 @@ describe("money", () => {
     expect(payModeFor({ state: "contact" })).toBe("revenue_only")
   })
   it("the pay mode is carried by the plan", () => {
-    const r = plan({ person: { state: "contact", established: true }, kind: kind("client"), minutes: 45, payment: { amount: "300", currency: "USD" } })
+    const r = plan({ person: { state: "contact", established: true }, kind: kind("client"), minutes: 30, payment: { amount: "300", currency: "USD" } })
     expect(r.ok && r.plan.payment).toMatchObject({ amountCents: 30000, currency: "USD", payMode: "revenue_only" })
   })
   it("a paid link cannot use a kind that saves nothing", () => {
-    const r = plan({ person: { state: "new" }, kind: kind("private"), minutes: 45, payment: { amount: "100", currency: "USD" } })
+    const r = plan({ person: { state: "new" }, kind: kind("private"), minutes: 30, payment: { amount: "100", currency: "USD" } })
     expect(r.ok).toBe(false)
     expect(errorsOf(r).join(" ")).toMatch(/saves nothing/)
   })
   it("a payment description over 80 characters is refused", () => {
-    expect(plan({ minutes: 45, payment: { amount: "100", currency: "USD", label: "x".repeat(81) } }).ok).toBe(false)
+    expect(plan({ minutes: 30, payment: { amount: "100", currency: "USD", label: "x".repeat(81) } }).ok).toBe(false)
+  })
+  it("a paid call is 30 minutes for now (it is booked on our own page through Calendly's booking service, which books the call type's own length)", () => {
+    for (const minutes of [45, 60, 90, "120"]) {
+      const r = plan({ minutes, payment: { amount: "100", currency: "USD" } })
+      expect(r.ok, String(minutes)).toBe(false)
+      expect(errorsOf(r).join(" ")).toBe(PAID_LENGTH_TEXT)
+    }
+    expect(plan({ minutes: 45 }).ok).toBe(true) // a FREE call keeps any length
+  })
+  it("a paid call always asks the plain call type (our page asks only a name and an email), whatever was chosen for the questions", () => {
+    for (const questions of [undefined, "auto", "full", "short"] as const) {
+      expect(okPlan({ minutes: 30, questions, payment: { amount: "100", currency: "USD" } }).template, String(questions)).toBe("plain")
+    }
+    expect(okPlan({ person: { state: "new" }, kind: kind("lead"), minutes: 30, questions: "full" }).template).toBe("sales") // free calls are unchanged
   })
 })
 
