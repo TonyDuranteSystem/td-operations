@@ -102,10 +102,11 @@ function errorForStatus(status: number): CalendlyError {
  * Sends one request to the Calendly API. `path` must start with "/" and is joined to the API base here; it is built by the callers in this folder from fixed
  * words and a checked uuid, never from stored text. Returns the parsed JSON body of a 2xx answer. Throws CalendlyError otherwise (status code only).
  */
-export async function calendlyRequest(ctx: CalendlyCtx, method: "GET" | "POST", path: string, body?: unknown): Promise<unknown> {
+export async function calendlyRequest(ctx: CalendlyCtx, method: "GET" | "POST", path: string, body?: unknown, query?: Record<string, string>): Promise<unknown> {
   if (!ctx.token) throw new CalendlyError("not_configured", null, "Calendly is not connected on this server (no key set).")
   if (!path.startsWith("/") || path.includes("..") || path.includes("//") || /[\s?#]/.test(path)) throw new CalendlyError("bad_request", null, "The Calendly address was not valid.")
-  const url = `${CALENDLY_API}${path}`
+  // the query is built from fixed keys and values the callers have checked; it is encoded here, never pasted into the path
+  const url = `${CALENDLY_API}${path}${query && Object.keys(query).length ? `?${new URLSearchParams(query).toString()}` : ""}`
   let res: CalendlyHttpResponse
   try {
     res = await ctx.http({
@@ -175,6 +176,8 @@ export interface CalendlyEventTypeFacts {
   durationMinutes: number | null
   /** the questions the booker sees, in Calendly's order; a switched-off question is left out */
   questions: CalendlyQuestion[]
+  /** where the call happens, as Calendly names the kinds ("zoom_conference", "google_conference", "physical", ...); in Calendly's order */
+  locationKinds: string[]
 }
 
 /** The enabled questions of an event type. Anything that is not a readable list gives none. */
@@ -199,5 +202,29 @@ export async function getEventType(ctx: CalendlyCtx, eventTypeUriText: string): 
     schedulingUrl: str(r.scheduling_url),
     durationMinutes: typeof r.duration === "number" && Number.isFinite(r.duration) ? r.duration : null,
     questions: questionsOf(r.custom_questions),
+    locationKinds: Array.isArray(r.locations) ? r.locations.map((l) => (isRec(l) ? str(l.kind) : null)).filter((k): k is string => !!k) : [],
   }
+}
+
+/**
+ * The free times of one event type between two moments (Calendly: at most 31 days apart, the start not in the past). Returns the start of each free time as an ISO
+ * text in UTC, earliest first. Only a time Calendly calls "available" is kept.
+ */
+export async function listAvailableTimes(ctx: CalendlyCtx, eventTypeUriText: string, range: { start: Date; end: Date }): Promise<string[]> {
+  const uuid = eventTypeUuidOf(eventTypeUriText)
+  if (!uuid) throw new CalendlyError("bad_request", null, "That Calendly event address was not valid.")
+  const json = await calendlyRequest(ctx, "GET", "/event_type_available_times", undefined, {
+    event_type: eventTypeUri(uuid),
+    start_time: range.start.toISOString(),
+    end_time: range.end.toISOString(),
+  })
+  const list = isRec(json) && Array.isArray(json.collection) ? json.collection : null
+  if (!list) throw new CalendlyError("bad_response", 200, "Calendly answered something we could not read.")
+  const out: string[] = []
+  for (const t of list) {
+    if (!isRec(t) || t.status !== "available") continue
+    const s = str(t.start_time)
+    if (s && Number.isFinite(Date.parse(s))) out.push(new Date(s).toISOString())
+  }
+  return Array.from(new Set(out)).sort()
 }

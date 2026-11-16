@@ -48,6 +48,10 @@ export interface PayRow {
   person_emails: string[] | null
   claimed_event_uri: string | null
   revoked_at: string | null
+  /** open | claimed (a time is booked) — read by the book-and-pay page; absent in older fixtures */
+  status?: string | null
+  expires_at?: string | null
+  duration_minutes?: number | null
   pay_amount_cents: number | null
   pay_currency: string | null
   pay_label: string | null
@@ -61,7 +65,7 @@ export interface PayRow {
 }
 
 const PAY_COLUMNS =
-  "id, public_id, contact_id, lead_id, person_name, person_emails, claimed_event_uri, revoked_at, pay_amount_cents, pay_currency, pay_label, pay_mode, pay_code, stripe_session_id, session_expires_at, session_claim_at, paid_session_id, not_charging_at"
+  "id, public_id, contact_id, lead_id, person_name, person_emails, claimed_event_uri, revoked_at, status, expires_at, duration_minutes, pay_amount_cents, pay_currency, pay_label, pay_mode, pay_code, stripe_session_id, session_expires_at, session_claim_at, paid_session_id, not_charging_at"
 
 export type PayLookup = { state: "found"; row: PayRow } | { state: "none" } | { state: "error" }
 
