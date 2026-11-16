@@ -220,7 +220,7 @@ _Regenerated 2026-11-16. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [payment-plans.md](payment-plans.md) — Payment plans (a setup fee paid in parts) and the Calendar's "Invoices to raise" _(verified 2026-11-11)_
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_
 - [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-10-18)_
-- [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-11-15)_
+- [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-11-16)_
 - [portal-translation.md](portal-translation.md) — Portal Translation (any-language AI translation) _(verified 2026-09-23)_
 - [portal.md](portal.md) — Client Portal _(verified 2026-11-13)_
 - [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-11-12)_
