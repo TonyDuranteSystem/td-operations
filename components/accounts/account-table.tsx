@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useEffect, useRef, useState, useTransition } from 'react'
-import { AlertCircle, ChevronLeft, ChevronRight, Plus, X } from 'lucide-react'
+import { AlertCircle, ChevronLeft, ChevronRight, Plus, TriangleAlert, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { AccountListItem } from '@/lib/types'
 import { CreateAccountDialog } from './create-account-dialog'
@@ -68,6 +68,12 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
   const [isPending, startTransition] = useTransition()
   const [showCreate, setShowCreate] = useState(false)
   const { overrides, apply } = useAmountOverrides(items)
+  // A saved amount can end the amber (the company now matches its signed contract): ask the server for the page again so the check is
+  // run again with the saved amounts, and the amber goes away by itself — there is no button to dismiss it (Antonio 2026-11-15).
+  const afterSave: typeof apply = saved => {
+    apply(saved)
+    router.refresh()
+  }
   const yearParam = year === defaultYear ? '' : String(year)
   // The filter values we've actually told the server about — updated
   // synchronously the instant we act, NOT after the async navigation
@@ -298,7 +304,19 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
                   <div className="col-span-3 min-w-0 md:col-span-1">
                     <div className="flex items-center gap-1.5 font-medium text-sm">
                       <ListHoverCard card={companyCard(item, year)} className="min-w-0 max-w-full">
-                        <Link href={`/accounts/${item.id}`} className="truncate hover:underline" onClick={e => e.stopPropagation()}>
+                        {/* Amber when a signed contract does not match this company's installment amounts (Antonio 2026-11-15): the card on hover says which. */}
+                        <Link
+                          href={`/accounts/${item.id}`}
+                          className={cn('truncate hover:underline', item.contract_mismatches.length > 0 && 'text-amber-700')}
+                          data-testid={item.contract_mismatches.length > 0 ? 'contract-mismatch-name' : undefined}
+                          onClick={e => e.stopPropagation()}
+                        >
+                          {item.contract_mismatches.length > 0 && (
+                            <>
+                              <TriangleAlert className="mr-1 inline h-3.5 w-3.5 -translate-y-px text-amber-600" aria-hidden="true" />
+                              <span className="sr-only">Check the contract amounts: </span>
+                            </>
+                          )}
                           {item.company_name}
                         </Link>
                       </ListHoverCard>
@@ -344,7 +362,7 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
                       locked={locked}
                       updatedAt={updatedAt}
                       chip={item.chip_1}
-                      onSaved={apply}
+                      onSaved={afterSave}
                     />
                   </div>
 
@@ -359,7 +377,7 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
                       locked={locked}
                       updatedAt={updatedAt}
                       chip={item.chip_2}
-                      onSaved={apply}
+                      onSaved={afterSave}
                     />
                   </div>
 

@@ -15,8 +15,7 @@
  */
 
 import { useMemo } from 'react'
-import { OpenInWindowLink } from '@/components/windows/open-in-window-link'
-import { chatWindowHref, chatWindowTitle } from '@/lib/windows/chat-window'
+import Link from 'next/link'
 import { useQuery } from '@tanstack/react-query'
 import { Sparkles, ListTodo, GitBranch, ArrowRight, Loader2 } from 'lucide-react'
 import { HelpDot } from '@/components/help/help-dot'
@@ -28,19 +27,18 @@ interface WorkflowTask { id: string; task_title: string; status: string; workflo
 export function EntityActivitySummary({
   accountId,
   contactId,
-  name,
 }: {
   accountId?: string | null
   contactId?: string | null
-  /** the person's or company's name, for the floating window's title */
-  name?: string | null
 }) {
   const scope = accountId ? `account_id=${accountId}` : contactId ? `contact_id=${contactId}` : null
   const scopeKey = accountId ?? contactId ?? null
-  // Deep-link to the portal-chats thread where these items are acted on. It opens as a floating window when windows are available
-  // (a plain click), and as the ordinary page otherwise (Cmd/Ctrl-click, a narrow screen, windows off).
-  const threadHref = chatWindowHref({ accountId, contactId })
-  const windowTitle = chatWindowTitle(name)
+  // Deep-link to the portal-chats thread where these items are acted on.
+  const threadHref = accountId
+    ? `/portal-chats?account=${accountId}`
+    : contactId
+      ? `/portal-chats?contact=${contactId}`
+      : '/portal-chats'
 
   const { data: notes, isLoading: lN } = useQuery<WhatsNewNote[]>({
     queryKey: ['entity-summary-whatsnew', scopeKey],
@@ -86,9 +84,9 @@ export function EntityActivitySummary({
           Activity &amp; to-dos
           <HelpDot helpKey="widget.activity" />
         </h3>
-        <OpenInWindowLink href={threadHref} title={windowTitle} className="flex items-center gap-1 text-[11px] font-medium text-violet-700 hover:text-violet-900">
+        <Link href={threadHref} className="flex items-center gap-1 text-[11px] font-medium text-violet-700 hover:text-violet-900">
           Open in chat <ArrowRight className="h-3 w-3" />
-        </OpenInWindowLink>
+        </Link>
       </div>
 
       {loading ? (
@@ -102,7 +100,6 @@ export function EntityActivitySummary({
             label="What's New"
             count={unhandledNotes.length}
             href={threadHref}
-            title={windowTitle}
             rows={unhandledNotes.slice(0, 3).map((n) => ({ id: n.id, text: n.text }))}
           />
           <Section
@@ -110,7 +107,6 @@ export function EntityActivitySummary({
             label="To-Do"
             count={todos?.length ?? 0}
             href={threadHref}
-            title={windowTitle}
             rows={(todos ?? []).slice(0, 3).map((t) => ({ id: t.id, text: t.label || '(no description)' }))}
           />
           <Section
@@ -118,7 +114,6 @@ export function EntityActivitySummary({
             label="Workflow"
             count={openTasks.length}
             href={threadHref}
-            title={windowTitle}
             rows={openTasks.slice(0, 3).map((t) => ({ id: t.id, text: t.task_title }))}
           />
         </div>
@@ -132,14 +127,12 @@ function Section({
   label,
   count,
   href,
-  title,
   rows,
 }: {
   icon: React.ReactNode
   label: string
   count: number
   href: string
-  title: string
   rows: Array<{ id: string; text: string }>
 }) {
   if (count === 0) return null
@@ -153,12 +146,12 @@ function Section({
       <ul className="space-y-0.5 pl-5">
         {rows.map((r) => (
           <li key={r.id} className="text-xs text-zinc-600 truncate">
-            <OpenInWindowLink href={href} title={title} className="hover:text-violet-700 hover:underline">{r.text}</OpenInWindowLink>
+            <Link href={href} className="hover:text-violet-700 hover:underline">{r.text}</Link>
           </li>
         ))}
         {count > rows.length && (
           <li className="text-[11px] text-zinc-400">
-            <OpenInWindowLink href={href} title={title} className="hover:text-violet-700">+{count - rows.length} more…</OpenInWindowLink>
+            <Link href={href} className="hover:text-violet-700">+{count - rows.length} more…</Link>
           </li>
         )}
       </ul>
