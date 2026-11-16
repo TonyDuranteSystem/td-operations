@@ -216,7 +216,7 @@ _Regenerated 2026-11-16. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [offers.md](offers.md) — Offers & Contracts _(verified 2026-11-14)_
 - [onboarding.md](onboarding.md) — Onboarding _(verified 2026-11-13)_
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-22)_
-- [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-11-06)_
+- [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-11-16)_
 - [payment-plans.md](payment-plans.md) — Payment plans (a setup fee paid in parts) and the Calendar's "Invoices to raise" _(verified 2026-11-11)_
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_
 - [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-10-18)_
