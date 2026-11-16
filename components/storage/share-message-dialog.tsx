@@ -127,6 +127,7 @@ export function ShareMessageDialog({ fileNames = [], ctx, note, onResult, mode =
             {target?.kind === 'company' && <p className="mt-1.5 text-[11px] text-amber-700">Visible to everyone in {target.label}.</p>}
           </div>
           {ctx.notice && <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">{ctx.notice}</p>}
+          {ctx.info && <p className="rounded-md bg-zinc-50 px-3 py-2 text-xs text-zinc-600">{ctx.info}</p>}
 
           {target?.kind === 'company' && members.length > 1 && (
             <div>

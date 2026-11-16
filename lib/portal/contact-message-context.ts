@@ -11,7 +11,8 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { resolveDocLocale } from "@/lib/portal/document-alerts"
 import { buildShareTargets } from "@/lib/portal/document-share-message"
 import { contactMessageNotice, type PortalLoginState, type ShareContext } from "@/lib/portal/document-share-text"
-import { findAuthUserByEmail } from "@/lib/auth-admin-helpers"
+import { listAllAuthUsers } from "@/lib/auth-admin-helpers"
+import { isMarketingRole } from "@/lib/auth/role-door"
 
 /**
  * Pure: a person's portal login state from their auth user (null = no login). A login is "suspended" when its auth user is
@@ -23,14 +24,33 @@ export function portalLoginStateOf(authUser: { banned_until?: string | null } | 
   return { exists: true, suspended: !!bannedUntil && new Date(bannedUntil) > now }
 }
 
+/** The slice of an auth login these checks need. */
+export interface LoginLike { email?: string | null; banned_until?: string | null; app_metadata?: { contact_id?: string; role?: string } | null }
+
 /**
- * The amber "cannot read it yet" line for this person, worked out when the pop-up OPENS (not per list row). If the login cannot
+ * Pure: one person's portal login state. A client login is tied to a person by `app_metadata.contact_id`, NOT by email — a person can
+ * log in under a different email than the one on their CRM record — so a login belongs to the person when EITHER the contact id OR the
+ * email matches. A marketing-workspace login is never a client login. exists = some login belongs to them; suspended = none of theirs works.
+ */
+export function loginStateForContact(contact: { id: string; email: string | null }, logins: LoginLike[], now: Date = new Date()): PortalLoginState {
+  const email = (contact.email ?? "").toLowerCase().trim()
+  const mine = logins.filter((u) => !isMarketingRole(u.app_metadata?.role) && (u.app_metadata?.contact_id === contact.id || (!!email && (u.email ?? "").toLowerCase().trim() === email)))
+  if (mine.length === 0) return { exists: false, suspended: false }
+  return { exists: true, suspended: mine.every((u) => portalLoginStateOf(u, now).suspended) }
+}
+
+/** Pure: how many of these people have a working (existing, not suspended) portal login. */
+export function contactsWithWorkingLogin(contacts: { id: string; email: string | null }[], logins: LoginLike[], now: Date = new Date()): number {
+  return contacts.filter((c) => { const s = loginStateForContact(c, logins, now); return s.exists && !s.suspended }).length
+}
+
+/**
+ * The amber "cannot read it yet" line for this person, worked out when the pop-up OPENS (not per list row). If the logins cannot
  * be looked up, say nothing rather than claim "no portal login" falsely.
  */
-async function loginNotice(name: string, email: string | null): Promise<string | undefined> {
-  if (!email) return contactMessageNotice(name, { exists: false, suspended: false }) ?? undefined
+async function loginNotice(contact: { id: string; email: string | null }, name: string): Promise<string | undefined> {
   try {
-    return contactMessageNotice(name, portalLoginStateOf(await findAuthUserByEmail(email))) ?? undefined
+    return contactMessageNotice(name, loginStateForContact(contact, (await listAllAuthUsers()) as LoginLike[])) ?? undefined
   } catch {
     return undefined
   }
@@ -51,6 +71,6 @@ export async function getContactMessageContext(contactId: string): Promise<Share
   const targets = [...built.filter((t) => t.kind === "person"), ...built.filter((t) => t.kind === "company")]
   const locale = await resolveDocLocale(null, contactId)
   const name = ((contact.full_name as string | null) ?? "").trim()
-  const notice = await loginNotice(name, (contact.email as string | null) ?? null)
+  const notice = await loginNotice({ id: contactId, email: (contact.email as string | null) ?? null }, name)
   return { askable: true, fileName: "", locale, defaultTopic: "", targets, recipientName: name || undefined, ...(notice ? { notice } : {}) }
 }
