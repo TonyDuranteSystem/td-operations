@@ -43,7 +43,7 @@ function $(i){return document.getElementById(i)}
 function say(t){$('msg').textContent=t||''}
 function fmt(o,d){return new Intl.DateTimeFormat('en-US',Object.assign({timeZone:tz},o)).format(d)}
 function key(d){return new Intl.DateTimeFormat('en-CA',{timeZone:tz,year:'numeric',month:'2-digit',day:'2-digit'}).format(d)}
-function ready(){var n=$('name').value.trim(),e=$('email').value.trim();$('pick').textContent=chosen?'Your time: '+fmt({weekday:'long',month:'long',day:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'},new Date(chosen)):'';$('go').disabled=busy||!chosen||!n||!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$/.test(e)}
+function ready(){var n=$('name').value.trim(),e=$('email').value.trim();$('pick').textContent=chosen?'Your time: '+fmt({weekday:'long',month:'long',day:'numeric',hour:'numeric',minute:'2-digit',timeZoneName:'short'},new Date(chosen)):'';$('go').disabled=busy||!chosen||!n||!/^[^\\s@<>()",;:\\\\]+@[^\\s@<>()",;:\\\\]+\\.[^\\s@<>()",;:\\\\]{2,}$/.test(e)}
 function showTimes(){var box=$('times');box.innerHTML='';(byDay[day]||[]).forEach(function(s){var b=document.createElement('button');b.type='button';b.textContent=fmt({hour:'numeric',minute:'2-digit'},new Date(s));if(s===chosen)b.className='on';b.onclick=function(){chosen=s;showTimes();ready()};box.appendChild(b)})}
 function showDays(){var box=$('days');box.innerHTML='';days.forEach(function(k){var b=document.createElement('button');b.type='button';b.textContent=fmt({weekday:'short',month:'short',day:'numeric'},new Date(byDay[k][0]));if(k===day)b.className='on';b.onclick=function(){day=k;chosen=null;showDays();showTimes();ready()};box.appendChild(b)})}
 function load(keep){if(!keep)say('');$('days').textContent='Loading free times…';$('times').innerHTML='';

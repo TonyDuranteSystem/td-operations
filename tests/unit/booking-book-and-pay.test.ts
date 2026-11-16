@@ -169,6 +169,48 @@ describe("booking a time", () => {
       expect(db.tables.booking_links[0]).toMatchObject({ status: "open", session_claim_at: null })
     }
   })
+  it("the booker's own name is kept on a link made WITHOUT a name (so the payment's new contact is not named after the card holder); a name staff typed is never overwritten", async () => {
+    const noName = seed({ person_name: null })
+    expect(await bookSlot(deps(noName, calendly()), CODE, input({ name: "  Maria   Rossi " }))).toMatchObject({ ok: true })
+    expect(noName.tables.booking_links[0]).toMatchObject({ person_name: "Maria Rossi", claimed_email: "maria@example.com" })
+    const named = seed({ person_name: "Staff Typed Name" })
+    expect(await bookSlot(deps(named, calendly()), CODE, input({ name: "Someone Else" }))).toMatchObject({ ok: true })
+    expect(named.tables.booking_links[0].person_name).toBe("Staff Typed Name")
+  })
+  it("a real address with an apostrophe, an ampersand or an equals sign can book (the page and the server agree); markup and separators cannot", async () => {
+    for (const email of ["d'amico@example.it", "r&d@example.com", "a=b@example.com"]) {
+      const db = seed()
+      const r = await bookSlot(deps(db, calendly()), CODE, input({ email }))
+      expect(r, email).toMatchObject({ ok: true })
+      expect(db.tables.booking_links[0].claimed_email).toBe(email.toLowerCase())
+    }
+    const c = calendly()
+    for (const email of ["a<b@example.com", "a,b@example.com", "a b@example.com", 'a"b@example.com', "a;b@example.com", "ab@example"]) {
+      expect(await bookSlot(deps(seed(), c), CODE, input({ email })), email).toMatchObject({ ok: false, reason: "invalid" })
+    }
+    expect(c.calls).toHaveLength(0)
+  })
+  it("when Calendly times out, has a problem or gives an answer we cannot read, the call MAY exist: the person is told to look for Calendly's email, the lease is let go, and staff get a report naming the TIME (never the person's email)", async () => {
+    const base = calendly()
+    const timeout: CalendlyCtx = { token: "t", http: async (req) => { if (new URL(req.url).pathname === "/invitees") throw new Error("timeout"); return base.ctx.http(req) } }
+    const cases: Array<[string, ReturnType<typeof calendly>["ctx"]]> = [
+      ["network", timeout],
+      ["server 500", calendly({ book: () => ({ status: 500 }) }).ctx],
+      ["unreadable 201", calendly({ book: () => ({ status: 201, body: { resource: {} } }) }).ctx],
+    ]
+    for (const [name, ctx] of cases) {
+      const db = seed()
+      const reports: string[] = []
+      const r = await bookSlot({ db, calendly: ctx, now: NOW, reportError: async (m) => { reports.push(m) } }, CODE, input())
+      expect(r, name).toMatchObject({ ok: false, reason: "unsure" })
+      expect(reports, name).toHaveLength(1)
+      expect(reports[0]).toContain(PICK) // staff are told which time to look at in Calendly
+      expect(reports[0]).not.toContain("maria@example.com")
+      expect(db.tables.booking_links[0]).toMatchObject({ status: "open", session_claim_at: null })
+    }
+    // a READ that fails the same way is only 'calendly' (nothing could have been booked)
+    expect(await loadSlots(deps(seed(), calendly({ slots: () => ({ status: 500 }) })), CODE)).toMatchObject({ ok: false, reason: "calendly" })
+  })
   it("two taps at the same moment make ONE booking: while the lease is held the second is told to wait and Calendly is not asked", async () => {
     const c = calendly()
     const db = loseUpdate(seed(), "session_claim_at")

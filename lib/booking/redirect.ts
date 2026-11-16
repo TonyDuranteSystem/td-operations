@@ -6,6 +6,8 @@
  *   - found: the visitor goes to Calendly with the link's id added as the tag the webhook reads back (utm_term) and, if the link knows them, their name and email filled in
  *       a link with its own length goes to the one-time Calendly address stored when it was made; the standard 30-minute link goes to the booking page named in
  *       app_settings.booking_templates AT CLICK TIME (so a renamed page keeps working)
+ *   - a PAID link (it has a price and a pay code) ALWAYS goes to OUR page /pay/b/<code>, in every state (open, stopped, expired, paid, the switch off): that page says what is true
+ *     ("no longer open", "nothing is due", "already paid"). It never lands on the free public booking page (bug hunter, 16 Nov 2026).
  *   - unknown, malformed, revoked or expired id, the switch OFF, a missing table, a template that is gone: the visitor goes to the normal public booking page with NO tag,
  *     exactly as before this page existed (so a dead link never strands a client)
  *   - the one exception: a lookup that FAILS (database down) answers "try again" instead of quietly dropping the tag — a booking without its tag would become a stray lead
@@ -36,26 +38,28 @@ export function looksLikeBot(userAgent: string | null | undefined): boolean {
 export async function decideRedirect(db: Db, rawId: unknown, opts: { now: Date; fallbackUrl?: string; userAgent?: string | null }): Promise<RedirectDecision> {
   const plain: RedirectDecision = { kind: "redirect", location: opts.fallbackUrl ?? CALENDLY_BOOKING_URL, tagged: false }
 
-  if ((await readBookingMode(db)) === "off") return plain
+  const off = (await readBookingMode(db)) === "off"
   if (!isStrictLinkId(rawId)) return plain
 
   const found = await findLinkByPublicId(db, rawId)
   if (found.state === "none") return plain
-  if (found.state === "error") return { kind: "retry" }
+  if (found.state === "error") return off ? plain : { kind: "retry" }
   const row = found.row
-
-  const status = linkStatusOf(row, opts.now)
-  if (status === "revoked" || status === "expired") return plain
 
   let stored: string | null = null
   try {
     const { data, error } = await db.from("booking_links").select("share_url, template_slug, person_name, person_emails, pay_code, pay_amount_cents, pay_currency").eq("id", row.id).maybeSingle()
-    if (error) return isMissingTable(error) ? plain : { kind: "retry" }
+    if (error) return isMissingTable(error) || off ? plain : { kind: "retry" }
     if (!data) return plain
-    // A PAID link never goes to Calendly's page: the person books and pays on OUR page (lib/booking/book-and-pay.ts).
-    if (isPaidLink(data)) stored = payUrl(data.pay_code as string)
-    let base: string | null = stored ? null : typeof data.share_url === "string" && data.share_url ? data.share_url : null
-    if (!stored) {
+    if (isPaidLink(data)) {
+      // A PAID link ALWAYS goes to OUR page, whatever state it is in (open, stopped, expired, paid, the Booking switch off, a read that blipped on the way): the page itself says
+      // "no longer open", "nothing is due" or "already paid". The free Meet & Greet page is never the answer for a link that was made to be paid (bug hunter, 16 Nov).
+      stored = payUrl(data.pay_code as string)
+    } else {
+      if (off) return plain
+      const status = linkStatusOf(row, opts.now)
+      if (status === "revoked" || status === "expired") return plain
+      let base: string | null = typeof data.share_url === "string" && data.share_url ? data.share_url : null
       if (!base) {
         const role = data.template_slug === "sales" ? "sales" : data.template_slug === "plain" ? "plain" : null
         base = role ? templateFor(await loadTemplates(db), role)?.schedulingUrl ?? null : null
@@ -64,7 +68,7 @@ export async function decideRedirect(db: Db, rawId: unknown, opts: { now: Date; 
       stored = base ? buildDestination(base, { linkId: row.public_id, name: (data.person_name as string | null) ?? null, email }) : null
     }
   } catch {
-    return { kind: "retry" }
+    return off ? plain : { kind: "retry" }
   }
   if (!stored) return plain
 

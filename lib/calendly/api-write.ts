@@ -60,6 +60,9 @@ export interface BookedInvitee {
   cancelUrl: string | null
 }
 
+/** Calendly makes the Zoom link while it books, which can take longer than a plain read: a booking is given 25 seconds (the plain calls 10). */
+const BOOK_TIMEOUT_MS = 25_000
+
 const INVITEE_URI_RE = /^https:\/\/api\.calendly\.com\/scheduled_events\/[0-9a-fA-F-]{36}\/invitees\/[0-9a-fA-F-]{36}$/
 
 /**
@@ -78,7 +81,7 @@ export async function bookInvitee(ctx: CalendlyCtx, input: BookInput): Promise<B
     ...(input.locationKind ? { location: { kind: input.locationKind } } : {}),
     // Calendly's reference lists all six tracking fields (each may be null): all six are sent, only the tag is filled
     tracking: { utm_campaign: null, utm_source: null, utm_medium: null, utm_content: null, utm_term: input.tag, salesforce_uuid: null },
-  })
+  }, undefined, BOOK_TIMEOUT_MS)
   const r = isRec(json) && isRec(json.resource) ? json.resource : null
   const inviteeUri = r && typeof r.uri === "string" ? r.uri : null
   const eventUri = r && typeof r.event === "string" ? r.event : null

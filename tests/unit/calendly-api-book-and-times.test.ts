@@ -80,7 +80,7 @@ describe("bookInvitee", () => {
     expect(await bookInvitee(ctx, { ...input, locationKind: null })).toMatchObject({ cancelUrl: null })
     expect(JSON.parse(calls[0].body as string).location).toBeUndefined()
   })
-  it("an answer without Calendly's own addresses is not trusted (the booking exists, so the caller cancels it)", async () => {
+  it("an answer without Calendly's own addresses is not trusted (the booking MAY exist: bookSlot answers 'unsure' and reports the time so staff can look in Calendly)", async () => {
     for (const resource of [{}, { uri: "https://evil.example/i", event: EVENT }, { uri: INVITEE, event: "https://evil.example/e" }, { uri: INVITEE }, null]) {
       await expect(bookInvitee(fake(201, { resource }).ctx, input), JSON.stringify(resource)).rejects.toMatchObject({ kind: "bad_response" })
     }

@@ -123,7 +123,7 @@ function errorForStatus(status: number): CalendlyError {
  * Sends one request to the Calendly API. `path` must start with "/" and is joined to the API base here; it is built by the callers in this folder from fixed
  * words and a checked uuid, never from stored text. Returns the parsed JSON body of a 2xx answer. Throws CalendlyError otherwise (status code only).
  */
-export async function calendlyRequest(ctx: CalendlyCtx, method: "GET" | "POST", path: string, body?: unknown, query?: Record<string, string>): Promise<unknown> {
+export async function calendlyRequest(ctx: CalendlyCtx, method: "GET" | "POST", path: string, body?: unknown, query?: Record<string, string>, timeoutMs: number = TIMEOUT_MS): Promise<unknown> {
   if (!ctx.token) throw new CalendlyError("not_configured", null, "Calendly is not connected on this server (no key set).")
   if (!path.startsWith("/") || path.includes("..") || path.includes("//") || /[\s?#]/.test(path)) throw new CalendlyError("bad_request", null, "The Calendly address was not valid.")
   // the query is built from fixed keys and values the callers have checked; it is encoded here, never pasted into the path
@@ -135,7 +135,7 @@ export async function calendlyRequest(ctx: CalendlyCtx, method: "GET" | "POST", 
       url,
       headers: { Authorization: `Bearer ${ctx.token}`, Accept: "application/json", ...(body !== undefined ? { "Content-Type": "application/json" } : {}) },
       body: body !== undefined ? JSON.stringify(body) : undefined,
-      timeoutMs: TIMEOUT_MS,
+      timeoutMs,
     })
   } catch {
     throw new CalendlyError("network", null, "Calendly could not be reached. Try again in a moment.")
