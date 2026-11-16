@@ -43,6 +43,8 @@ import { MoveToStorePanel } from '@/components/storage/move-to-store-panel'
 import { AccountDocumentsList } from './account-documents-list'
 import { BecameClientRow } from './became-client-row'
 import { SignedContractsCard } from './signed-contracts-card'
+import { ContractMismatchNote } from './contract-mismatch-note'
+import type { ContractMismatch } from '@/lib/signed-contracts/types'
 import type { AccountContractLine } from '@/lib/signed-contracts/account-lines'
 import type { GuessSummary } from '@/lib/accounts/became-client'
 import { StoreBusyScope, STORE_BUSY_HINT } from './store-busy'
@@ -176,6 +178,8 @@ interface AccountDetailProps {
   becameClientGuess?: GuessSummary | null
   /** the company's signed contracts for the "Signed contract" line (null = could not be read; undefined = not loaded) */
   signedContractLines?: AccountContractLine[] | null
+  /** signed contracts whose amounts differ from this company's installment amounts (null = the check could not run; undefined = not loaded) */
+  contractMismatches?: ContractMismatch[] | null
   account: Account
   /** Client-facing base URL for the current environment (server-computed). */
   appBaseUrl?: string
@@ -702,7 +706,7 @@ function ContactsSection({
   )
 }
 
-export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.us', contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offers = [], partnerName = null, pendingActivations = {}, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [], ss4Applications = [], ss4ServiceDeliveries = [], stepperDeliveries = [], stagesByServiceType = {}, dbaServiceDeliveries = [], flows = [], becameClientGuess = null, signedContractLines }: AccountDetailProps) {
+export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.us', contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offers = [], partnerName = null, pendingActivations = {}, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [], ss4Applications = [], ss4ServiceDeliveries = [], stepperDeliveries = [], stagesByServiceType = {}, dbaServiceDeliveries = [], flows = [], becameClientGuess = null, signedContractLines, contractMismatches }: AccountDetailProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
   // AccountJourney's progress tracker (Signed/Paid/Activated) still wants
@@ -1045,7 +1049,7 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
       {/* Tab content */}
       {activeTab === 'overview' && (
         <>
-          <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} onOpenStatusDialog={() => setShowStatusDialog(true)} dbaServiceDeliveries={dbaServiceDeliveries} stagesByServiceType={stagesByServiceType} becameClientGuess={becameClientGuess} />
+          <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} onOpenStatusDialog={() => setShowStatusDialog(true)} dbaServiceDeliveries={dbaServiceDeliveries} stagesByServiceType={stagesByServiceType} becameClientGuess={becameClientGuess} contractMismatches={contractMismatches} />
           {/* Recent emails (auto-matched + linked) — visible without hunting
               for the Emails tab (Antonio 2026-07-08) */}
           <div className="px-4 pb-4">
@@ -1380,7 +1384,7 @@ function PaymentPlanPartsSection({ account }: { account: Account }) {
   )
 }
 
-function InstallmentsSection({ account, payments, makeAccountSaver }: { account: Account; payments: Payment[]; makeAccountSaver: (field: string) => (val: string) => Promise<{ success: boolean; error?: string }> }) {
+function InstallmentsSection({ account, payments, makeAccountSaver, contractMismatches }: { account: Account; payments: Payment[]; makeAccountSaver: (field: string) => (val: string) => Promise<{ success: boolean; error?: string }>; contractMismatches?: ContractMismatch[] | null }) {
   const [openForInst, setOpenForInst] = useState<1 | 2 | null>(null)
 
   const year = new Date().getFullYear()
@@ -1447,6 +1451,8 @@ function InstallmentsSection({ account, payments, makeAccountSaver }: { account:
     <>
       <div className="bg-white rounded-lg border p-5 space-y-4">
         <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">Annual Installments</h3>
+        {/* Amber when a signed contract does not match these amounts (Antonio 2026-11-15); gone by itself once they match. */}
+        {contractMismatches !== undefined && <ContractMismatchNote findings={contractMismatches} />}
         <div className="grid gap-3 text-sm">
           <EditableField icon={CreditCard} label="1st Installment" value={inst1Amount?.toString() ?? ''} onSave={makeAccountSaver('installment_1_amount')} />
           <EditableField icon={Globe} label="1st Currency" value={inst1Currency} type="select" options={[{ label: 'USD', value: 'USD' }, { label: 'EUR', value: 'EUR' }]} onSave={makeAccountSaver('installment_1_currency')} />
@@ -2508,7 +2514,7 @@ function MembersSection({ accountId, accountCompanyName, contacts, memberCount: 
 
 /* ── Panoramica Tab ───────────────────────────────────── */
 
-function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, partnerName, onOpenStatusDialog, dbaServiceDeliveries = [], stagesByServiceType = {}, becameClientGuess = null }: { becameClientGuess?: GuessSummary | null; account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean; partnerName: string | null; onOpenStatusDialog: () => void; dbaServiceDeliveries?: NonNullable<AccountDetailProps['dbaServiceDeliveries']>; stagesByServiceType?: Record<string, PipelineStage[]> }) {
+function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, partnerName, onOpenStatusDialog, dbaServiceDeliveries = [], stagesByServiceType = {}, becameClientGuess = null, contractMismatches }: { contractMismatches?: ContractMismatch[] | null; becameClientGuess?: GuessSummary | null; account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean; partnerName: string | null; onOpenStatusDialog: () => void; dbaServiceDeliveries?: NonNullable<AccountDetailProps['dbaServiceDeliveries']>; stagesByServiceType?: Record<string, PipelineStage[]> }) {
   const router = useRouter()
   const [noteText, setNoteText] = useState('')
   const [addingNote, setAddingNote] = useState(false)
@@ -2691,11 +2697,14 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
       <ReferralsGivenCard accountId={account.id} />
 
       {/* Billing — only for Client-type accounts (vendors/tenants/leads do not have annual installments) */}
-      {account.account_type === 'Client' && (
+      {account.account_type === 'Client' ? (
         <>
           <PaymentPlanPartsSection account={account} />
-          <InstallmentsSection account={account} payments={payments} makeAccountSaver={makeAccountSaver} />
+          <InstallmentsSection account={account} payments={payments} makeAccountSaver={makeAccountSaver} contractMismatches={contractMismatches} />
         </>
+      ) : (
+        // A company that is not a Client has no installments card, but a signed contract that does not match it still has to be seen here.
+        contractMismatches !== undefined && contractMismatches !== null && contractMismatches.length > 0 && <ContractMismatchNote findings={contractMismatches} />
       )}
 
       {/* Contacts */}

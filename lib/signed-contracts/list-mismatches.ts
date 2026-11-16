@@ -10,6 +10,10 @@
  * Only the two amber findings flag a person: "differs" and "the company has no amounts". Every grey "not compared" / "could not compare"
  * case flags nobody, exactly as it draws no amber on the card. Nothing here reads a passport or an address; the email is used only to
  * match and never leaves this function.
+ *
+ * The same findings also flag the COMPANY (dev job a2a663cf, Antonio 2026-11-15: "the amber should go on the account as well, above all if
+ * the amber is related to the company"): `contractMismatchesByCompany` attaches each finding to the company its offer is filed on — the
+ * very company the check compared the contract with — so the Accounts list and the company page flag exactly the company that differs.
  */
 import { buildEntries, type ContractRow, type OfferRow } from './entries'
 import type { CompanyLookup } from './company-check'
@@ -29,20 +33,15 @@ export interface MismatchPerson {
   accountIds: string[]
 }
 
-export function contractMismatchesByPerson(input: {
-  people: MismatchPerson[]
-  /** lead id → the person that lead became (leads.converted_to_contact_id) */
-  leadPerson: Map<string, string>
-  offers: OfferWithOwners[]
+/** The amber lines, one finding per offer (its newest signing): the SAME lines the Contact page card marks amber. */
+function flaggedFindings(input: {
+  offers: OfferRow[]
   contracts: ContractRow[]
   companies: CompanyLookup
-  /** company id → its name, for the words of the finding */
   companyNames: Map<string, string>
-}): Map<string, ContractMismatch[]> {
-  const offerByToken = new Map(input.offers.map((o) => [o.token, o]))
+}): Map<string, ContractMismatch> {
   const entries = buildEntries({ offers: input.offers, contracts: input.contracts, agreements: [], corrections: [], companies: input.companies })
-
-  // the amber lines, by offer: one finding per offer (its newest signing)
+  const offerByToken = new Map(input.offers.map((o) => [o.token, o]))
   const flagged = new Map<string, ContractMismatch>()
   for (const e of entries) {
     const check = e.companyCheck
@@ -58,6 +57,23 @@ export function contractMismatchesByPerson(input: {
       crmAmounts: check.state === 'differ' ? `January ${check.january} · June ${check.june}` : null,
     })
   }
+  return flagged
+}
+
+const byCompanyThenContract = (a: ContractMismatch, b: ContractMismatch) => a.company.localeCompare(b.company) || a.contract.localeCompare(b.contract)
+
+export function contractMismatchesByPerson(input: {
+  people: MismatchPerson[]
+  /** lead id → the person that lead became (leads.converted_to_contact_id) */
+  leadPerson: Map<string, string>
+  offers: OfferWithOwners[]
+  contracts: ContractRow[]
+  companies: CompanyLookup
+  /** company id → its name, for the words of the finding */
+  companyNames: Map<string, string>
+}): Map<string, ContractMismatch[]> {
+  const offerByToken = new Map(input.offers.map((o) => [o.token, o]))
+  const flagged = flaggedFindings(input)
 
   const out = new Map<string, ContractMismatch[]>()
   if (flagged.size === 0) return out
@@ -77,9 +93,38 @@ export function contractMismatchesByPerson(input: {
       if (isTheirs) mine.push(finding)
     }
     if (mine.length > 0) {
-      mine.sort((a, b) => a.company.localeCompare(b.company) || a.contract.localeCompare(b.contract))
+      mine.sort(byCompanyThenContract)
       out.set(person.id, mine)
     }
   }
+  return out
+}
+
+/**
+ * Which companies get the amber flag: the company a flagged contract is FILED ON (offers.account_id) — the very company the check
+ * compared the contract with. A person's other links do not matter here: the contract's amounts disagree with ONE company's amounts, and
+ * that company is where the amounts are corrected. An offer with no company is never flagged (the card draws it grey, "not compared").
+ */
+export function contractMismatchesByCompany(input: {
+  /** the companies on the page */
+  accountIds: string[]
+  offers: OfferRow[]
+  contracts: ContractRow[]
+  companies: CompanyLookup
+  /** company id → its name, for the words of the finding */
+  companyNames: Map<string, string>
+}): Map<string, ContractMismatch[]> {
+  const out = new Map<string, ContractMismatch[]>()
+  const wanted = new Set(input.accountIds)
+  if (wanted.size === 0) return out
+  const offerByToken = new Map(input.offers.map((o) => [o.token, o]))
+  for (const [token, finding] of Array.from(flaggedFindings(input))) {
+    const accountId = offerByToken.get(token)?.account_id
+    if (!accountId || !wanted.has(accountId)) continue
+    const list = out.get(accountId) ?? []
+    list.push(finding)
+    out.set(accountId, list)
+  }
+  Array.from(out.values()).forEach((list) => list.sort(byCompanyThenContract))
   return out
 }

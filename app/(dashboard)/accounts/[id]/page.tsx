@@ -19,6 +19,7 @@ import { resolveOnboardingWorkspaceForContact, EMPTY_ONBOARDING_WORKSPACE, type 
 import { HARBOR } from '@/lib/renewal-links'
 import { loadBecameClientFacts } from '@/lib/accounts/became-client-load'
 import { loadSignedContractLinesForOffers } from '@/lib/signed-contracts/load-for-account'
+import { loadContractMismatchesForCompanies } from '@/lib/signed-contracts/load'
 import type { AccountContractLine } from '@/lib/signed-contracts/account-lines'
 import { guessBecameClient, type BecameClientHow } from '@/lib/accounts/became-client'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
@@ -251,6 +252,14 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
   } catch (err) {
     console.error('[accounts] signed contracts could not be loaded:', err instanceof Error ? err.message : err)
   }
+
+  // The amber note when a signed contract's amounts differ from this company's own installment amounts (dev job a2a663cf): the same finding
+  // as the Contact page and the Accounts list. A failed check gives null, and the page says so instead of showing nothing as if all matched.
+  const mismatchCheck = await loadContractMismatchesForCompanies({
+    accountIds: [params.id],
+    companyNames: new Map([[params.id, (account as Account).company_name]]),
+  })
+  const contractMismatches = mismatchCheck.kind === 'ok' ? (mismatchCheck.byCompany.get(params.id) ?? []) : null
 
   // Activation state for EVERY offer above, keyed by token — not just one.
   const offerTokens = offers.map((o) => o.token)
@@ -718,6 +727,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
         dbaServiceDeliveries={dbaServiceDeliveries}
         becameClientGuess={becameClientGuess}
         signedContractLines={signedContractLines}
+        contractMismatches={contractMismatches}
       />
     </div>
   )
