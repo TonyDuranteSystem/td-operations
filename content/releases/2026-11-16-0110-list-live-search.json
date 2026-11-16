@@ -3,9 +3,9 @@
   "tag": "improved",
   "text": "On the Contacts and Accounts lists, the list under the search box now updates by itself a moment after you stop typing, while the dropdown shows the matches. You don't need to press Enter any more (Enter still works). Clearing the box brings the whole list back.",
   "points": [
-    "The list and the dropdown now search the same things. Contacts: a person's name, email, phone or one of their companies. Accounts: a company's name or one of its people. So typing a company name on the Contacts list now finds its people.",
-    "What you type is never overwritten when the list refreshes, even if you type fast with pauses.",
-    "Searching this way does not fill your Back history with every pause."
+    "The list and the dropdown now search the same things. Contacts: name, email, phone or one of the person's companies. Accounts: company name or one of its people.",
+    "Typing a company name on the Contacts list now finds its people.",
+    "What you type is never overwritten when the list refreshes, even if you type fast with pauses. Back history isn't filled with every pause."
   ],
   "screenshot": "list-live-search.png"
 }
