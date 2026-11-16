@@ -146,3 +146,22 @@ describe('companyAlertInfo — the alert goes to one person', () => {
   })
 })
 
+describe('buildShareChatBody — files from the Chat tab box', () => {
+  const company = { key: 'company:a1', kind: 'company' as const, accountId: 'a1', contactId: null, label: 'Open LLC', closed: false, isDefault: false, topics: [] }
+  const person = { key: 'person:c1', kind: 'person' as const, accountId: null, contactId: 'c1', label: 'Ada — personal chat', closed: false, isDefault: false, topics: [] }
+  const files = [{ url: 'https://x/y.pdf', name: 'y.pdf' }]
+  it('a company message carries the files and still no contact id', () => {
+    const b = buildShareChatBody({ target: company, topic: 'Docs', message: 'hi', addressedToMemberId: null, addressedToCompany: false, attachments: files })
+    expect(b).toMatchObject({ account_id: 'a1', sender_context: 'company', topic: 'Docs', message: 'hi', attachments: files })
+    expect('contact_id' in b).toBe(false)
+  })
+  it('a personal message carries the files', () => {
+    const b = buildShareChatBody({ target: person, topic: '', message: 'hi', addressedToMemberId: null, addressedToCompany: false, attachments: files })
+    expect(b).toMatchObject({ contact_id: 'c1', sender_context: 'person', topic: '', attachments: files })
+  })
+  it('no files, or an empty list, adds no attachments key', () => {
+    expect('attachments' in buildShareChatBody({ target: company, topic: '', message: 'hi', addressedToMemberId: null, addressedToCompany: false })).toBe(false)
+    expect('attachments' in buildShareChatBody({ target: person, topic: '', message: 'hi', addressedToMemberId: null, addressedToCompany: false, attachments: [] })).toBe(false)
+  })
+})
+

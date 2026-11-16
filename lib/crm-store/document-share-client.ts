@@ -25,6 +25,8 @@ export interface ShareMessageToSend {
   message: string
   addressedToMemberId: string | null
   addressedToCompany: boolean
+  /** files already uploaded for this message (the Contact page's Chat tab box) */
+  attachments?: unknown[]
 }
 
 /** Pure: the exact body sent to POST /api/portal/chat. A company send declares company scope and carries NO contact id. */
@@ -37,9 +39,10 @@ export function buildShareChatBody(m: ShareMessageToSend): Record<string, unknow
       message: m.message,
       ...(m.addressedToCompany ? { addressed_to_company: true } : {}),
       ...(m.addressedToMemberId ? { addressed_to_member_id: m.addressedToMemberId } : {}),
+      ...(m.attachments?.length ? { attachments: m.attachments } : {}),
     }
   }
-  return { contact_id: m.target.contactId, sender_context: 'person', topic: m.topic, message: m.message }
+  return { contact_id: m.target.contactId, sender_context: 'person', topic: m.topic, message: m.message, ...(m.attachments?.length ? { attachments: m.attachments } : {}) }
 }
 
 export async function sendShareMessage(m: ShareMessageToSend): Promise<void> {
