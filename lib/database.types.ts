@@ -825,6 +825,162 @@ export type Database = {
           },
         ]
       }
+      address_book_crm_labels: {
+        Row: {
+          confirmed_by_email: string | null
+          created_at: string
+          id: string
+          subject_id: string
+          subject_kind: string
+          type_entry_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          confirmed_by_email?: string | null
+          created_at?: string
+          id?: string
+          subject_id: string
+          subject_kind: string
+          type_entry_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          confirmed_by_email?: string | null
+          created_at?: string
+          id?: string
+          subject_id?: string
+          subject_kind?: string
+          type_entry_id?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "address_book_crm_labels_type_entry_id_fkey"
+            columns: ["type_entry_id"]
+            isOneToOne: false
+            referencedRelation: "catalog_entries"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "address_book_crm_labels_type_entry_id_fkey"
+            columns: ["type_entry_id"]
+            isOneToOne: false
+            referencedRelation: "service_catalog"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      address_book_entries: {
+        Row: {
+          address: string | null
+          archived_at: string | null
+          card_file_path: string | null
+          company: string | null
+          created_at: string
+          created_by: string | null
+          created_by_email: string | null
+          emails: string[]
+          extra: Json
+          full_name: string
+          id: string
+          job_title: string | null
+          notes: string | null
+          phone_keys: string[]
+          phones: string[]
+          source: string
+          source_ref: Json | null
+          type_entry_id: string | null
+          updated_at: string
+          website: string | null
+        }
+        Insert: {
+          address?: string | null
+          archived_at?: string | null
+          card_file_path?: string | null
+          company?: string | null
+          created_at?: string
+          created_by?: string | null
+          created_by_email?: string | null
+          emails?: string[]
+          extra?: Json
+          full_name: string
+          id?: string
+          job_title?: string | null
+          notes?: string | null
+          phone_keys?: string[]
+          phones?: string[]
+          source?: string
+          source_ref?: Json | null
+          type_entry_id?: string | null
+          updated_at?: string
+          website?: string | null
+        }
+        Update: {
+          address?: string | null
+          archived_at?: string | null
+          card_file_path?: string | null
+          company?: string | null
+          created_at?: string
+          created_by?: string | null
+          created_by_email?: string | null
+          emails?: string[]
+          extra?: Json
+          full_name?: string
+          id?: string
+          job_title?: string | null
+          notes?: string | null
+          phone_keys?: string[]
+          phones?: string[]
+          source?: string
+          source_ref?: Json | null
+          type_entry_id?: string | null
+          updated_at?: string
+          website?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "address_book_entries_type_entry_id_fkey"
+            columns: ["type_entry_id"]
+            isOneToOne: false
+            referencedRelation: "catalog_entries"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "address_book_entries_type_entry_id_fkey"
+            columns: ["type_entry_id"]
+            isOneToOne: false
+            referencedRelation: "service_catalog"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      address_book_personal: {
+        Row: {
+          archived_at: string | null
+          created_at: string
+          id: string
+          owner_user_id: string
+          payload_enc: string
+          updated_at: string
+        }
+        Insert: {
+          archived_at?: string | null
+          created_at?: string
+          id?: string
+          owner_user_id: string
+          payload_enc: string
+          updated_at?: string
+        }
+        Update: {
+          archived_at?: string | null
+          created_at?: string
+          id?: string
+          owner_user_id?: string
+          payload_enc?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       addresses: {
         Row: {
           active: boolean
@@ -2460,8 +2616,16 @@ export type Database = {
           kind_label: string
           last_opened_at: string | null
           lead_id: string | null
+          not_charging_at: string | null
           once: boolean
           open_count: number
+          paid_at: string | null
+          paid_session_id: string | null
+          pay_amount_cents: number | null
+          pay_code: string | null
+          pay_currency: string | null
+          pay_label: string | null
+          pay_mode: string | null
           person_emails: string[]
           person_language: string | null
           person_name: string | null
@@ -2472,8 +2636,13 @@ export type Database = {
           revoked_at: string | null
           rule_snapshot: Json
           rule_version: number
+          sent_at: string | null
+          sent_count: number
+          session_claim_at: string | null
+          session_expires_at: string | null
           share_url: string | null
           status: string
+          stripe_session_id: string | null
           template_slug: string | null
           updated_at: string
         }
@@ -2494,8 +2663,16 @@ export type Database = {
           kind_label: string
           last_opened_at?: string | null
           lead_id?: string | null
+          not_charging_at?: string | null
           once?: boolean
           open_count?: number
+          paid_at?: string | null
+          paid_session_id?: string | null
+          pay_amount_cents?: number | null
+          pay_code?: string | null
+          pay_currency?: string | null
+          pay_label?: string | null
+          pay_mode?: string | null
           person_emails?: string[]
           person_language?: string | null
           person_name?: string | null
@@ -2506,8 +2683,13 @@ export type Database = {
           revoked_at?: string | null
           rule_snapshot?: Json
           rule_version?: number
+          sent_at?: string | null
+          sent_count?: number
+          session_claim_at?: string | null
+          session_expires_at?: string | null
           share_url?: string | null
           status?: string
+          stripe_session_id?: string | null
           template_slug?: string | null
           updated_at?: string
         }
@@ -2528,8 +2710,16 @@ export type Database = {
           kind_label?: string
           last_opened_at?: string | null
           lead_id?: string | null
+          not_charging_at?: string | null
           once?: boolean
           open_count?: number
+          paid_at?: string | null
+          paid_session_id?: string | null
+          pay_amount_cents?: number | null
+          pay_code?: string | null
+          pay_currency?: string | null
+          pay_label?: string | null
+          pay_mode?: string | null
           person_emails?: string[]
           person_language?: string | null
           person_name?: string | null
@@ -2540,8 +2730,13 @@ export type Database = {
           revoked_at?: string | null
           rule_snapshot?: Json
           rule_version?: number
+          sent_at?: string | null
+          sent_count?: number
+          session_claim_at?: string | null
+          session_expires_at?: string | null
           share_url?: string | null
           status?: string
+          stripe_session_id?: string | null
           template_slug?: string | null
           updated_at?: string
         }

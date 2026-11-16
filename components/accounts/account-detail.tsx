@@ -1502,7 +1502,7 @@ function InstallmentBadge({ matches, onInvoice }: { matches: Payment[]; onInvoic
           const isPaid = status === 'Paid'
           return (
             <div key={m.id} className="flex items-center gap-2">
-              <span className="font-mono text-blue-600">{m.invoice_number}</span>
+              {m.invoice_number ? <span className="font-mono text-blue-600">{m.invoice_number}</span> : <span className="text-muted-foreground">No invoice number</span>}
               <span className={cn('px-1.5 py-0.5 rounded', isPaid ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700')}>
                 {isPaid ? 'Paid' : status}
               </span>
@@ -1518,7 +1518,7 @@ function InstallmentBadge({ matches, onInvoice }: { matches: Payment[]; onInvoic
   const isPaid = status === 'Paid'
   return (
     <div className="flex items-center gap-2 pl-6 text-xs">
-      <span className="font-mono text-blue-600">{match.invoice_number}</span>
+      {match.invoice_number ? <span className="font-mono text-blue-600">{match.invoice_number}</span> : <span className="text-muted-foreground">No invoice number</span>}
       <span className={cn('px-1.5 py-0.5 rounded', isPaid ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700')}>
         {isPaid ? 'Paid' : status}
       </span>

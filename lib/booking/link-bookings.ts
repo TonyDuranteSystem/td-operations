@@ -17,6 +17,29 @@ import { eventUuidOf, getScheduledEvent, type CalendlyCtx } from "@/lib/calendly
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic service client
 type Db = any
 
+/** One answer the booker gave on Calendly's booking page. */
+export interface BookerAnswer {
+  question: string
+  answer: string
+}
+
+/**
+ * Who made the booking, as Calendly sent it and the webhook stored it (dev job 4ebfe4d3, Antonio 15 Nov 2026: "more information about who booked it").
+ * What Calendly sends depends on the call type (read from the 104 stored deliveries on 15 Nov 2026): "Free meet&greet call" (93) and "Free Call" (3) send the full name AND a separate first
+ * and last name; "New Meeting", "Strategic Call" and "TD Strategic Consulting" send ONE full name only. So the full name is always shown as sent, and the first and last name are kept
+ * (and shown on the card) only when Calendly really sent them — nothing here ever guesses where a name splits.
+ */
+export interface Booker {
+  name: string | null
+  /** only when Calendly sent a separate first name (some call types do, some do not) */
+  firstName?: string | null
+  /** only when Calendly sent a separate last name */
+  lastName?: string | null
+  email: string | null
+  phone: string | null
+  answers: BookerAnswer[]
+}
+
 /** One booking made through a link, as the webhook stored it. */
 export interface StoredBooking {
   /** the link's public id (the tag) */
@@ -29,6 +52,8 @@ export interface StoredBooking {
   storedAt: string
   /** the booker's own cancel page (a Calendly address); only used as a fallback when the app may not cancel */
   cancelUrl: string | null
+  /** who booked; null when the stored delivery carries nothing about them */
+  booker: Booker | null
 }
 
 export type BookingState = "booked" | "booked_unchecked" | "cancelled_by_you" | "cancelled_by_booker" | "cancelled"
@@ -48,12 +73,64 @@ export interface EventFacts {
 }
 
 const SELECT =
-  "storedAt:created_at, tag:payload->payload->tracking->>utm_term, eventUri:payload->payload->>event, startTime:payload->payload->scheduled_event->>start_time, cancelUrl:payload->payload->>cancel_url"
+  "storedAt:created_at, tag:payload->payload->tracking->>utm_term, eventUri:payload->payload->>event, startTime:payload->payload->scheduled_event->>start_time, cancelUrl:payload->payload->>cancel_url, " +
+  "bookerName:payload->payload->>name, bookerFirst:payload->payload->>first_name, bookerLast:payload->payload->>last_name, bookerEmail:payload->payload->>email, bookerPhone:payload->payload->>text_reminder_number, bookerAnswers:payload->payload->questions_and_answers"
 const TAG_PATH = "payload->payload->tracking->>utm_term"
 const MAX_ROWS = 500
 
 const isRec = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v)
-const text = (v: unknown): string | null => (typeof v === "string" && v ? v : null)
+const text = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null)
+
+const MAX_ANSWERS = 6
+const MAX_ANSWER_CHARS = 300
+
+/** The booker, from the fields of one stored delivery. The name is the full name Calendly sent, else first + last joined; the separate first and last name are kept when sent. Null when the delivery says nothing about them. */
+export function parseBooker(r: { name?: unknown; first?: unknown; last?: unknown; email?: unknown; phone?: unknown; answers?: unknown }): Booker | null {
+  const first = text(r.first)
+  const last = text(r.last)
+  const name = text(r.name) ?? ([first, last].filter(Boolean).join(" ") || null)
+  const email = text(r.email)
+  const phone = text(r.phone)
+  const answers: BookerAnswer[] = []
+  if (Array.isArray(r.answers)) {
+    for (const a of r.answers) {
+      if (!isRec(a)) continue
+      const question = text(a.question)
+      const answer = text(a.answer)
+      if (question && answer) answers.push({ question: question.split("\n")[0].slice(0, 200), answer: answer.slice(0, MAX_ANSWER_CHARS) })
+      if (answers.length >= MAX_ANSWERS) break
+    }
+  }
+  return name || email || phone || answers.length ? { name, firstName: first, lastName: last, email, phone, answers } : null
+}
+
+export interface WhoBooked {
+  /** the bold line: who the link is for, or the booker when the link has no name */
+  primary: string
+  /** the small line under it: the booker's email, or "Booked by <name> · <email>" when the booker is not who the link was made for */
+  secondary: string | null
+  /** the booker is not the person the link was made for (a different email, or a different name) */
+  differs: boolean
+}
+
+const norm = (s: string): string => s.toLowerCase().replace(/\s+/g, " ").trim()
+
+/** What the "For" column shows. PURE. A link with a name keeps it; a link with no name shows the booker. Both are shown when they differ, so a wrong-email booking is easy to see. */
+export function whoBooked(link: { personName: string | null; personEmails: string[] | null }, booker: Booker | null): WhoBooked {
+  const linkName = text(link.personName)
+  if (!booker) return { primary: linkName ?? "Someone new", secondary: null, differs: false }
+  const bName = booker.name
+  const bEmail = booker.email
+  if (!linkName) {
+    return bName ? { primary: bName, secondary: bEmail, differs: false } : { primary: bEmail ?? "Someone new", secondary: null, differs: false }
+  }
+  const emails = (link.personEmails ?? []).map((e) => norm(e))
+  const emailDiffers = emails.length > 0 && !!bEmail && !emails.includes(norm(bEmail))
+  const nameDiffers = !!bName && norm(bName) !== norm(linkName)
+  const differs = emailDiffers || nameDiffers
+  const who = [bName, bEmail].filter(Boolean).join(" · ")
+  return { primary: linkName, secondary: differs ? (who ? `Booked by ${who}` : null) : bEmail, differs }
+}
 
 /** The bookings the webhook stored for these links, newest first per link. Only ids of our exact shape are looked up. Never throws; { ok: false } = could not read. */
 export async function loadStoredBookings(db: Db, publicIds: string[]): Promise<{ ok: true; byTag: Map<string, StoredBooking[]> } | { ok: false }> {
@@ -76,7 +153,14 @@ export async function loadStoredBookings(db: Db, publicIds: string[]): Promise<{
       const eventUri = text(r.eventUri)
       if (!tag || !eventUri || !eventUuidOf(eventUri)) continue
       const list = byTag.get(tag) ?? []
-      list.push({ tag, eventUri, startTime: text(r.startTime), storedAt: text(r.storedAt) ?? "", cancelUrl: text(r.cancelUrl) })
+      list.push({
+        tag,
+        eventUri,
+        startTime: text(r.startTime),
+        storedAt: text(r.storedAt) ?? "",
+        cancelUrl: text(r.cancelUrl),
+        booker: parseBooker({ name: r.bookerName, first: r.bookerFirst, last: r.bookerLast, email: r.bookerEmail, phone: r.bookerPhone, answers: r.bookerAnswers }),
+      })
       byTag.set(tag, list)
     }
     return { ok: true, byTag }
@@ -97,9 +181,9 @@ const CHECK_MAX = 25
 const CHECK_TIMEOUT_MS = 4_000
 
 /** Reads these bookings from Calendly (at most 25, all at once, each given 4 seconds). A booking Calendly could not answer for is `null`. Never throws. */
-export async function lookupEvents(ctx: CalendlyCtx, uris: string[]): Promise<Map<string, EventFacts | null>> {
+export async function lookupEvents(ctx: CalendlyCtx, uris: string[], max: number = CHECK_MAX): Promise<Map<string, EventFacts | null>> {
   const out = new Map<string, EventFacts | null>()
-  const wanted = Array.from(new Set(uris)).slice(0, CHECK_MAX)
+  const wanted = Array.from(new Set(uris)).slice(0, max)
   await Promise.all(
     wanted.map(async (uri) => {
       let timer: ReturnType<typeof setTimeout> | undefined

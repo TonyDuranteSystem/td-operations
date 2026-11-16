@@ -1,0 +1,17 @@
+{
+  "title": "Booking: paid calls",
+  "tag": "new",
+  "text": "On Booking, Links and calls, you can now make a PAID link. Pick Free or Paid in Make a link, type the amount (USD or EUR) and an optional description. The person books a time first, then pays by card on our own payment page, which never expires. Once they have booked, a card in Calls to check says the call is not paid yet. It lets you send the payment link (you read the message first, and it opens in your own email or WhatsApp), copy it, cancel the call or mark it Not charging. When the payment arrives it is recorded by itself: revenue plus a credit toward the next new service for a new person, revenue only for an existing client. Links I made shows the price and whether it was paid.",
+  "points": [
+    "Open Booking, then Links and calls, and choose Paid in Make a link",
+    "After someone books, look for the card in Calls to check"
+  ],
+  "stepsTitle": "How a paid call works",
+  "steps": [
+    { "name": "Make a paid link", "detail": "Choose Paid, type the amount in USD or EUR, make the link.", "flag": "new" },
+    { "name": "They book a time", "detail": "The person books through the link, exactly as for a free call." },
+    { "name": "A card appears", "detail": "Calls to check says it is not paid yet. Send or copy the link, cancel, or mark Not charging.", "flag": "new" },
+    { "name": "They pay by card", "detail": "On our own payment page, which never expires. Stripe takes the payment.", "flag": "new" },
+    { "name": "It is recorded", "detail": "A paid invoice, plus a credit for a new person. Revenue only for a client. The card clears.", "flag": "auto" }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "title": "Message a person straight from the Contacts list",
+  "tag": "new",
+  "text": "Each person in the Contacts list now has a small chat icon next to their name. Click it and the same message window as on the Contact page opens right over the list: choose the person's own chat or one of their companies, the topic, who it is addressed to, write the message and send. You never leave the list, and clicking inside the window does not open the person behind it.",
+  "points": [
+    "Nothing is picked for you when there are several choices, and a closed company is greyed out, so a message can't land in the wrong chat by accident.",
+    "If the person has no portal login yet (or it is suspended), the window says so. The message is still saved in their chat.",
+    "A message you have typed is never thrown away: clicking outside the window does nothing, and if the send fails the window stays open and shows why.",
+    "The list loads exactly as fast as before; nothing is looked up until you click the icon."
+  ],
+  "screenshot": "contacts-list-message-icon.png"
+}

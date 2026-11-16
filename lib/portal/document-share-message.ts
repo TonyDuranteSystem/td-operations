@@ -13,7 +13,7 @@ import { PERSONAL_CATEGORY } from "@/lib/documents/visibility-guard"
 import { storePointer } from "@/lib/crm-store/document-pointer"
 import { resolveDocLocale } from "@/lib/portal/document-alerts"
 import { openTopicsOf } from "@/lib/portal/chat-topics"
-import { DEFAULT_DOCUMENT_TOPIC, type ShareTarget, type ShareContext } from "@/lib/portal/document-share-text"
+import { DEFAULT_DOCUMENT_TOPIC, isChatClosedStatus, type ShareTarget, type ShareContext } from "@/lib/portal/document-share-text"
 
 export { DEFAULT_DOCUMENT_TOPIC, buildDocumentShareMessage } from "@/lib/portal/document-share-text"
 export type { ShareTarget, ShareContext } from "@/lib/portal/document-share-text"
@@ -65,12 +65,34 @@ async function contextFromRows(docs: DocRow[]): Promise<ShareContext> {
     const { data: links } = await supabaseAdmin.from("account_contacts").select("account_id").eq("contact_id", doc.contact_id)
     for (const l of (links ?? []) as { account_id: string }[]) if (!accountIds.includes(l.account_id)) accountIds.push(l.account_id)
   }
+  const targets = await buildShareTargets({ accountIds, contactId: doc.contact_id, defaultAccountId: doc.account_id, personIsDefault: !doc.account_id })
+  if (targets.length === 0) return { askable: false, reason: "no_recipient", fileName }
+
+  const locale = await resolveDocLocale(doc.account_id, doc.contact_id)
+  return { askable: true, fileName, locale, defaultTopic: DEFAULT_DOCUMENT_TOPIC, targets }
+}
+
+/**
+ * The choices a staff message can go to: each company (with its closed flag and the topics already open in its chat), then the
+ * person's own personal chat. Shared by the document "eye" pop-up (one choice is pre-selected: the document's own owner) and the
+ * Contact page's "Message" pop-up (nothing pre-selected — the 2026-08-07 leak rule: never default-select a company).
+ * A company is "closed" (the client cannot see its chat) unless its status is Active or Suspended.
+ */
+export async function buildShareTargets(opts: {
+  accountIds: string[]
+  contactId: string | null
+  /** the company to pre-select, or null for none */
+  defaultAccountId: string | null
+  /** pre-select the person's personal chat */
+  personIsDefault: boolean
+}): Promise<ShareTarget[]> {
+  const { accountIds, contactId, defaultAccountId, personIsDefault } = opts
   const accounts = new Map<string, { name: string; closed: boolean }>()
   if (accountIds.length > 0) {
     const { data: accs } = await supabaseAdmin.from("accounts").select("id, company_name, status").in("id", accountIds)
     for (const a of (accs ?? []) as { id: string; company_name: string | null; status: string | null }[]) {
       const s = a.status ?? ""
-      accounts.set(a.id, { name: a.company_name ?? "Company", closed: s !== "Active" && s !== "Suspended" })
+      accounts.set(a.id, { name: a.company_name ?? "Company", closed: isChatClosedStatus(s) })
     }
   }
 
@@ -78,16 +100,12 @@ async function contextFromRows(docs: DocRow[]): Promise<ShareContext> {
   for (const id of accountIds) {
     const a = accounts.get(id)
     if (!a) continue
-    targets.push({ key: `company:${id}`, kind: "company", accountId: id, contactId: null, label: a.name, closed: a.closed, isDefault: id === doc.account_id, topics: await openTopicsOf({ accountId: id }) })
+    targets.push({ key: `company:${id}`, kind: "company", accountId: id, contactId: null, label: a.name, closed: a.closed, isDefault: id === defaultAccountId, topics: await openTopicsOf({ accountId: id }) })
   }
-  let personLabel: string | null = null
-  if (doc.contact_id) {
-    const { data: c } = await supabaseAdmin.from("contacts").select("full_name").eq("id", doc.contact_id).maybeSingle()
-    personLabel = (c?.full_name as string | undefined) ?? "the person"
-    targets.push({ key: `person:${doc.contact_id}`, kind: "person", accountId: null, contactId: doc.contact_id, label: `${personLabel} — personal chat`, closed: false, isDefault: !doc.account_id, topics: await openTopicsOf({ contactId: doc.contact_id }) })
+  if (contactId) {
+    const { data: c } = await supabaseAdmin.from("contacts").select("full_name").eq("id", contactId).maybeSingle()
+    const personLabel = (c?.full_name as string | undefined) ?? "the person"
+    targets.push({ key: `person:${contactId}`, kind: "person", accountId: null, contactId, label: `${personLabel} — personal chat`, closed: false, isDefault: personIsDefault, topics: await openTopicsOf({ contactId }) })
   }
-  if (targets.length === 0) return { askable: false, reason: "no_recipient", fileName }
-
-  const locale = await resolveDocLocale(doc.account_id, doc.contact_id)
-  return { askable: true, fileName, locale, defaultTopic: DEFAULT_DOCUMENT_TOPIC, targets }
+  return targets
 }

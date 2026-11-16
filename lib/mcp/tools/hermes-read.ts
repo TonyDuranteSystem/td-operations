@@ -20,9 +20,9 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { validateSQL } from "./sql"
 import { redactSensitive } from "./sysdocs"
 
-/** Credential/token tables Hermes must never read (matches the DB-function guard). */
+/** Credential/token tables Hermes must never read (matches the DB-function guard), plus the owner-only Personal address book (also revoked from the ai_readonly role). */
 export const BLOCKED_TABLES =
-  /\b(hc_tokens|oauth_clients|oauth_codes|oauth_tokens|oauth_users|portal_welcome_tokens|qb_tokens)\b/i
+  /\b(hc_tokens|oauth_clients|oauth_codes|oauth_tokens|oauth_users|portal_welcome_tokens|qb_tokens|address_book_personal)\b/i
 
 /** Pure read-only gate used by crm_query. Returns an error string if the query
  * is not an allowed read, else null. Exported for unit testing. */

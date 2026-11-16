@@ -64,9 +64,30 @@ export interface CardAnswer {
   label: string
   primary: boolean
 }
+/** What an unpaid paid call's card carries (Stage 3, built by lib/booking/paid-calls.ts — never stored: it is worked out again every time the page opens). */
+export interface PaidCardInfo {
+  /** the booking link this payment belongs to (the buttons act on it) */
+  linkId: string
+  amountText: string
+  /** the payment page's address (our own, never expires) */
+  payUrl: string
+  /** who the message goes to: the booker's email, else the one the link was made with */
+  email: string | null
+  /** the message Antonio sees first, written in the person's language */
+  draft: { subject: string; body: string }
+  /** a portal client: the link is copied and sent in the portal chat by hand, never emailed from here */
+  copyOnly: boolean
+  sentAt: string | null
+  sentCount: number
+}
+
+export type CardKind = ShownKind | "unpaid_call"
+
 export interface CardDto {
   id: string
-  kind: ShownKind
+  kind: CardKind
+  /** only on an unpaid-call card */
+  paid?: PaidCardInfo
   question: string
   why: string
   /** an extra plain line (for example: why "Same person" is not offered) */

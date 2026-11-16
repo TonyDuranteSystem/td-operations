@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildDocumentShareMessage, normalizeTopic, resolveTypedTopic, sameShareAudience, topicChoices, DEFAULT_DOCUMENT_TOPIC, type ShareContext, type ShareTarget } from '@/lib/portal/document-share-text'
+import { buildDocumentShareMessage, contactMessageNotice, messageTopicChoices, normalizeTopic, resolveTypedTopic, sameShareAudience, topicChoices, DEFAULT_DOCUMENT_TOPIC, type ShareContext, type ShareTarget, isChatClosedStatus, companyReachNotice, companyAlertInfo } from '@/lib/portal/document-share-text'
 import { buildShareChatBody, type ShareMessageToSend } from '@/lib/crm-store/document-share-client'
 
 describe('buildDocumentShareMessage', () => {
@@ -68,3 +68,81 @@ describe('sameShareAudience (one pop-up for several files)', () => {
     expect(sameShareAudience(ctx([t('company:a', true)]), { askable: false, reason: 'personal', fileName: 'p' })).toBe(false)
   })
 })
+
+describe('messageTopicChoices (the Contact page Message pop-up)', () => {
+  it('"General" (an empty topic) always comes first, then the chat\'s own topics', () => {
+    expect(messageTopicChoices([])).toEqual([''])
+    expect(messageTopicChoices(['ITIN', 'Tax'])).toEqual(['', 'ITIN', 'Tax'])
+  })
+  it('drops case-insensitive duplicates and blanks', () => {
+    expect(messageTopicChoices(['ITIN', 'itin', ' ', 'Tax'])).toEqual(['', 'ITIN', 'Tax'])
+  })
+  it('a General message is sent with an empty topic, which the chat route stores as no topic', () => {
+    const target = { key: 'person:c1', kind: 'person', accountId: null, contactId: 'c1', label: 'Ada', closed: false, isDefault: false, topics: [] } as ShareTarget
+    expect(buildShareChatBody({ target, topic: '', message: 'Hello', addressedToMemberId: null, addressedToCompany: false })).toEqual({
+      contact_id: 'c1', sender_context: 'person', topic: '', message: 'Hello',
+    })
+  })
+})
+
+describe('contactMessageNotice', () => {
+  it('says nothing when the login is fine', () => {
+    expect(contactMessageNotice('Ada Rossi', { exists: true, suspended: false })).toBeNull()
+  })
+  it('warns when the person has no portal login yet', () => {
+    expect(contactMessageNotice('Ada Rossi', { exists: false, suspended: false })).toBe('Ada Rossi has no portal login yet. The message is saved in their chat, but they cannot read it until they have portal access.')
+  })
+  it('warns when the login is suspended', () => {
+    expect(contactMessageNotice('Ada Rossi', { exists: true, suspended: true })).toContain('suspended')
+  })
+  it('falls back to "This person" for a nameless contact', () => {
+    expect(contactMessageNotice('  ', { exists: false, suspended: false })).toMatch(/^This person has no portal login yet/)
+  })
+})
+
+describe('isChatClosedStatus — the one rule for a chat the client cannot see', () => {
+  it('Active and Suspended are open', () => {
+    expect(isChatClosedStatus('Active')).toBe(false)
+    expect(isChatClosedStatus('Suspended')).toBe(false)
+  })
+  it('every other status is closed, including Pending Formation (not greyed on the list, but the portal hides its chat)', () => {
+    for (const s of ['Cancelled', 'Closed', 'Offboarding', 'Pending Formation', '', 'something new']) expect(isChatClosedStatus(s)).toBe(true)
+  })
+  it('a missing status is closed', () => {
+    expect(isChatClosedStatus(null)).toBe(true)
+    expect(isChatClosedStatus(undefined)).toBe(true)
+  })
+})
+
+describe('companyReachNotice — only when NOBODY can read the chat yet', () => {
+  it('no warning as soon as one linked person has a working login', () => {
+    expect(companyReachNotice('Open LLC', { contactCount: 3, contactsWithLogin: 1, chatTeammates: 0 })).toBeNull()
+  })
+  it('no warning when a chat teammate is active, even with no linked login', () => {
+    expect(companyReachNotice('Open LLC', { contactCount: 1, contactsWithLogin: 0, chatTeammates: 1 })).toBeNull()
+  })
+  it('warns when people are linked but none can log in', () => {
+    expect(companyReachNotice('Open LLC', { contactCount: 2, contactsWithLogin: 0, chatTeammates: 0 })).toMatch(/Nobody at Open LLC has a working portal login/)
+  })
+  it('warns differently when nobody is linked at all', () => {
+    expect(companyReachNotice('Open LLC', { contactCount: 0, contactsWithLogin: 0, chatTeammates: 0 })).toMatch(/Nobody is linked to Open LLC yet/)
+  })
+  it('says the message is still saved, and copes with a blank name', () => {
+    const n = companyReachNotice('  ', { contactCount: 1, contactsWithLogin: 0, chatTeammates: 0 })
+    expect(n).toMatch(/This company/)
+    expect(n).toMatch(/still saved/)
+  })
+})
+
+describe('companyAlertInfo — the alert goes to one person', () => {
+  it('names the person and says everyone linked can still read it', () => {
+    const t = companyAlertInfo('Ada Rossi')
+    expect(t).toMatch(/one person only: Ada Rossi/)
+    expect(t).toMatch(/Everyone linked to the company can read/)
+  })
+  it('says nothing when nobody could be resolved', () => {
+    expect(companyAlertInfo(null)).toBeNull()
+    expect(companyAlertInfo('   ')).toBeNull()
+  })
+})
+

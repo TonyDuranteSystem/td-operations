@@ -1,0 +1,13 @@
+{
+  "title": "A signed contract now tells you when the company's installment amounts do not match it",
+  "tag": "new",
+  "text": "On a person's page, each signed contract line now says whether the company's installment amounts in the CRM agree with what the client signed. When they agree, a quiet green line says so. When they differ, an amber note shows the company's two amounts, so the gap is visible at once. If the company has no amounts, or the offer is not filed on a company, the line says it was not compared, so a missing note never means a match. Nothing is changed for you: you correct the company yourself.",
+  "points": [
+    "Open a person who signed a formation or onboarding contract and look at Signed contracts.",
+    "Green: the company's amounts are the same as the contract.",
+    "Amber: the CRM holds other amounts; the note lists them.",
+    "Grey: not compared (no company on the offer, or the amounts could not be read).",
+    "Renewal agreements are not compared yet."
+  ],
+  "screenshot": "contract-amounts-check.png"
+}

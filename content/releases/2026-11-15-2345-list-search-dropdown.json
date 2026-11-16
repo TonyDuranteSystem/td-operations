@@ -1,0 +1,12 @@
+{
+  "title": "Search dropdown on the Contacts and Accounts lists",
+  "tag": "new",
+  "text": "When you type in the search box of the Contacts list or the Accounts list, a dropdown now appears under it while you type, with up to eight matches. For a person it shows their email and companies; for a company it shows its status, state and people. Click a match, or use the arrow keys and Enter, to open it straight away.",
+  "points": [
+    "It starts after two letters and uses the same search as the search at the top of the app, so both always agree on who matches.",
+    "Pressing Enter with nothing highlighted still filters the whole list by what you typed, exactly as before. The last line of the dropdown reminds you.",
+    "Escape, a click elsewhere or Tab closes it. If nothing matches, it says so.",
+    "A person is found by name, email, phone or one of their companies' names; a company by its name or one of its people."
+  ],
+  "screenshot": "list-search-dropdown.png"
+}

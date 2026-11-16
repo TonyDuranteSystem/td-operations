@@ -38,6 +38,52 @@ describe('findInstallmentInvoice', () => {
   })
 })
 
+describe('a settled record with no invoice number (March–April 2026 imports, payments marked Paid by hand)', () => {
+  const noNumber = (over: Partial<Row> = {}): Row => row({ invoice_number: null, ...over })
+
+  it('counts a Paid / Overdue / Waived record that has an amount but no number', () => {
+    expect(findInstallmentInvoice([noNumber({ status: 'Paid' })], 1, 2026)).toHaveLength(1)
+    expect(findInstallmentInvoice([noNumber({ status: 'Overdue' })], 1, 2026)).toHaveLength(1)
+    expect(findInstallmentInvoice([noNumber({ status: 'Waived' })], 1, 2026)).toHaveLength(1)
+    expect(findInstallmentInvoice([noNumber({ invoice_status: 'Delinquent' })], 1, 2026)).toHaveLength(1)
+    expect(findInstallmentInvoice([row({ invoice_number: '1.0', status: 'Paid' })], 1, 2026)).toHaveLength(1)
+  })
+  it('does not count a placeholder: pending, draft, sent or "Not Invoiced" with no number', () => {
+    for (const status of ['Pending', 'Draft', 'Sent', 'Not Invoiced']) {
+      expect(findInstallmentInvoice([noNumber({ status })], 1, 2026)).toHaveLength(0)
+    }
+  })
+  it('still ignores the $0 companion record, even when it says Paid', () => {
+    expect(findInstallmentInvoice([noNumber({ status: 'Paid', total: 0 })], 1, 2026)).toHaveLength(0)
+    expect(findInstallmentInvoice([noNumber({ status: 'Paid', total: null })], 1, 2026)).toHaveLength(0)
+  })
+  it('still ignores a dead record (cancelled / voided / credit)', () => {
+    expect(findInstallmentInvoice([noNumber({ status: 'Cancelled' })], 1, 2026)).toHaveLength(0)
+    expect(findInstallmentInvoice([noNumber({ status: 'Paid', invoice_status: 'Voided' })], 1, 2026)).toHaveLength(0)
+  })
+  it('a numbered invoice always wins, so an old unnumbered record beside it is never a duplicate', () => {
+    const rows = [noNumber({ status: 'Paid' }), row({ invoice_number: 'INV-000200', status: 'Pending' })]
+    const found = findInstallmentInvoice(rows, 1, 2026)
+    expect(found).toHaveLength(1)
+    expect(found[0].invoice_number).toBe('INV-000200')
+    expect(chipForInstallment(rows, 1, 2026)).toEqual({ kind: 'pending', count: 1 })
+  })
+  it('two settled records with no number are still flagged as a duplicate', () => {
+    expect(chipForInstallment([noNumber({ status: 'Paid' }), noNumber({ status: 'Paid' })], 1, 2026)).toEqual({ kind: 'duplicate', count: 2 })
+  })
+  it('gives the right chip', () => {
+    expect(chipForInstallment([noNumber({ status: 'Paid' })], 1, 2026).kind).toBe('paid')
+    expect(chipForInstallment([noNumber({ status: 'Overdue' })], 1, 2026).kind).toBe('overdue')
+    expect(chipForInstallment([noNumber({ status: 'Waived' })], 1, 2026).kind).toBe('waived')
+    expect(chipForInstallment([noNumber({ status: 'Pending' })], 1, 2026).kind).toBe('not_invoiced')
+  })
+  it('keeps installments and years apart', () => {
+    const rows = [noNumber({ status: 'Paid' })]
+    expect(chipForInstallment(rows, 2, 2026).kind).toBe('not_invoiced')
+    expect(chipForInstallment(rows, 1, 2027).kind).toBe('not_invoiced')
+  })
+})
+
 describe('installmentChip', () => {
   it('is Not invoiced with no invoice', () => {
     expect(installmentChip([])).toEqual({ kind: 'not_invoiced', count: 0 })

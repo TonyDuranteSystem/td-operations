@@ -23,6 +23,7 @@ import { ClientConversationsPanel } from '@/components/conversations/client-conv
 import { ActivityFeed } from '@/components/accounts/activity-feed'
 import { DeliveryRowActions } from '@/components/trackers/delivery-row-actions'
 import { ComposeEmailButton } from '@/components/inbox/compose-email-button'
+import { MessageContactButton, CONTACT_CHAT_SENT_EVENT } from '@/components/contacts/message-contact-button'
 import { NewWhatsAppConversationDialog } from '@/components/messaging/new-whatsapp-conversation-dialog'
 import { ThreadEmailPanel } from '@/components/portal-chats/thread-email-panel'
 import { ChainAuditDialog } from '@/components/contacts/chain-audit-dialog'
@@ -422,6 +423,7 @@ export function ContactDetail({
             to={contact.email || undefined}
             linkLabel={contact.full_name || contact.email || undefined}
           />
+          <MessageContactButton contactId={contact.id} contactName={contact.full_name || ''} />
           {(contact.phone || contact.phone_2 || contact.phone_3 || contact.phone_4) && (
             <button
               onClick={() => setShowWhatsApp(true)}
@@ -1804,6 +1806,15 @@ function ChatTab({
   useEffect(() => {
     fetchMessages()
   }, [fetchMessages])
+
+  // A message written from the header's Message button lands in this timeline without a page reload.
+  useEffect(() => {
+    const onSent = (e: Event) => {
+      if ((e as CustomEvent<{ contactId?: string }>).detail?.contactId === contactId) void fetchMessages()
+    }
+    window.addEventListener(CONTACT_CHAT_SENT_EVENT, onSent)
+    return () => window.removeEventListener(CONTACT_CHAT_SENT_EVENT, onSent)
+  }, [contactId, fetchMessages])
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
