@@ -94,6 +94,8 @@ export async function stopCharging(db: Db, id: string, now: Date, deps: StopDeps
   if (!r.row) return r.result as PayActionResult
   if (r.row.paid_session_id) return { ok: false, status: 409, error: "This call is already paid, so it cannot be marked as not charging." }
   if (r.row.not_charging_at) return { ok: true, message: "This call was already marked as not charging." }
+  // The card page to close is the one the UPDATE itself returns: a Pay click that saved a new page between the read above and this update is then closed too (not the stale one).
+  let sessionToClose: string | null = r.row.stripe_session_id
   try {
     const { data, error } = await db
       .from("booking_links")
@@ -101,7 +103,7 @@ export async function stopCharging(db: Db, id: string, now: Date, deps: StopDeps
       .eq("id", id)
       .is("paid_session_id", null)
       .is("not_charging_at", null)
-      .select("id")
+      .select("id, stripe_session_id")
     if (error) return { ok: false, status: 500, error: "That could not be saved. Try again." }
     if (!Array.isArray(data) || data.length === 0) {
       // paid, or stopped by someone else, a moment ago: say which
@@ -109,14 +111,16 @@ export async function stopCharging(db: Db, id: string, now: Date, deps: StopDeps
       if (again.row && again.row.paid_session_id) return { ok: false, status: 409, error: "This call was just paid, so it cannot be marked as not charging." }
       return { ok: true, message: "This call was already marked as not charging." }
     }
+    const saved = (data[0] as { stripe_session_id?: unknown }).stripe_session_id
+    if (typeof saved === "string" && saved) sessionToClose = saved
   } catch {
     return { ok: false, status: 500, error: "That could not be saved. Try again." }
   }
   // close the card page so nobody can still pay by an old tab (best effort: the payment page also refuses from now on)
   let note = ""
-  if (r.row.stripe_session_id) {
+  if (sessionToClose) {
     // Stripe is given 8 seconds: a hung Stripe call must never turn a finished "Not charging" (or an already-sent Calendly cancel) into a timeout on the page
-    const closed = await withTimeout((deps.expire ?? expireCheckoutSession)(r.row.stripe_session_id), EXPIRE_TIMEOUT_MS)
+    const closed = await withTimeout((deps.expire ?? expireCheckoutSession)(sessionToClose), EXPIRE_TIMEOUT_MS)
     if (!closed.ok) note = " The card page could not be closed in Stripe, but the payment page no longer takes money."
   }
   return { ok: true, message: `Marked as not charging. The payment link no longer takes money.${note}` }

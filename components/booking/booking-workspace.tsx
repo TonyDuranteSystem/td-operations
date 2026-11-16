@@ -6,7 +6,8 @@
  * A computer screen only: nothing is drawn for a phone.
  */
 
-import { useCallback, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
 import type { KindDto } from "@/lib/booking/kinds-admin"
 import type { LinkDto } from "@/lib/booking/links"
 import { callApi, messageOf } from "@/components/booking/api"
@@ -57,6 +58,12 @@ export function BookingWorkspace({
   const [links, setLinks] = useState<LinkDto[] | null>(initialLinks)
   const [linksProblem, setLinksProblem] = useState<string | null>(linksError)
   const [again, setAgain] = useState<MakeAgain | null>(null)
+  const router = useRouter()
+  // "Links I made" and "Calls to check" must never disagree: when the page is re-read from the server (after a card's button), the list follows it
+  useEffect(() => {
+    setLinks(initialLinks)
+    setLinksProblem(linksError)
+  }, [initialLinks, linksError])
   const off = mode === "off"
 
   const refreshLinks = useCallback(async () => {
@@ -97,7 +104,7 @@ export function BookingWorkspace({
 
       <div className="grid grid-cols-[minmax(380px,460px)_minmax(0,1fr)] items-start gap-5">
         <LinkMaker kinds={kinds} kindsError={kindsError} refreshKinds={refreshKinds} onMade={refreshLinks} again={again} callTypesReady={callTypesReady} off={off} />
-        <LinksMade links={links} error={linksProblem} off={off} onChanged={refreshLinks} onMakeAgain={(l) => setAgain({ nonce: Date.now(), contactId: l.contactId, leadId: l.leadId, name: l.personName, email: l.email, kindSlug: l.kindSlug, minutes: l.minutes, once: l.once, asks: l.asks, pay: l.pay ? { amount: l.pay.amount, currency: l.pay.currency, label: l.pay.label } : null })} />
+        <LinksMade links={links} error={linksProblem} off={off} onChanged={async () => { await refreshLinks(); router.refresh() }}onMakeAgain={(l) => setAgain({ nonce: Date.now(), contactId: l.contactId, leadId: l.leadId, name: l.personName, email: l.email, kindSlug: l.kindSlug, minutes: l.minutes, once: l.once, asks: l.asks, pay: l.pay ? { amount: l.pay.amount, currency: l.pay.currency, label: l.pay.label } : null })} />
       </div>
 
       <section id="calls" className="space-y-3" data-testid="calls-section">

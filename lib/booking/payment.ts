@@ -16,6 +16,14 @@ export function payUrl(payCode: string, baseUrl: string = APP_BASE_URL): string 
   return `${baseUrl.replace(/\/+$/, "")}/pay/b/${payCode}`
 }
 
+/**
+ * A plain email address: one "@", no spaces and none of `, ; ? & = < > ( ) " '`. Stripe rejects a malformed address as the card page's prefilled email (which would make the
+ * link unpayable), and a "?" or "&" in an address typed by a booker could add parts to a mail link: only a plain address is ever prefilled or put in a link.
+ */
+export function isPlainEmail(v: unknown): v is string {
+  return typeof v === "string" && /^[^\s@,;?&=<>()"']+@[^\s@,;?&=<>()"']+\.[^\s@,;?&=<>()"']{2,}$/.test(v)
+}
+
 /** Only a code of our exact shape is ever looked up. */
 export const isPayCode = isStrictLinkId
 

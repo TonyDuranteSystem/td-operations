@@ -12,7 +12,7 @@ vi.mock("@/lib/calendly/api", async (orig) => ({ ...(await orig<typeof import("@
 vi.mock("@/lib/booking/pay-session", async (orig) => ({ ...(await orig<typeof import("@/lib/booking/pay-session")>()), openPayment: h.open }))
 
 import { GET, POST } from "@/app/pay/b/[code]/route"
-import { STRIPE_PAGE_PREFIX } from "@/lib/booking/pay-session"
+const STRIPE_PAGE_PREFIX = "https://checkout.stripe.com/"
 
 const PAYCODE = "2hhvDHUcAPqPBTXdD8HMqw"
 const ctx = (code: string) => ({ params: Promise.resolve({ code }) })
@@ -80,8 +80,14 @@ describe("POST /pay/b/<code>", () => {
     expect(res.headers.get("location")).toBe(`${STRIPE_PAGE_PREFIX}c/pay/cs_live_1`)
     hardened(res)
   })
+  it("a Stripe sub-domain (a Stripe-hosted custom page) is accepted, https only", async () => {
+    h.open.mockResolvedValue({ ok: true, url: "https://pay.stripe.com/c/x" })
+    const res = await POST(req("POST"), ctx(PAYCODE))
+    expect(res.status).toBe(303)
+    expect(res.headers.get("location")).toBe("https://pay.stripe.com/c/x")
+  })
   it("refuses any other address, whatever the answer said", async () => {
-    for (const url of ["https://evil.example/x", "http://checkout.stripe.com/x", "https://checkout.stripe.com.evil.example/x", "javascript:alert(1)", "//evil.example"]) {
+    for (const url of ["https://evil.example/x", "http://checkout.stripe.com/x", "https://checkout.stripe.com.evil.example/x", "https://evilstripe.com/x", "https://user:pw@checkout.stripe.com/x", "https://checkout.stripe.com:8443/x", "javascript:alert(1)", "//evil.example"]) {
       h.open.mockResolvedValue({ ok: true, url })
       const res = await POST(req("POST"), ctx(PAYCODE))
       expect(res.status, url).toBe(502)

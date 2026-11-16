@@ -14,15 +14,28 @@ import { isStrictLinkId } from "@/lib/booking-links/id"
 import { isMissingTable } from "@/lib/booking-links/missing-table"
 import { bookingUrisOf, decideBooking, isCancelledState, loadStoredBookings, lookupEvents } from "@/lib/booking/link-bookings"
 import { createMarketingCheckoutSession, expireCheckoutSession, readCheckoutSession } from "@/lib/stripe-checkout"
-import { isPaidLink, parsePayMode, payStateOf } from "@/lib/booking/payment"
+import { isPaidLink, isPlainEmail, parsePayMode, payStateOf } from "@/lib/booking/payment"
+import { contactEmailSet } from "@/lib/operations/contact-email-aliases"
 import type { CalendlyCtx } from "@/lib/calendly/api"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- booking_links: untyped until the production migration is applied
 type Db = any
 
 export const DEFAULT_PAY_LABEL = "Strategic call"
-/** Where a person may be sent from the payment page: Stripe's own card page, nothing else (a next.js route file may not export extra names, so it lives here). */
-export const STRIPE_PAGE_PREFIX = "https://checkout.stripe.com/"
+/**
+ * Where a person may be sent from the payment page: a Stripe card page, nothing else. https only, and the host must be stripe.com itself or one of its sub-domains
+ * (checkout.stripe.com today; a Stripe-hosted custom domain would still end in .stripe.com). A look-alike such as checkout.stripe.com.evil.example is refused.
+ * (A next.js route file may not export extra names, so this lives here.)
+ */
+export function isStripePageUrl(raw: unknown): raw is string {
+  if (typeof raw !== "string") return false
+  try {
+    const u = new URL(raw)
+    return u.protocol === "https:" && u.port === "" && u.username === "" && u.password === "" && (u.hostname === "stripe.com" || u.hostname.endsWith(".stripe.com"))
+  } catch {
+    return false
+  }
+}
 /** the lease that stops two clicks at the same moment from making two card pages */
 export const LEASE_MS = 30_000
 
@@ -76,9 +89,10 @@ const text = (v: unknown): string | null => (typeof v === "string" && v.trim() ?
 export async function identityEmail(db: Db, row: PayRow): Promise<string | null> {
   try {
     if (row.contact_id) {
-      const { data } = await db.from("contacts").select("email").eq("id", row.contact_id).maybeSingle()
-      const e = text(data?.email)
-      if (e) return e.toLowerCase()
+      // the contact's own primary email; a contact with no primary email is known by another address (email_2, an alternate): the first of those
+      const { data } = await db.from("contacts").select("email, email_2, alt_emails").eq("id", row.contact_id).maybeSingle()
+      const e = data ? contactEmailSet(data)[0] : undefined
+      if (e) return e
     }
     if (row.lead_id) {
       const { data } = await db.from("leads").select("email").eq("id", row.lead_id).maybeSingle()
@@ -215,7 +229,8 @@ export async function openPayment(deps: OpenDeps, code: unknown): Promise<OpenRe
     ...(name ? { client_name: name } : {}),
     ...(row.lead_id ? { crm_lead_ref: row.lead_id } : {}),
   }
-  const made = await stripe.create({ amountCents, currency, productName: text(row.pay_label) ?? DEFAULT_PAY_LABEL, clientEmail: email, metadata })
+  // The card page's email is prefilled only with a PLAIN address: Stripe rejects a malformed one, which would make the link permanently unpayable (staff-typed CRM emails are not always clean).
+  const made = await stripe.create({ amountCents, currency, productName: text(row.pay_label) ?? DEFAULT_PAY_LABEL, clientEmail: isPlainEmail(email) ? email : null, metadata })
   if (!made.success || !made.checkoutUrl || !made.sessionId) {
     await releaseLease(db, row.id)
     return no("stripe")

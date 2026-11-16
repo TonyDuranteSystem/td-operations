@@ -11,7 +11,8 @@ import { callApi, messageOf } from "@/components/booking/api"
 import type { MakeAgain } from "@/components/booking/booking-workspace"
 import { OFF_REASON } from "@/lib/booking/mode-text"
 
-type MadeLink = { id: string; publicId: string; url: string; email: string | null; language: "Italian" | "English" | null }
+/** `paidText` is the price AS IT WAS when the link was made ("$397"), kept with the link: the form may be edited while the request is on its way. */
+type MadeLink = { id: string; publicId: string; url: string; email: string | null; language: "Italian" | "English" | null; paidText?: string | null }
 type Preview = { ok: true; lines: PreviewLine[]; once: boolean; minutes: number; ready: boolean; template: "sales" | "plain"; autoTemplate: "sales" | "plain"; needsConfirm?: boolean; paid?: boolean } | { ok: false; errors: string[] }
 type QuestionsAnswer = { questions: AllQuestions; editUrl: string }
 
@@ -206,14 +207,14 @@ export function LinkMaker({
     setError(null)
     try {
       const r = await callApi<{ link: MadeLink }>("/api/booking/links", { method: "POST", body: { person: personRef, kindSlug, minutes, firstBookingOnly: effectiveFirstOnly, questions, payment } }, "The link could not be made. Try again.")
-      setMade(r.link)
+      setMade({ ...r.link, paidText: paid ? `${currency === "EUR" ? "€" : "$"}${amount.trim()}` : null })
       await onMade()
     } catch (e) {
       setError(messageOf(e, "The link could not be made. Try again."))
     } finally {
       setMaking(false)
     }
-  }, [personRef, kindOk, minutes, kindSlug, effectiveFirstOnly, questions, payment, onMade])
+  }, [personRef, kindOk, minutes, kindSlug, effectiveFirstOnly, questions, payment, paid, currency, amount, onMade])
 
   const flash = (t: string) => { setCopied(t); setTimeout(() => setCopied((c) => (c === t ? null : c)), 1800) }
   const copy = async () => {
@@ -416,7 +417,7 @@ export function LinkMaker({
             <div className="grid gap-2.5 rounded-lg bg-zinc-100 p-3.5" aria-live="polite" data-testid="made-link">
               <span className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Your link</span>
               <div className="break-all text-sm font-semibold" data-testid="made-url">{made.url}</div>
-              <p className="text-xs text-zinc-500">For {shownName || "someone new"} · {lengthWords(minutes ?? 30)} · {paid ? `paid ${symbol}${amount.trim()} · ` : ""}{effectiveFirstOnly ? "first booking only" : "every booking"}. Nothing personal is in the link you send, only a random id.</p>
+              <p className="text-xs text-zinc-500">For {shownName || "someone new"} · {lengthWords(minutes ?? 30)} · {made.paidText ? `paid ${made.paidText} · ` : ""}{effectiveFirstOnly ? "first booking only" : "every booking"}. Nothing personal is in the link you send, only a random id.</p>
               <div className="flex flex-wrap items-center gap-2">
                 <button type="button" onClick={copy} className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white" data-testid="copy-link">Copy link</button>
                 {draft && <a href={`mailto:${made.email ?? ""}?subject=${encodeURIComponent(draft.subject)}&body=${encodeURIComponent(draft.body)}`} className="rounded-md border bg-white px-3 py-1.5 text-sm font-medium">Email it</a>}

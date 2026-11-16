@@ -6,7 +6,7 @@
  * Pointing at a name shows the same little card as the Contacts list.
  */
 
-import { useState } from "react"
+import { useRef, useState } from "react"
 import type { LinkDto } from "@/lib/booking/links"
 import { callApi, dataOf, messageOf } from "@/components/booking/api"
 import { ListHoverCard } from "@/components/lists/hover-card"
@@ -27,6 +27,9 @@ function bookingClass(l: LinkDto): string {
   if (state === "booked_unchecked") return "text-amber-700"
   return "text-zinc-500"
 }
+
+/** a second click sooner than this after the first one is a double-click, not a confirmation */
+const SECOND_CLICK_MS = 700
 
 const BADGE = "rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-semibold text-zinc-700"
 const BTN = "rounded-md border px-2.5 py-1 text-xs font-medium disabled:opacity-50"
@@ -71,12 +74,17 @@ export function LinksMade({ links, error, off, onChanged, onMakeAgain }: { links
     setTimeout(() => setNote((n) => (n && n.id === l.id ? null : n)), 2200)
   }
 
+  // a mouse double-click must not count as the deliberate second click ("Sure?" never read)
+  const armedAt = useRef(0)
+
   const stop = async (l: LinkDto) => {
     if (sure !== l.id) {
+      armedAt.current = Date.now()
       setSure(l.id)
       setTimeout(() => setSure((s) => (s === l.id ? null : s)), 4000)
       return
     }
+    if (Date.now() - armedAt.current < SECOND_CLICK_MS) return
     setBusy(l.id)
     setSure(null)
     try {
@@ -92,10 +100,12 @@ export function LinksMade({ links, error, off, onChanged, onMakeAgain }: { links
 
   const cancelCall = async (l: LinkDto) => {
     if (sureCancel !== l.id) {
+      armedAt.current = Date.now()
       setSureCancel(l.id)
       setTimeout(() => setSureCancel((s) => (s === l.id ? null : s)), 6000)
       return
     }
+    if (Date.now() - armedAt.current < SECOND_CLICK_MS) return
     setBusy(l.id)
     setSureCancel(null)
     setHandCancel(null)

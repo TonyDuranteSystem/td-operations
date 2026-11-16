@@ -20,6 +20,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { settlePayment, UUID_RE, type Resolution } from "@/lib/incoming-payments/confirm"
 import type { WaitingPayment } from "@/lib/incoming-payments/classify"
 import { parsePayMode } from "@/lib/booking/payment"
+import { contactEmailSet } from "@/lib/operations/contact-email-aliases"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- booking_links: untyped until the production migration is applied
 type Db = any
@@ -93,9 +94,10 @@ export async function recordBookingLinkPayment(session: BookingPaySession, deps:
   // who the payment belongs to: the person the link was made for (a contact's own email, read now), else the email we put on the card page, else whoever paid
   let email: string | null = null
   if (row.contact_id) {
-    const { data: c, error: cErr } = await db.from("contacts").select("email").eq("id", row.contact_id).maybeSingle()
+    const { data: c, error: cErr } = await db.from("contacts").select("email, email_2, alt_emails").eq("id", row.contact_id).maybeSingle()
     if (cErr) throw new Error(`booking-link payment ${session.id}: could not read the contact (${String(cErr.message ?? "lookup failed")})`)
-    email = text(c?.email)
+    // the primary email, or (a contact with none) the first other address they are known by: never a new contact on the booker's address
+    email = c ? contactEmailSet(c)[0] ?? null : null
   }
   email = email ?? text(session.metadata?.client_email) ?? text(session.customer_details?.email)
 

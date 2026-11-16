@@ -6,7 +6,7 @@
  * `cards` is null when the read failed — the section says so, it never says "nothing needs you" then.
  */
 
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import type { CardDto, PaidCardInfo } from "@/lib/booking/checks"
 import { callApi, dataOf, messageOf } from "@/components/booking/api"
@@ -53,7 +53,7 @@ export function CallsToCheckTab({ cards, off = false }: { cards: CardDto[] | nul
       <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
         Paid calls nobody has paid yet, and bookings made through a link you sent that the system could not settle by itself. <b>Nothing was dropped</b>: each booking was saved as usual, and these cards ask you what to do.
       </div>
-      {off && open.length > 0 && <p className="text-sm font-semibold text-amber-900" data-testid="calls-off">{OFF_REASON}: you can read the cards, but not answer them yet.</p>}
+      {off && open.length > 0 && <p className="text-sm font-semibold text-amber-900" data-testid="calls-off">{OFF_REASON}: you can read the cards, but not answer them yet{open.some((c) => c.paid) ? " (a paid call can still be marked Not charging)" : ""}.</p>}
       {open.length === 0 && done.length === 0 && <p className="rounded-lg border p-4 text-sm text-zinc-600" data-testid="calls-empty">Nothing needs you.</p>}
       <div className="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-3">
         {open.map((c) => c.paid ? (
@@ -86,6 +86,8 @@ export function CallsToCheckTab({ cards, off = false }: { cards: CardDto[] | nul
 }
 
 const CARD_BTN = "rounded-md border px-3 py-1.5 text-sm font-medium disabled:opacity-50"
+/** a second click sooner than this after the first one is a double-click, not a confirmation */
+const SECOND_CLICK_MS = 700
 
 /**
  * An unpaid paid call: the person booked, nobody has paid yet. Four buttons: Send payment link (shows the message first; nothing is sent from this page — it opens
@@ -115,12 +117,17 @@ function PaidCard({ card, paid, off, onDone }: { card: CardDto; paid: PaidCardIn
     }
   }
 
+  // The second click must be a DELIBERATE one: a mouse double-click (two clicks within a fraction of a second) would otherwise run an irreversible action ("Not charging") or
+  // email the booker ("Cancel the call") with the "Sure?" never read.
+  const armedAt = useRef(0)
   const twoStep = (which: "cancel" | "stop", run: () => void) => {
     if (sure !== which) {
+      armedAt.current = Date.now()
       setSure(which)
       setTimeout(() => setSure((s) => (s === which ? null : s)), 6000)
       return
     }
+    if (Date.now() - armedAt.current < SECOND_CLICK_MS) return
     setSure(null)
     run()
   }
@@ -150,7 +157,7 @@ function PaidCard({ card, paid, off, onDone }: { card: CardDto; paid: PaidCardIn
         {!paid.copyOnly && <button type="button" disabled={off || busy !== null} onClick={() => setPanel((p) => !p)} className={`${CARD_BTN} border-zinc-900 bg-zinc-900 text-white`} data-testid="paid-send">Send payment link</button>}
         <button type="button" onClick={copy} className={`${CARD_BTN} ${paid.copyOnly ? "border-zinc-900 bg-zinc-900 text-white" : "bg-white"}`} data-testid="paid-copy">{copied ? "Copied" : "Copy payment link"}</button>
         <button type="button" disabled={off || busy !== null} onClick={() => twoStep("cancel", () => act("cancel-call", "The call could not be cancelled. Nothing was cancelled. Try again."))} className={`${CARD_BTN} bg-white`} data-testid="paid-cancel">{busy === "cancel-call" ? "Cancelling…" : sure === "cancel" ? "Sure? Calendly emails the booker" : "Cancel the call"}</button>
-        <button type="button" disabled={off || busy !== null} onClick={() => twoStep("stop", () => act("not-charging", "That could not be saved. Try again."))} className={`${CARD_BTN} bg-white`} data-testid="paid-stop">{busy === "not-charging" ? "Saving…" : sure === "stop" ? "Sure? No payment will be taken" : "Not charging"}</button>
+        <button type="button" disabled={busy !== null} onClick={() => twoStep("stop", () => act("not-charging", "That could not be saved. Try again."))} className={`${CARD_BTN} bg-white`} data-testid="paid-stop">{busy === "not-charging" ? "Saving…" : sure === "stop" ? "Sure? No payment will be taken" : "Not charging"}</button>
       </div>
       {panel && !paid.copyOnly && (
         <div className="grid gap-2 rounded-md border bg-white p-3 text-sm" data-testid="paid-message">

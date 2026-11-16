@@ -4,7 +4,8 @@
  */
 import { describe, it, expect, vi, afterEach } from "vitest"
 import { miniDb } from "./helpers/mini-db"
-import { openPayment, findPayLink, type StripeOps } from "@/lib/booking/pay-session"
+import { openPayment, findPayLink, identityEmail, isStripePageUrl, type StripeOps } from "@/lib/booking/pay-session"
+import { isPlainEmail } from "@/lib/booking/payment"
 import { recordBookingLinkPayment, type BookingPaySession } from "@/lib/booking/pay-record"
 import { stopCharging } from "@/lib/booking/pay-actions"
 import { cardIsDue, decidePaidCard, loadPaidCalls, type PaidLinkRow } from "@/lib/booking/paid-calls"
@@ -236,5 +237,62 @@ describe("stopping a paid link also stops charging", () => {
     expect(r).toMatchObject({ ok: true })
     expect("message" in r && r.message).toMatch(/could not be closed in Stripe/)
     expect(db.tables.booking_links[0].not_charging_at).toBe(NOW.toISOString())
+  })
+})
+
+// ── round 2 (second bug-hunter pass) ─────────────────────────────────────────────────────
+
+describe("round 2: emails", () => {
+  it("a plain address is the only kind ever prefilled on the card page or put in a mail link", () => {
+    for (const ok of ["maria@example.com", "a.b+c@sub.example.co.uk"]) expect(isPlainEmail(ok), ok).toBe(true)
+    for (const bad of ["name@gmail", "a b@x.com", "a@b@c.com", "x@y.com?cc=evil@z.com", "x&y@z.com", "x,y@z.com", "<x@y.com>", "", null, 5]) expect(isPlainEmail(bad), String(bad)).toBe(false)
+  })
+  it("a malformed contact email is NOT sent to Stripe as the prefill (Stripe would reject it and the link could never be paid), but the payment is still labelled", async () => {
+    const s = stripe()
+    const db = miniDb({ booking_links: [paidRow()], contacts: [{ id: C1, email: "name@gmail" }] })
+    expect(await openPayment({ db, now: NOW, stripe: s.ops }, PAYCODE)).toMatchObject({ ok: true })
+    expect(s.created[0]).toMatchObject({ clientEmail: null, metadata: { client_email: "name@gmail" } })
+  })
+  it("a contact with NO primary email is known by another address: that one is the identity (no new contact on the booker's address)", async () => {
+    const row = paidRow() as never
+    expect(await identityEmail(miniDb({ contacts: [{ id: C1, email: null, email_2: "Second@Example.com", alt_emails: ["alt@example.com"] }] }), row)).toBe("second@example.com")
+    expect(await identityEmail(miniDb({ contacts: [{ id: C1, email: null, email_2: null, alt_emails: ["Alt@Example.com"] }] }), row)).toBe("alt@example.com")
+    const session: BookingPaySession = { id: "cs_live_a", payment_intent: "pi_1", amount_total: 39700, currency: "eur", customer_details: { email: "payer@card.example", name: "P" }, metadata: { payment_kind: "paid_call", booking_link_id: LINK, client_email: "booker@example.com" } }
+    const db = miniDb({ booking_links: [paidRow()], contacts: [{ id: C1, email: null, email_2: "second@example.com", alt_emails: [] }] })
+    const settle = vi.fn(async () => ({ ok: true, contactId: C1 }))
+    await recordBookingLinkPayment(session, { db, now: NOW, settle: settle as never, reportError: async () => undefined })
+    expect((settle.mock.calls as unknown as Array<[{ payment: { email: string } }]>)[0][0].payment.email).toBe("second@example.com")
+  })
+})
+
+describe("round 2: the money stop", () => {
+  it("'Not charging' closes the card page the UPDATE returns (a Pay click that saved a newer page between the read and the update), not the stale one", async () => {
+    const db = miniDb({ booking_links: [paidRow({ stripe_session_id: "cs_live_new" })] })
+    const real = db.from.bind(db)
+    let firstRead = true
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- a tiny test fake: the FIRST read sees the row before the newer page was saved
+    ;(db as any).from = (t: string) => {
+      const b = real(t) as Record<string, (...a: unknown[]) => unknown>
+      if (t !== "booking_links") return b
+      const sel = b.select
+      b.select = (...a: unknown[]) => {
+        if (firstRead && typeof a[0] === "string" && (a[0] as string).includes("stripe_session_id") && !(a[0] as string).includes("id, stripe_session_id")) {
+          firstRead = false
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const stub: any = { eq: () => stub, maybeSingle: async () => ({ data: { ...paidRow(), stripe_session_id: null }, error: null }) }
+          return stub
+        }
+        return sel(...a)
+      }
+      return b
+    }
+    const expired: string[] = []
+    const r = await stopCharging(db, LINK, NOW, { expire: async (id) => { expired.push(id); return { ok: true } } })
+    expect(r).toMatchObject({ ok: true })
+    expect(expired).toEqual(["cs_live_new"])
+  })
+  it("the Stripe address check: https and stripe.com (or a sub-domain) only", () => {
+    for (const ok of ["https://checkout.stripe.com/c/pay/cs_1", "https://pay.stripe.com/x", "https://stripe.com/x"]) expect(isStripePageUrl(ok), ok).toBe(true)
+    for (const bad of ["http://checkout.stripe.com/x", "https://checkout.stripe.com.evil.example/x", "https://evilstripe.com/x", "https://u:p@checkout.stripe.com/x", "https://checkout.stripe.com:444/x", "javascript:alert(1)", "//evil.example", "", null]) expect(isStripePageUrl(bad), String(bad)).toBe(false)
   })
 })

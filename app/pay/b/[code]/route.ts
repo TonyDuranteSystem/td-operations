@@ -5,12 +5,12 @@
  *   POST  (the button) makes or reuses the Stripe card page (lib/booking/pay-session.ts) and sends the person there.
  * The page says nothing about who the link is for: only the amount, what it is for and, if known, when the call is.
  * Every answer is not cached, not framed and sends no referrer (the code is in the address). The only place a person is ever sent is a Stripe card page address
- * (checked: it must start with https://checkout.stripe.com/). A "wait" or "try again" answer carries its own button, so a double tap never leaves a dead end.
+ * (checked: https, and the host must be stripe.com or one of its sub-domains). A "wait" or "try again" answer carries its own button, so a double tap never leaves a dead end.
  */
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { calendlyCtxFromEnv } from "@/lib/calendly/api"
-import { DEFAULT_PAY_LABEL, SAYS, STRIPE_PAGE_PREFIX, findPayLink, openPayment, type NoReason } from "@/lib/booking/pay-session"
+import { DEFAULT_PAY_LABEL, SAYS, findPayLink, isStripePageUrl, openPayment, type NoReason } from "@/lib/booking/pay-session"
 import { moneyText, payStateOf } from "@/lib/booking/payment"
 import { loadStoredBookings } from "@/lib/booking/link-bookings"
 import { nyWhen } from "@/lib/booking/links"
@@ -65,8 +65,8 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ co
   const { code } = await params
   const r = await openPayment({ db: supabaseAdmin, calendly: calendlyCtxFromEnv() }, code)
   if ("url" in r) {
-    // only ever Stripe's own page: anything else is refused, whatever the answer said
-    if (!r.url.startsWith(STRIPE_PAGE_PREFIX)) return page(TITLE.stripe, `<p>${esc(SAYS.stripe)}</p><form method="post" action=""><button type="submit">Try again</button></form>`, STATUS.stripe)
+    // only ever a Stripe card page: anything else is refused, whatever the answer said
+    if (!isStripePageUrl(r.url)) return page(TITLE.stripe, `<p>${esc(SAYS.stripe)}</p><form method="post" action=""><button type="submit">Try again</button></form>`, STATUS.stripe)
     return new NextResponse(null, { status: 303, headers: { location: r.url, "cache-control": "no-store", "referrer-policy": "no-referrer", "x-frame-options": "DENY" } })
   }
   const retry = CAN_RETRY.has(r.reason) ? `<form method="post" action=""><button type="submit">Try again</button></form>` : ""

@@ -43,6 +43,7 @@ export interface PaidLinkRow {
 
 const COLUMNS = "id, public_id, contact_id, person_name, person_emails, person_language, claimed_event_uri, pay_amount_cents, pay_currency, pay_label, pay_mode, pay_code, sent_at, sent_count, paid_session_id, not_charging_at"
 const DAY_MS = 24 * 60 * 60 * 1000
+const PAID_LOOKUP_MAX = 100
 
 /** Contacts on these portal levels are portal clients: their payment link is copied into the portal chat by hand, never emailed from here. */
 export const PORTAL_TIERS = ["formation", "onboarding", "active"]
@@ -144,7 +145,9 @@ export async function loadPaidCalls(db: Db, now: Date, calendly?: CalendlyCtx, b
     const storedOf = (r: PaidLinkRow) => stored.byTag.get(r.public_id) ?? []
     const urisOf = new Map(rows.map((r) => [r.id, bookingUrisOf(storedOf(r), r.claimed_event_uri)] as const))
     const latest = rows.map((r) => urisOf.get(r.id)?.[0]).filter((u): u is string => !!u)
-    const facts: Map<string, EventFacts | null> = calendly && latest.length ? await lookupEvents(calendly, latest) : new Map()
+    // Every unpaid paid call is asked about (up to 100, not the usual 25): an unpaid call cancelled by the booker in Calendly is never reported to us, so a call that is not asked
+    // about would come back as a false "could not be checked" card.
+    const facts: Map<string, EventFacts | null> = calendly && latest.length ? await lookupEvents(calendly, latest, PAID_LOOKUP_MAX) : new Map()
 
     // portal clients: copy the link by hand. A contact whose level cannot be read is treated as a portal client (the safe side: nothing is offered to be emailed).
     const contactIds = Array.from(new Set(rows.map((r) => r.contact_id).filter((x): x is string => !!x)))
