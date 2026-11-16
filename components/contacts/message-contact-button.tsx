@@ -19,14 +19,23 @@
  * instead of a contact, and it asks GET /api/accounts/:id/message-context — the company's own chat is the only choice and is already
  * selected (the row is the choice), with a grey line saying who the portal alert goes to and an amber one when nobody can read it yet.
  * `disabledReason` greys the icon with that reason (a company whose chat the client cannot see).
+ *
+ * 2026-11-16 (Antonio: "open the chat window in the chat that you built … this small icon in the list"): a PLAIN click on the icon / the
+ * Message button now opens that person's or company's Portal Chats as a floating window (`/portal-chats?contact=` or `?account=`) with
+ * all the chat tools. The small pop-up below is what Ctrl/Cmd/Shift-click, a screen under 1024 px, windows off, or being inside a
+ * window still show, so a click never does nothing.
  */
-import { useState } from 'react'
+import { useState, type MouseEvent } from 'react'
 import { MessageSquare, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { ShareMessageDialog, type ShareSendResult } from '@/components/storage/share-message-dialog'
 import { sendShareMessage } from '@/lib/crm-store/document-share-client'
 import type { ShareContext } from '@/lib/portal/document-share-text'
+import { useWindowsAvailable, canOpenWindowNow, requestOpenWindow } from '@/lib/windows/windows-context'
+import { isWindowLinkClick } from '@/lib/windows/open-intent'
+import { isWindowableUrl } from '@/lib/windows/window-model'
+import { chatWindowHref, chatWindowTitle } from '@/lib/windows/chat-window'
 
 type Askable = Extract<ShareContext, { askable: true }>
 
@@ -53,8 +62,20 @@ export function MessageContactButton({ contactId, contactName, accountId, accoun
   const id = (isAccount ? accountId : contactId) ?? ''
   const name = (isAccount ? accountName : contactName) ?? ''
 
-  const open = async () => {
+  const windowsAvailable = useWindowsAvailable()
+
+  const open = async (e: MouseEvent) => {
     if (loading || disabledReason || !id) return
+    // A plain click opens this person's / company's Portal Chats as a FLOATING WINDOW (Antonio 2026-11-16: "open the chat window … this
+    // small icon in the list") — the whole chat with all its tools. Ctrl/Cmd/Shift-click, a screen under 1024 px, windows off, or being
+    // inside a window keep the small pop-up below, so a click never does nothing.
+    if (isWindowLinkClick(e) && canOpenWindowNow(windowsAvailable)) {
+      const href = chatWindowHref(isAccount ? { accountId: id } : { contactId: id })
+      if (isWindowableUrl(href)) {
+        requestOpenWindow(href, chatWindowTitle(name))
+        return
+      }
+    }
     setLoading(true)
     try {
       const c = await fetchMessageContext({ kind: isAccount ? 'account' : 'contact', id })
@@ -73,8 +94,10 @@ export function MessageContactButton({ contactId, contactName, accountId, accoun
     if (!isAccount) window.dispatchEvent(new CustomEvent(CONTACT_CHAT_SENT_EVENT, { detail: { contactId } }))
   }
 
-  const label = isAccount ? 'Write a portal chat message to this company.' : 'Write a portal chat message to this person or to one of their companies.'
-  const tip = disabledReason ?? (variant === 'icon' ? `Message ${name || (isAccount ? 'this company' : 'this person')}` : label)
+  const label = isAccount
+    ? "Opens this company's chat in a window, with all the chat tools. Ctrl/Cmd-click for a quick message instead."
+    : "Opens this person's chat in a window, with all the chat tools. Ctrl/Cmd-click for a quick message instead."
+  const tip = disabledReason ?? (variant === 'icon' ? `Chat with ${name || (isAccount ? 'this company' : 'this person')} — opens in a window` : label)
   return (
     <span data-no-nav className="inline-flex" onClick={(e) => e.stopPropagation()}>
       <FastTooltip label={tip}>
