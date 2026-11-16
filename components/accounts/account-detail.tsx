@@ -2685,7 +2685,7 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
       </div>
 
       {/* Notification Center roll-up: What's New + To-Do + Workflow for this account */}
-      <EntityActivitySummary accountId={account.id} name={account.company_name} />
+      <EntityActivitySummary accountId={account.id} />
 
       {/* Referrals GIVEN by this client (company or its people) — renders only when there are any */}
       <ReferralsGivenCard accountId={account.id} />
