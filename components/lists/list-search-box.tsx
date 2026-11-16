@@ -7,19 +7,24 @@
  * eight matches under the box: pick one (click, or arrow keys + Enter) to open it. Enter with nothing highlighted still does what it
  * always did — filters the whole list by what you typed — so the list's own filtering is untouched. Escape, a click elsewhere or Tab
  * closes the dropdown; a reply that arrives after you typed something newer is ignored.
+ *
+ * `onLive` (Antonio 2026-11-16: "the list must change dynamically while the dropdown shows the list of the letters written"): called with
+ * what is typed once typing pauses for a moment, so the LIST under the box can refresh to match without pressing Enter.
  */
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Search, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { SEARCH_DEBOUNCE_MS, dropdownRows, nextHighlight, searchableQuery, type DropdownRow } from '@/lib/crm-lists/search-dropdown'
+import { LIVE_LIST_DEBOUNCE_MS, SEARCH_DEBOUNCE_MS, dropdownRows, nextHighlight, searchableQuery, type DropdownRow } from '@/lib/crm-lists/search-dropdown'
 
-export function ListSearchBox({ kind, value, onChange, onSubmit, placeholder }: {
+export function ListSearchBox({ kind, value, onChange, onSubmit, onLive, placeholder }: {
   kind: 'contact' | 'account'
   value: string
   onChange: (e: React.ChangeEvent<HTMLInputElement>) => void
   onSubmit: (e: React.FormEvent) => void
+  /** called with the typed text once typing pauses, so the list can refresh while you type */
+  onLive?: (value: string) => void
   placeholder: string
 }) {
   const router = useRouter()
@@ -30,6 +35,7 @@ export function ListSearchBox({ kind, value, onChange, onSubmit, placeholder }: 
   const [highlight, setHighlight] = useState(-1)
   const boxRef = useRef<HTMLFormElement>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout>>()
+  const liveTimerRef = useRef<ReturnType<typeof setTimeout>>()
   const abortRef = useRef<AbortController>()
   const seqRef = useRef(0)
   const listId = `list-search-${kind}`
@@ -61,7 +67,7 @@ export function ListSearchBox({ kind, value, onChange, onSubmit, placeholder }: 
     }, SEARCH_DEBOUNCE_MS)
   }
 
-  useEffect(() => () => { clearTimeout(timerRef.current); abortRef.current?.abort() }, [])
+  useEffect(() => () => { clearTimeout(timerRef.current); clearTimeout(liveTimerRef.current); abortRef.current?.abort() }, [])
 
   // a press anywhere outside closes the dropdown
   useEffect(() => {
@@ -93,7 +99,7 @@ export function ListSearchBox({ kind, value, onChange, onSubmit, placeholder }: 
   return (
     <form
       ref={boxRef}
-      onSubmit={(e) => { close(); onSubmit(e) }}
+      onSubmit={(e) => { clearTimeout(liveTimerRef.current); close(); onSubmit(e) }}
       className="relative w-full max-w-md flex-1"
     >
       <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -106,7 +112,15 @@ export function ListSearchBox({ kind, value, onChange, onSubmit, placeholder }: 
         aria-activedescendant={showList && highlight >= 0 ? `${listId}-${highlight}` : undefined}
         autoComplete="off"
         value={value}
-        onChange={(e) => { onChange(e); schedule(e.target.value) }}
+        onChange={(e) => {
+          onChange(e)
+          schedule(e.target.value)
+          if (onLive) {
+            const typed = e.target.value
+            clearTimeout(liveTimerRef.current)
+            liveTimerRef.current = setTimeout(() => onLive(typed), LIVE_LIST_DEBOUNCE_MS)
+          }
+        }}
         onKeyDown={handleKeyDown}
         onFocus={() => { if (rows.length > 0 && done && searchableQuery(value)) setOpen(true) }}
         placeholder={placeholder}

@@ -8,6 +8,8 @@ import type { EnhancedSearchResult } from '@/lib/types'
 export const SEARCH_MIN_CHARS = 2
 export const SEARCH_DEBOUNCE_MS = 200
 export const SEARCH_MAX_ROWS = 8
+/** How long typing must pause before the LIST under the box refreshes to what is typed (the dropdown answers a little sooner). */
+export const LIVE_LIST_DEBOUNCE_MS = 300
 
 /** The text to search for, or null while it is too short to be worth a request (the API itself answers nothing under 2 characters). */
 export function searchableQuery(raw: string): string | null {
@@ -51,4 +53,17 @@ export function dropdownRows(results: EnhancedSearchResult[], type: 'contact' | 
       }
       return { id: r.id, title: r.title, detail, href: r.href }
     })
+}
+
+/**
+ * The list refreshes itself while you type, by changing the address's search text. Each refresh comes back from the server a moment
+ * later — and a slow one can arrive AFTER you typed more. Such an echo of our own earlier keystroke must not overwrite the box (that
+ * would erase what you just typed). When only the search text differs from what we last sent:
+ *  - "settled": it is exactly what we last sent (the latest refresh has arrived);
+ *  - "stale-echo": it is an older value we sent ourselves — ignore it;
+ *  - "external": anything else (browser Back, a link) — the box should follow the address.
+ */
+export function classifyIncomingQuery(incoming: string, lastSent: string, sentSoFar: ReadonlySet<string>): 'settled' | 'stale-echo' | 'external' {
+  if (incoming === lastSent) return 'settled'
+  return sentSoFar.has(incoming) ? 'stale-echo' : 'external'
 }
