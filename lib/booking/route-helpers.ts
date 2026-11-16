@@ -59,6 +59,19 @@ export async function refuseWhileOff(): Promise<NextResponse | null> {
 
 export const BAD_BODY = "That request was not understood. Reload the page and try again."
 
+export type PaymentBody = { amount: unknown; currency: unknown; label?: unknown; confirmed?: boolean }
+
+/**
+ * The price of a PAID link, from the JSON body. Left out / null / false = a free link. Anything else must be an object; its amount and currency are only passed on here
+ * (decideLinkPlan judges them), so a made-up shape is refused rather than quietly read as "free".
+ */
+export function paymentFrom(raw: unknown): { ok: true; value: PaymentBody | null } | { ok: false } {
+  if (raw === undefined || raw === null || raw === false) return { ok: true, value: null }
+  if (typeof raw !== "object" || Array.isArray(raw)) return { ok: false }
+  const p = raw as Record<string, unknown>
+  return { ok: true, value: { amount: p.amount, currency: p.currency, label: p.label, confirmed: p.confirmed === true } }
+}
+
 /** The person the maker asked for, from the JSON body. Never trusts a field's type. */
 export function personRefFrom(raw: unknown): { type: "contact"; id: string } | { type: "lead"; id: string } | { type: "new"; name: string | null; email: string | null } | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null

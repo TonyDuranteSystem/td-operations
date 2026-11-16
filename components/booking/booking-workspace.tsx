@@ -2,11 +2,12 @@
 
 /**
  * Booking page, tab "Links and calls" (Stage 1b; open to any staff login since dev job a1839d8b) — the screen: "Make a link" on the left, "Links I made" on the right, and the "calls need you" line underneath.
- * "Calls to check" is a section of this page (Antonio, 14 Nov: the day-to-day work Calendar is a different page and stays as it is). The words are Antonio's, from the approved mockup. Parts that belong to later stages (the week calendar, clients' referral links, paying, a referrer) are not here.
+ * "Calls to check" is a section of this page (Antonio, 14 Nov: the day-to-day work Calendar is a different page and stays as it is). The words are Antonio's, from the approved mockup. Parts that belong to later stages (the week calendar, clients' referral links, a referrer) are not here. Paid links (Stage 3) are: the maker's Free / Paid choice, the price on "Links I made", and the unpaid-call cards.
  * A computer screen only: nothing is drawn for a phone.
  */
 
-import { useCallback, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
 import type { KindDto } from "@/lib/booking/kinds-admin"
 import type { LinkDto } from "@/lib/booking/links"
 import { callApi, messageOf } from "@/components/booking/api"
@@ -28,6 +29,8 @@ export interface MakeAgain {
   once: boolean
   /** what the old link asked the booker, so "Make again" asks the same */
   asks: "full" | "short" | null
+  /** the old link's price, so a paid link made again stays paid (null = it was free) */
+  pay: { amount: string; currency: "USD" | "EUR"; label: string | null } | null
 }
 
 export function BookingWorkspace({
@@ -55,6 +58,12 @@ export function BookingWorkspace({
   const [links, setLinks] = useState<LinkDto[] | null>(initialLinks)
   const [linksProblem, setLinksProblem] = useState<string | null>(linksError)
   const [again, setAgain] = useState<MakeAgain | null>(null)
+  const router = useRouter()
+  // "Links I made" and "Calls to check" must never disagree: when the page is re-read from the server (after a card's button), the list follows it
+  useEffect(() => {
+    setLinks(initialLinks)
+    setLinksProblem(linksError)
+  }, [initialLinks, linksError])
   const off = mode === "off"
 
   const refreshLinks = useCallback(async () => {
@@ -95,7 +104,7 @@ export function BookingWorkspace({
 
       <div className="grid grid-cols-[minmax(380px,460px)_minmax(0,1fr)] items-start gap-5">
         <LinkMaker kinds={kinds} kindsError={kindsError} refreshKinds={refreshKinds} onMade={refreshLinks} again={again} callTypesReady={callTypesReady} off={off} />
-        <LinksMade links={links} error={linksProblem} off={off} onChanged={refreshLinks} onMakeAgain={(l) => setAgain({ nonce: Date.now(), contactId: l.contactId, leadId: l.leadId, name: l.personName, email: l.email, kindSlug: l.kindSlug, minutes: l.minutes, once: l.once, asks: l.asks })} />
+        <LinksMade links={links} error={linksProblem} off={off} onChanged={async () => { await refreshLinks(); router.refresh() }}onMakeAgain={(l) => setAgain({ nonce: Date.now(), contactId: l.contactId, leadId: l.leadId, name: l.personName, email: l.email, kindSlug: l.kindSlug, minutes: l.minutes, once: l.once, asks: l.asks, pay: l.pay ? { amount: l.pay.amount, currency: l.pay.currency, label: l.pay.label } : null })} />
       </div>
 
       <section id="calls" className="space-y-3" data-testid="calls-section">

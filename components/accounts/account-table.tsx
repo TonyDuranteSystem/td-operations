@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useEffect, useRef, useState, useTransition } from 'react'
-import { Search, AlertCircle, ChevronLeft, ChevronRight, Plus, X } from 'lucide-react'
+import { AlertCircle, ChevronLeft, ChevronRight, Plus, TriangleAlert, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { AccountListItem } from '@/lib/types'
 import { CreateAccountDialog } from './create-account-dialog'
@@ -15,6 +15,10 @@ import { LetterBar } from '@/components/lists/letter-bar'
 import { LISTS_CONTAINER, ListStyles } from '@/components/lists/list-styles'
 import { YearSelect } from '@/components/lists/year-select'
 import { ListHoverCard } from '@/components/lists/hover-card'
+import { ListSearchBox } from '@/components/lists/list-search-box'
+import { classifyIncomingQuery } from '@/lib/crm-lists/search-dropdown'
+import { MessageContactButton } from '@/components/contacts/message-contact-button'
+import { isChatClosedStatus } from '@/lib/portal/document-share-text'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { OpenInWindowLink } from '@/components/windows/open-in-window-link'
 import { useAmountOverrides } from '@/components/lists/use-amount-overrides'
@@ -64,6 +68,12 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
   const [isPending, startTransition] = useTransition()
   const [showCreate, setShowCreate] = useState(false)
   const { overrides, apply } = useAmountOverrides(items)
+  // A saved amount can end the amber (the company now matches its signed contract): ask the server for the page again so the check is
+  // run again with the saved amounts, and the amber goes away by itself — there is no button to dismiss it (Antonio 2026-11-15).
+  const afterSave: typeof apply = saved => {
+    apply(saved)
+    router.refresh()
+  }
   const yearParam = year === defaultYear ? '' : String(year)
   // The filter values we've actually told the server about — updated
   // synchronously the instant we act, NOT after the async navigation
@@ -76,16 +86,24 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
   const overdueParam = overdueOnly ? '1' : ''
   const lastFiltersRef = useRef<Record<FilterKey, string>>({ q: query, status: statusFilter, kind: kindFilter, type: typeFilter, overdue: overdueParam, letter, year: yearParam })
 
+  // Every search text we sent while typing (see handleLiveSearch): a slow answer to an EARLIER keystroke must not overwrite the box.
+  const sentQsRef = useRef<Set<string>>(new Set())
+
   // Resync when the URL changed for a reason OTHER than our own action —
   // browser back/forward, or a link elsewhere setting these params. See
   // leads-table.tsx for why this is guarded on the ref, not a plain
   // "prop changed" check.
   useEffect(() => {
     const last = lastFiltersRef.current
-    if (query !== last.q || statusFilter !== last.status || kindFilter !== last.kind || typeFilter !== last.type || overdueParam !== last.overdue || letter !== last.letter || yearParam !== last.year) {
-      lastFiltersRef.current = { q: query, status: statusFilter, kind: kindFilter, type: typeFilter, overdue: overdueParam, letter, year: yearParam }
-      setSearch(query)
+    const othersChanged = statusFilter !== last.status || kindFilter !== last.kind || typeFilter !== last.type || overdueParam !== last.overdue || letter !== last.letter || yearParam !== last.year
+    if (!othersChanged) {
+      const kind = classifyIncomingQuery(query, last.q, sentQsRef.current)
+      if (kind === 'settled') { sentQsRef.current.clear(); return }
+      if (kind === 'stale-echo') return // an old answer to something typed a moment ago — keep what is in the box now
     }
+    lastFiltersRef.current = { q: query, status: statusFilter, kind: kindFilter, type: typeFilter, overdue: overdueParam, letter, year: yearParam }
+    sentQsRef.current.clear()
+    setSearch(query)
   }, [query, statusFilter, kindFilter, typeFilter, overdueParam, letter, yearParam])
 
   function buildParams(overridesParams: Record<string, string> = {}) {
@@ -112,6 +130,7 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
 
   function updateFilter(key: FilterKey, value: string) {
     lastFiltersRef.current = { ...lastFiltersRef.current, [key]: value }
+    if (key === 'q') sentQsRef.current.add(value)
     startTransition(() => {
       router.push(`/accounts?${buildParams({ [key]: value, page: '1' })}`)
     })
@@ -120,6 +139,18 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
   function goToPage(page: number) {
     startTransition(() => {
       router.push(`/accounts?${buildParams({ page: String(page) })}`)
+    })
+  }
+
+  // The list follows what is typed once typing pauses (the search box calls this): same filter as pressing Enter, but it REPLACES the
+  // address instead of adding to the Back history for every pause.
+  function handleLiveSearch(typed: string) {
+    const v = typed.trim()
+    if (v === lastFiltersRef.current.q) return
+    lastFiltersRef.current = { ...lastFiltersRef.current, q: v }
+    sentQsRef.current.add(v)
+    startTransition(() => {
+      router.replace(`/accounts?${buildParams({ q: v, page: '1' })}`)
     })
   }
 
@@ -163,16 +194,7 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
     <div className="space-y-4">
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3">
-        <form onSubmit={handleSearch} className="relative w-full max-w-md flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <input
-            type="text"
-            value={search}
-            onChange={handleSearchChange}
-            placeholder="Search company..."
-            className="w-full pl-9 pr-4 py-2 rounded-lg border bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-        </form>
+        <ListSearchBox kind="account" value={search} onChange={handleSearchChange} onSubmit={handleSearch} onLive={handleLiveSearch} placeholder="Search company or person..." />
         <div className="ml-auto flex items-center gap-2">
           <ColumnsMenu list="accounts" selected={columns} always="Company, 1st Inst, 2nd Inst, Per year" />
           <button
@@ -282,10 +304,29 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
                   <div className="col-span-3 min-w-0 md:col-span-1">
                     <div className="flex items-center gap-1.5 font-medium text-sm">
                       <ListHoverCard card={companyCard(item, year)} className="min-w-0 max-w-full">
-                        <Link href={`/accounts/${item.id}`} className="truncate hover:underline" onClick={e => e.stopPropagation()}>
+                        {/* Amber when a signed contract does not match this company's installment amounts (Antonio 2026-11-15): the card on hover says which. */}
+                        <Link
+                          href={`/accounts/${item.id}`}
+                          className={cn('truncate hover:underline', item.contract_mismatches.length > 0 && 'text-amber-700')}
+                          data-testid={item.contract_mismatches.length > 0 ? 'contract-mismatch-name' : undefined}
+                          onClick={e => e.stopPropagation()}
+                        >
+                          {item.contract_mismatches.length > 0 && (
+                            <>
+                              <TriangleAlert className="mr-1 inline h-3.5 w-3.5 -translate-y-px text-amber-600" aria-hidden="true" />
+                              <span className="sr-only">Check the contract amounts: </span>
+                            </>
+                          )}
                           {item.company_name}
                         </Link>
                       </ListHoverCard>
+                      {/* Write a portal chat message to this company from here (Antonio 2026-11-15). Greyed, with the reason, when the client cannot see the chat. */}
+                      <MessageContactButton
+                        accountId={item.id}
+                        accountName={item.company_name}
+                        variant="icon"
+                        disabledReason={isChatClosedStatus(item.status) ? `The client can't see this company's chat (status: ${item.status || 'not set'}), so no message can be sent.` : undefined}
+                      />
                       {!hasColumn(columns, 'kind') && <KindChip kind={item.account_type} />}
                       {/* A greyed, locked company always says why, even when the Status column is not chosen. */}
                       {locked && !hasColumn(columns, 'status') && <StatusChip status={item.status} />}
@@ -321,7 +362,7 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
                       locked={locked}
                       updatedAt={updatedAt}
                       chip={item.chip_1}
-                      onSaved={apply}
+                      onSaved={afterSave}
                     />
                   </div>
 
@@ -336,7 +377,7 @@ export function AccountTable({ items, query, statusFilter, kindFilter, typeFilte
                       locked={locked}
                       updatedAt={updatedAt}
                       chip={item.chip_2}
-                      onSaved={apply}
+                      onSaved={afterSave}
                     />
                   </div>
 

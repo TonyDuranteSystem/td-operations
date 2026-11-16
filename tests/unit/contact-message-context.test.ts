@@ -2,9 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/supabase-admin', () => ({ supabaseAdmin: { from: vi.fn() } }))
 vi.mock('@/lib/portal/document-alerts', () => ({ resolveDocLocale: vi.fn().mockResolvedValue('it') }))
+vi.mock('@/lib/auth-admin-helpers', () => ({ listAllAuthUsers: vi.fn().mockResolvedValue([{ id: 'u1', email: 'ada@example.com' }]) }))
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { getContactMessageContext } from '@/lib/portal/contact-message-context'
+import { listAllAuthUsers } from '@/lib/auth-admin-helpers'
+import { getContactMessageContext, portalLoginStateOf, loginStateForContact } from '@/lib/portal/contact-message-context'
 
 /** Chainable mock: every builder returns the chain; awaiting it (or maybeSingle) resolves the table's rows. */
 function table(rows: unknown[]) {
@@ -77,3 +79,66 @@ describe('getContactMessageContext', () => {
     expect(ctx.targets.filter((t) => t.kind === 'company')).toHaveLength(1)
   })
 })
+
+describe('the "cannot read it yet" notice is worked out by the server when the pop-up opens', () => {
+  beforeEach(() => vi.clearAllMocks())
+  const ctxFor = async () => {
+    mockDb({ contacts: [{ id: 'c1', full_name: 'Ada Rossi', email: 'ada@example.com' }], account_contacts: [] })
+    const ctx = await getContactMessageContext('c1')
+    if (!ctx || !ctx.askable) throw new Error('expected an askable context')
+    return ctx
+  }
+
+  it('no notice when the person has a working login', async () => {
+    vi.mocked(listAllAuthUsers).mockResolvedValue([{ id: 'u1', email: 'ada@example.com' }] as never)
+    expect((await ctxFor()).notice).toBeUndefined()
+  })
+
+  it('says so when the person has no login', async () => {
+    vi.mocked(listAllAuthUsers).mockResolvedValue([])
+    expect((await ctxFor()).notice).toMatch(/Ada Rossi has no portal login yet/)
+  })
+
+  it('says so when the login is suspended', async () => {
+    vi.mocked(listAllAuthUsers).mockResolvedValue([{ id: 'u1', email: 'ada@example.com', banned_until: '2999-01-01T00:00:00Z' }] as never)
+    expect((await ctxFor()).notice).toMatch(/suspended/)
+  })
+
+  it('a person with no email and no login tied to them has no login, so the notice says so', async () => {
+    vi.mocked(listAllAuthUsers).mockResolvedValue([{ id: 'u1', email: 'someone@else.com' }] as never)
+    mockDb({ contacts: [{ id: 'c1', full_name: 'Ada Rossi', email: null }], account_contacts: [] })
+    const ctx = await getContactMessageContext('c1')
+    if (!ctx || !ctx.askable) throw new Error('expected an askable context')
+    expect(ctx.notice).toMatch(/no portal login yet/)
+  })
+
+  it('a login tied to the person by contact id counts even under a DIFFERENT email (no false warning)', async () => {
+    vi.mocked(listAllAuthUsers).mockResolvedValue([{ id: 'u9', email: 'ada.private@gmail.com', app_metadata: { contact_id: 'c1' } }] as never)
+    expect((await ctxFor()).notice).toBeUndefined()
+  })
+
+  it('if the login lookup fails, say nothing rather than a false "no login"', async () => {
+    vi.mocked(listAllAuthUsers).mockRejectedValue(new Error('auth down'))
+    expect((await ctxFor()).notice).toBeUndefined()
+  })
+})
+
+describe('portalLoginStateOf', () => {
+  const now = new Date('2026-11-15T12:00:00Z')
+  it('no auth user → no login', () => expect(portalLoginStateOf(null, now)).toEqual({ exists: false, suspended: false }))
+  it('auth user with no ban → working login', () => expect(portalLoginStateOf({ banned_until: null }, now)).toEqual({ exists: true, suspended: false }))
+  it('a ban in the future → suspended', () => expect(portalLoginStateOf({ banned_until: '2026-12-01T00:00:00Z' }, now)).toEqual({ exists: true, suspended: true }))
+  it('a ban already over → working login', () => expect(portalLoginStateOf({ banned_until: '2026-01-01T00:00:00Z' }, now)).toEqual({ exists: true, suspended: false }))
+})
+
+describe('loginStateForContact', () => {
+  const now = new Date('2026-11-15T12:00:00Z')
+  const ada = { id: 'c1', email: 'ada@example.com' }
+  it('no matching login → none', () => expect(loginStateForContact(ada, [{ email: 'x@y.com' }], now)).toEqual({ exists: false, suspended: false }))
+  it('a working login by email → fine', () => expect(loginStateForContact(ada, [{ email: 'ADA@example.com' }], now)).toEqual({ exists: true, suspended: false }))
+  it('a working login by contact id → fine', () => expect(loginStateForContact(ada, [{ email: 'z@z.com', app_metadata: { contact_id: 'c1' } }], now)).toEqual({ exists: true, suspended: false }))
+  it('only suspended logins → suspended', () => expect(loginStateForContact(ada, [{ email: 'ada@example.com', banned_until: '2026-12-01T00:00:00Z' }], now)).toEqual({ exists: true, suspended: true }))
+  it('one suspended and one working login → fine', () => expect(loginStateForContact(ada, [{ email: 'ada@example.com', banned_until: '2026-12-01T00:00:00Z' }, { email: 'o@o.com', app_metadata: { contact_id: 'c1' } }], now)).toEqual({ exists: true, suspended: false }))
+  it('a marketing login never counts', () => expect(loginStateForContact(ada, [{ email: 'ada@example.com', app_metadata: { role: 'marketing' } }], now)).toEqual({ exists: false, suspended: false }))
+})
+

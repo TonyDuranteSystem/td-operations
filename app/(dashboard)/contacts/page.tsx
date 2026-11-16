@@ -8,8 +8,10 @@ import { listYearOptions, parseListYear } from '@/lib/crm-lists/year'
 import { getColumnPref } from '@/lib/crm-lists/prefs'
 import { resolveColumns } from '@/lib/crm-lists/columns'
 import { formatListDate } from '@/lib/crm-lists/format'
+import { contactMatchesSearch } from '@/lib/crm-lists/search-match'
 import { contactsWithPassportFile, passportOnFile } from '@/lib/contacts/passport-on-file'
 import { pickMainContacts, type AccountContactLink } from '@/lib/crm-lists/people'
+import { loadContractMismatchesForPeople } from '@/lib/signed-contracts/load'
 
 const PAGE_SIZE = 50
 
@@ -36,11 +38,10 @@ export default async function ContactsPage({
   const years = listYearOptions(yearsWithInvoices, defaultYear)
   const year = parseListYear(searchParams.year, years, defaultYear)
 
-  // 1. Every person that matches the search, in name order.
-  const people = await fetchAllRows((from, to) => {
-    let q = supabase.from('contacts').select('id, full_name').order('full_name', { ascending: true }).order('id', { ascending: true }).range(from, to)
+  // 1. Every person, in name order (the search below is applied once we know their companies).
+  const everyone = await fetchAllRows((from, to) => {
+    let q = supabase.from('contacts').select('id, full_name, email, phone').order('full_name', { ascending: true }).order('id', { ascending: true }).range(from, to)
     if (statusFilter && statusFilter !== 'all') q = q.eq('status', statusFilter)
-    if (query) q = q.or(`full_name.ilike.%${query}%,email.ilike.%${query}%`)
     return q
   })
 
@@ -66,6 +67,8 @@ export default async function ContactsPage({
   }
   for (const list of Array.from(companiesByContact.values())) list.sort((x, y) => x.company_name.localeCompare(y.company_name))
 
+  // The search matches the same things the search dropdown shows: a person's name, email or phone, or the name of one of their companies.
+  const people = query ? everyone.filter(p => contactMatchesSearch(query, p, (companiesByContact.get(p.id) ?? []).map(c => c.company_name))) : everyone
   const withCompanies = people.map(p => ({ ...p, companies: companiesByContact.get(p.id) ?? [] }))
   // The letter is one more filter: the Companies counts follow it, and the letter buttons' own counts follow the other filters.
   const letterCountsForView = letterCounts(withCompanies.filter(p => contactMatches(p.companies.map(c => c.filter), filters)).map(p => p.full_name))
@@ -80,7 +83,7 @@ export default async function ContactsPage({
   const pageIds = pageRows.map(p => p.id)
   const pageAccountIds = Array.from(new Set(pageRows.flatMap(p => p.companies.map(c => c.id))))
 
-  const [contactDetails, accountDetails, chipMap, mainLinks, overdueMap, passportFiles] = await Promise.all([
+  const [contactDetails, accountDetails, chipMap, mainLinks, overdueMap, passportFiles, contractMismatches] = await Promise.all([
     pageIds.length > 0
       ? supabase
           .from('contacts')
@@ -100,6 +103,11 @@ export default async function ContactsPage({
       : Promise.resolve({ data: [] }),
     loadOverdueCounts(supabase),
     contactsWithPassportFile(pageIds),
+    // Whose signed contract does not match their company (the amber note on the Contact page), for the amber name + its hover card.
+    loadContractMismatchesForPeople({
+      people: pageRows.map(p => ({ id: p.id, email: p.email ?? null, accountIds: p.companies.map(c => c.id) })),
+      companyNames: new Map(accounts.map(a => [a.id, a.company_name])),
+    }),
   ])
   const mainContacts = pickMainContacts((mainLinks.data ?? []) as unknown as AccountContactLink[])
   const contactById = new Map((contactDetails.data ?? []).map(c => [c.id, c]))
@@ -149,6 +157,7 @@ export default async function ContactsPage({
         account_names: lines.map(l => l.company_name).join(', ') || null,
         created_at: c.created_at,
         companies: lines,
+        contract_mismatches: contractMismatches.kind === 'ok' ? contractMismatches.byPerson.get(c.id) ?? [] : [],
       },
     ]
   })
@@ -160,6 +169,11 @@ export default async function ContactsPage({
         <p className="text-muted-foreground text-sm mt-1">
           {linkCounts.all} contacts — {linkCounts.with} with a company, {linkCounts.none} with no company
         </p>
+        {contractMismatches.kind === 'failed' && (
+          <p className="mt-1 text-xs text-muted-foreground" data-testid="contract-check-failed">
+            Could not check the contract amounts just now, so no contact is marked. Reload the page to try again.
+          </p>
+        )}
       </div>
       <ContactsTable
         items={items}

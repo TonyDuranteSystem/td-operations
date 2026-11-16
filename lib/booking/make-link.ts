@@ -1,5 +1,5 @@
 /**
- * Booking page — making a FREE link (Stage 1b). One function: check everything, then write one row.
+ * Booking page — making a link, FREE (Stage 1b) or PAID (Stage 3). One function: check everything, then write one row.
  *
  *   1. the kind (a catalog row) must exist, be active, and have a rule (a kind with no rule is "needs setup" and is refused)
  *   2. the person is read (contact / lead / someone new); the emails the link will compare a booker with are SNAPSHOTTED now
@@ -8,7 +8,8 @@
  *   5. a standard 30-minute link needs nothing from Calendly (the redirect resolves the booking page at click time, so a renamed page keeps working);
  *      any other length asks Calendly for a one-time link of that length, and the address it returns is stored
  *   6. the row is written with a fresh random id (a clash on the id retries with a new one)
- * No money, no referrer: those are later stages and the page offers neither.
+ * A PAID link also stores the price, how it will be recorded (decideLinkPlan's `payMode`) and a random pay code. It makes NO Calendly link: /r/b/<id> sends the person to our own
+ * page /pay/b/<code>, where they pick a free time (booked through Calendly's booking service), and pay. No referrer yet (Stage 2).
  */
 
 import { APP_BASE_URL } from "@/lib/config"
@@ -33,6 +34,8 @@ export interface MakeLinkInput {
   firstBookingOnly?: boolean
   /** what the booker is asked; left out = the system decides (the old rule) */
   questions?: QuestionsChoice
+  /** a PAID link (Stage 3): the price. Left out or null = a free link. The amount, currency and size checks are decideLinkPlan's. */
+  payment?: { amount: unknown; currency: unknown; label?: unknown; confirmed?: boolean } | null
 }
 
 export interface KindRow {
@@ -65,6 +68,8 @@ export interface Judged {
   kind: KindRow
   plan: LinkPlan
   lines: PreviewLine[]
+  /** a paid link above the size that needs a tick ("yes, this amount is right"): the maker must send `confirmed` before the link is made */
+  needsConfirm: boolean
 }
 
 /** Everything up to (and including) the rules — no Calendly, no write. Used by the live preview AND by making the link, so they can never disagree. */
@@ -81,6 +86,7 @@ export async function judgeLink(db: Db, input: MakeLinkInput): Promise<{ ok: tru
     minutes: input.minutes,
     firstBookingOnly: input.firstBookingOnly === true,
     questions: input.questions,
+    payment: input.payment ?? null,
   })
   if ("errors" in r) return { ok: false, errors: r.errors }
   return {
@@ -90,6 +96,7 @@ export async function judgeLink(db: Db, input: MakeLinkInput): Promise<{ ok: tru
       kind: k.kind,
       plan: r.plan,
       lines: describePlan({ plan: r.plan, personState: p.person.state, personName: p.person.name, hasEmails: p.person.emails.length > 0 }),
+      needsConfirm: r.needsConfirm,
     },
   }
 }
@@ -113,18 +120,34 @@ export interface MakeDeps {
 
 const INSERT_TRIES = 3
 
-export async function makeFreeLink(deps: MakeDeps, input: MakeLinkInput): Promise<{ ok: true; link: MadeLink; lines: PreviewLine[] } | { ok: false; errors: string[] }> {
+export const LARGE_AMOUNT_TEXT = "That is a large amount: tick the box to confirm it is right."
+export const PAID_NOT_READY_TEXT = "Paid links are not ready on this database yet (the payment columns have not been added). Nothing was made. Tell Claude."
+
+/** Makes a link: FREE, or PAID when `input.payment` is set (Stage 3). One function, so the preview and the made link can never disagree. */
+export async function makeLink(deps: MakeDeps, input: MakeLinkInput): Promise<{ ok: true; link: MadeLink; lines: PreviewLine[] } | { ok: false; errors: string[]; needsConfirm?: boolean }> {
   const { db } = deps
   const j = await judgeLink(db, input)
   if ("errors" in j) return j
   const { person, kind, plan, lines } = j.judged
+  if (j.judged.needsConfirm) return { ok: false, errors: [LARGE_AMOUNT_TEXT], needsConfirm: true }
 
   const templates = await loadTemplates(db)
   const tpl = templateFor(templates, plan.template)
   if (!tpl) return { ok: false, errors: [TEMPLATES_MISSING_TEXT] }
 
+  // A paid call has NO Calendly link: the person books and pays on OUR page (/pay/b/<code>, reached through the link below), and the link closes after the one booking made there.
+  const paid = plan.payment
+  if (paid) {
+    // The payment columns arrive with the Stage 3 migration: on a database without them the save would fail, so say so plainly first.
+    try {
+      const probe = await db.from("booking_links").select("pay_code").limit(1)
+      if (probe.error) return { ok: false, errors: [(probe.error as { code?: unknown }).code === "42703" ? PAID_NOT_READY_TEXT : "The link could not be saved. Try again."] }
+    } catch {
+      return { ok: false, errors: ["The link could not be saved. Try again."] }
+    }
+  }
   let shareUrl: string | null = null
-  if (plan.minutes !== STANDARD_MINUTES) {
+  if (plan.minutes !== STANDARD_MINUTES && !paid) {
     try {
       shareUrl = (await createShareLink(deps.calendly, { eventTypeUri: tpl.eventTypeUri, minutes: plan.minutes })).url
     } catch (err) {
@@ -139,6 +162,7 @@ export async function makeFreeLink(deps: MakeDeps, input: MakeLinkInput): Promis
       const { data, error } = await db
         .from("booking_links")
         .insert({
+          ...(paid ? { pay_amount_cents: paid.amountCents, pay_currency: paid.currency, pay_label: paid.label, pay_mode: paid.payMode, pay_code: newLinkId() } : {}),
           public_id: publicId,
           kind_label: kind.display_name,
           kind_entry_id: kind.id,
@@ -168,6 +192,9 @@ export async function makeFreeLink(deps: MakeDeps, input: MakeLinkInput): Promis
   }
   return { ok: false, errors: ["The link could not be saved. Try again."] }
 }
+
+/** The old name (free links only); kept so nothing that imported it breaks. A call WITHOUT `payment` makes exactly the free link it always made. */
+export const makeFreeLink = makeLink
 
 /** Plain words for a Calendly failure (R099): what to do, never the technical text. */
 export function calendlyFailureText(err: unknown): string {

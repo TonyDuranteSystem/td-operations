@@ -8,9 +8,10 @@
  */
 import { useState } from 'react'
 import { format, parseISO } from 'date-fns'
-import { ExternalLink, FileText, Loader2, Pencil } from 'lucide-react'
+import { Check, ExternalLink, FileText, Loader2, Pencil } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatAmount, parseAmountInput } from '@/lib/signed-contracts/amount-input'
+import type { CompanyCheck } from '@/lib/signed-contracts/company-check'
 import type { SignedContractEntry } from '@/lib/signed-contracts/types'
 
 function dateOf(iso: string | null): string {
@@ -33,6 +34,54 @@ function AmountsLine({ entry }: { entry: SignedContractEntry }) {
       January {a.january} · June {a.june}
       {a.yearly != null ? ` · yearly ${a.yearly}` : ''}
     </b>
+  )
+}
+
+/**
+ * Does the company's own installment amount (what the CRM shows, and what the June invoice is raised from) agree with this
+ * contract? Says what it found; says "Not compared" when it did not compare, so no note is never read as "matches".
+ */
+export function CompanyCheckNote({ check }: { check: CompanyCheck }) {
+  if (check.state === 'match') {
+    return (
+      <p className="flex items-center gap-1 text-xs text-emerald-700" data-testid="company-check" data-state="match">
+        <Check className="h-3 w-3" /> Matches the company’s installment amounts in the CRM.
+      </p>
+    )
+  }
+  if (check.state === 'differ') {
+    return (
+      <p
+        className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+        data-testid="company-check"
+        data-state="differ"
+      >
+        <b className="font-semibold">Differs from the company.</b> The company’s installment amounts in the CRM are January{' '}
+        <b className="font-semibold">{check.january}</b> · June <b className="font-semibold">{check.june}</b>. This contract says something else.
+      </p>
+    )
+  }
+  if (check.state === 'company_empty') {
+    return (
+      <p
+        className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+        data-testid="company-check"
+        data-state="company_empty"
+      >
+        <b className="font-semibold">The company has no installment amounts saved</b> in the CRM, so there is nothing to compare this contract with.
+      </p>
+    )
+  }
+  const text =
+    check.state === 'no_company'
+      ? 'Not compared: this offer is not filed on a company.'
+      : check.state === 'unreadable'
+        ? 'Not compared: the amounts of this contract cannot be read as January and June.'
+        : 'Could not compare with the company just now. Reload the page to try again.'
+  return (
+    <p className="text-xs text-zinc-500" data-testid="company-check" data-state={check.state}>
+      {text}
+    </p>
   )
 }
 
@@ -289,6 +338,8 @@ export function SignedContractsCard({
                 )}
               </div>
             )}
+
+            {!isEditing && !needsReload[entry.id] && entry.companyCheck && <CompanyCheckNote check={entry.companyCheck} />}
 
             {blockedLink[entry.id] && (
               <p className="text-xs text-zinc-700">

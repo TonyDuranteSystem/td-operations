@@ -13,7 +13,7 @@ import { PERSONAL_CATEGORY } from "@/lib/documents/visibility-guard"
 import { storePointer } from "@/lib/crm-store/document-pointer"
 import { resolveDocLocale } from "@/lib/portal/document-alerts"
 import { openTopicsOf } from "@/lib/portal/chat-topics"
-import { DEFAULT_DOCUMENT_TOPIC, type ShareTarget, type ShareContext } from "@/lib/portal/document-share-text"
+import { DEFAULT_DOCUMENT_TOPIC, isChatClosedStatus, type ShareTarget, type ShareContext } from "@/lib/portal/document-share-text"
 
 export { DEFAULT_DOCUMENT_TOPIC, buildDocumentShareMessage } from "@/lib/portal/document-share-text"
 export type { ShareTarget, ShareContext } from "@/lib/portal/document-share-text"
@@ -92,7 +92,7 @@ export async function buildShareTargets(opts: {
     const { data: accs } = await supabaseAdmin.from("accounts").select("id, company_name, status").in("id", accountIds)
     for (const a of (accs ?? []) as { id: string; company_name: string | null; status: string | null }[]) {
       const s = a.status ?? ""
-      accounts.set(a.id, { name: a.company_name ?? "Company", closed: s !== "Active" && s !== "Suspended" })
+      accounts.set(a.id, { name: a.company_name ?? "Company", closed: isChatClosedStatus(s) })
     }
   }
 

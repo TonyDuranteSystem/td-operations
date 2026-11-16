@@ -2,10 +2,11 @@
  * Booking page — "When it gets booked, the system will:" the plain-English preview under the link maker. PURE.
  * It is written FROM the decision the link will really carry (decideLinkPlan's result), so the preview can never promise something the engine does not do:
  * the words come from Antonio's approved mockup, and a line is kept only where the engine (Stage 1a) really does it.
- * Nothing about money or a referrer: those belong to Stage 3 and Stage 2 and are not offered on the page yet.
+ * Money (Stage 3): a paid link adds the price and how it will be recorded; the person books and pays on our own page (16 Nov 2026). Nothing about a referrer: that belongs to Stage 2 and is not offered on the page yet.
  */
 
 import { STANDARD_MINUTES, type LinkPlan, type PersonState } from "@/lib/booking/plan"
+import { moneyText, payModeText } from "@/lib/booking/payment"
 
 export interface PreviewLine {
   label: string
@@ -65,7 +66,12 @@ export function describePlan(input: PreviewInput): PreviewLine[] {
     lines.push({ label: "Recording", text: "Linked by email, as today." })
   }
 
-  if (plan.minutes !== STANDARD_MINUTES) {
+  if (plan.payment) {
+    const money = moneyText(plan.payment.amountCents, plan.payment.currency)
+    lines.push({ label: "Payment", text: `${possessive(nm)} call costs ${money}. They open your link, pick a free time, and book and pay by card, all on our own page. The call is booked as soon as they pick the time. If they never pay, a card in Calls to check lets you cancel the call or send them the payment link.` })
+    lines.push({ label: "Money", text: payModeText(plan.payment.payMode) })
+    lines.push({ label: "Length", text: "A paid call is 30 minutes and can be booked only once. If that booking is cancelled you would make a new link." })
+  } else if (plan.minutes !== STANDARD_MINUTES) {
     lines.push({ label: "Length", text: "Any length other than 30 minutes is made as a one-time Calendly link, so it can only be used once." })
   } else if (plan.once) {
     lines.push({ label: "Use", text: "Attached to the first booking only. A later booking on this link is saved as usual and a card asks you." })

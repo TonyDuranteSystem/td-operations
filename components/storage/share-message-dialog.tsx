@@ -13,10 +13,11 @@
  * The window has a FIXED height with a scrolling body and a pinned button row: the member list loads after the window opens,
  * and a window that grew would move the buttons from under an aimed click (the same trap the Portal Chats pop-up had).
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Send, X } from 'lucide-react'
 import { trapTabKey } from '@/components/storage/focus-trap'
-import { buildDocumentShareMessage, messageTopicChoices, normalizeTopic, resolveTypedTopic, topicChoices, type ShareContext, type ShareTarget } from '@/lib/portal/document-share-text'
+import { buildDocumentShareMessage, type ShareContext, type ShareTarget } from '@/lib/portal/document-share-text'
+import { MessageTargetFields, useMessageTarget } from '@/components/storage/message-target-fields'
 
 type Askable = Extract<ShareContext, { askable: true }>
 
@@ -24,8 +25,6 @@ export type ShareDialogResult =
   | { action: 'cancel' }
   | { action: 'just_show' }
   | { action: 'send'; target: ShareTarget; topic: string; message: string; addressedToMemberId: string | null; addressedToCompany: boolean }
-
-interface MemberOption { memberId: string; name: string; resolvable: boolean }
 
 export type ShareSendResult = Extract<ShareDialogResult, { action: 'send' }>
 
@@ -40,17 +39,10 @@ export function ShareMessageDialog({ fileNames = [], ctx, note, onResult, mode =
   mode?: 'document' | 'message'; onSend?: (r: ShareSendResult) => Promise<void>
 }) {
   const isMessage = mode === 'message'
-  const openTargets = ctx.targets.filter((t) => !t.closed)
-  const initialTarget = ctx.targets.find((t) => t.isDefault && !t.closed) ?? (isMessage && openTargets.length === 1 ? openTargets[0] : null)
-  const [targetKey, setTargetKey] = useState<string | null>(initialTarget?.key ?? null)
-  const target = ctx.targets.find((t) => t.key === targetKey) ?? null
+  const t = useMessageTarget(ctx, isMessage)
+  const { target, finalTopic } = t
   const [message, setMessage] = useState(() => (isMessage ? '' : buildDocumentShareMessage(ctx.locale, fileNames)))
   const [error, setError] = useState<string | null>(null)
-  const [topic, setTopic] = useState(ctx.defaultTopic)
-  const [newTopic, setNewTopic] = useState('')
-  const [members, setMembers] = useState<MemberOption[]>([])
-  const [memberId, setMemberId] = useState<string | null>(null) // null + wholeCompany = whole company
-  const [wholeCompany, setWholeCompany] = useState(true)
   const [busy, setBusy] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
 
@@ -60,32 +52,12 @@ export function ShareMessageDialog({ fileNames = [], ctx, note, onResult, mode =
     return () => window.removeEventListener('keydown', onKey)
   }, [onResult, busy])
 
-  // the roster is fetched fresh for the chosen company (never reused across companies)
-  const accountId = target?.kind === 'company' ? target.accountId : null
-  useEffect(() => {
-    setMembers([]); setMemberId(null); setWholeCompany(true)
-    if (!accountId) return
-    let cancelled = false
-    fetch(`/api/portal/chat/members?account_id=${encodeURIComponent(accountId)}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (!cancelled && d && Array.isArray(d.members)) setMembers(d.members as MemberOption[]) })
-      .catch(() => { /* the label is optional — no roster just means no "Addressed to" row */ })
-    return () => { cancelled = true }
-  }, [accountId])
-
-  const topics = useMemo(() => (isMessage ? messageTopicChoices(target?.topics ?? []) : topicChoices(ctx.defaultTopic, target?.topics ?? [])), [isMessage, ctx.defaultTopic, target])
-  const typed = normalizeTopic(newTopic)
-  const finalTopic = typed ? resolveTypedTopic(typed, target?.topics ?? []) : topic
   // a plain message may have NO topic ("General"); a document message always has one
   const canSend = !!target && !target.closed && !!message.trim() && (isMessage || !!finalTopic) && !busy
 
   const send = () => {
     if (!canSend || !target) return
-    const result: ShareSendResult = {
-      action: 'send', target, topic: finalTopic, message: message.trim(),
-      addressedToMemberId: target.kind === 'company' && !wholeCompany ? memberId : null,
-      addressedToCompany: target.kind === 'company' && members.length > 1 && wholeCompany,
-    }
+    const result: ShareSendResult = { action: 'send', ...t.selection!, message: message.trim() }
     setBusy(true) // one click only
     if (isMessage && onSend) {
       setError(null)
@@ -113,49 +85,7 @@ export function ShareMessageDialog({ fileNames = [], ctx, note, onResult, mode =
           {!isMessage && <p className="break-words text-zinc-600"><strong>{fileNames[0]}</strong>{fileNames.length > 1 ? ` and ${fileNames.length - 1} more` : ''} will be shown to the client either way. <strong>Show only</strong> tells the client nothing (no notification, no message); <strong>Send message</strong> posts your message in chat and the client also gets the portal notification.</p>}
           {note && <p className="text-xs text-zinc-500">{note}</p>}
 
-          <div>
-            <label className="mb-1.5 block text-xs font-medium text-zinc-500">Send as</label>
-            <div className="flex flex-wrap gap-1.5">
-              {ctx.targets.map((t) => (
-                <button key={t.key} type="button" disabled={t.closed} onClick={() => { setTargetKey(t.key); setTopic(ctx.defaultTopic); setNewTopic('') }}
-                  className={`max-w-[260px] truncate rounded-full border px-3 py-1.5 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${targetKey === t.key ? 'border-blue-600 bg-blue-600 text-white' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'}`}>
-                  {t.label}{t.closed ? " (client can't see this chat)" : ''}
-                </button>
-              ))}
-            </div>
-            {!target && <p className="mt-1.5 text-[11px] text-amber-700">{isMessage ? 'Pick who the message goes to.' : 'Pick who the message goes to, or choose "Show only".'}</p>}
-            {target?.kind === 'company' && <p className="mt-1.5 text-[11px] text-amber-700">Visible to everyone in {target.label}.</p>}
-          </div>
-          {ctx.notice && <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800">{ctx.notice}</p>}
-
-          {target?.kind === 'company' && members.length > 1 && (
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-zinc-500">Addressed to</label>
-              <div className="flex flex-wrap gap-1.5">
-                <button type="button" onClick={() => { setWholeCompany(true); setMemberId(null) }}
-                  className={`rounded-full border px-3 py-1.5 text-sm ${wholeCompany ? 'border-teal-600 bg-teal-600 text-white' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'}`}>Whole company</button>
-                {members.map((m) => m.resolvable ? (
-                  <button key={m.memberId} type="button" onClick={() => { setWholeCompany(false); setMemberId(m.memberId) }}
-                    className={`rounded-full border px-3 py-1.5 text-sm ${!wholeCompany && memberId === m.memberId ? 'border-teal-600 bg-teal-600 text-white' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'}`}>{m.name}</button>
-                ) : (
-                  <span key={m.memberId} title="No linked contact on file for this member yet" className="cursor-not-allowed rounded-full border border-zinc-200 px-3 py-1.5 text-sm text-zinc-300">{m.name}</span>
-                ))}
-              </div>
-              <p className="mt-1.5 text-[11px] text-zinc-400">Label only — the whole company still sees this message.</p>
-            </div>
-          )}
-
-          <div>
-            <label className="mb-1.5 block text-xs font-medium text-zinc-500">Topic</label>
-            <div className="flex flex-wrap gap-1.5">
-              {topics.map((t) => (
-                <button key={t || 'general'} type="button" onClick={() => { setTopic(t); setNewTopic('') }}
-                  className={`max-w-[200px] truncate rounded-full border px-3 py-1.5 text-sm ${!typed && topic === t ? 'border-zinc-900 bg-zinc-900 text-white' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'}`}>{t || 'General'}</button>
-              ))}
-            </div>
-            <input value={newTopic} onChange={(e) => setNewTopic(e.target.value)} maxLength={100} placeholder="…or type a new topic"
-              className="mt-2 w-full rounded-md border border-zinc-300 px-3 py-1.5 text-sm" />
-          </div>
+          <MessageTargetFields t={t} ctx={ctx} isMessage={isMessage} />
 
           <div>
             <label className="mb-1.5 block text-xs font-medium text-zinc-500" htmlFor="share-dialog-message">{isMessage ? `Message (the language on file is ${ctx.locale === 'it' ? 'Italian' : 'English'})` : `Message (${ctx.locale === 'it' ? 'Italian' : 'English'} — you can edit it)`}</label>

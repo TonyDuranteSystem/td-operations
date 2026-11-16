@@ -4,9 +4,11 @@
  * as the Calendar's confirm step (`settlePayment`) — a Paid "Strategic Call" invoice + a deductible credit; the lead is never converted.
  * Idempotent (keyed on the session), so Stripe's redelivery after a failed attempt records it exactly once. THROWS on failure so the
  * webhook answers 500 and Stripe sends the event again: the payment must never be only in the raw event log.
+ * A payment tagged `booking_link_id` (a paid link made on the Booking page) is handed to lib/booking/pay-record.ts first.
  */
 
 import { settlePayment, UUID_RE } from "@/lib/incoming-payments/confirm"
+import { recordBookingLinkPayment } from "@/lib/booking/pay-record"
 import type { WaitingPayment } from "@/lib/incoming-payments/classify"
 
 interface PaidCallSession {
@@ -19,6 +21,9 @@ interface PaidCallSession {
 }
 
 export async function recordPaidCallFromSession(session: PaidCallSession, now: Date = new Date()): Promise<void> {
+  // A payment made through a PAID BOOKING LINK (Booking page, Stage 3) names its link: it is recorded on the person the link was made for and the link is marked paid.
+  // A payment without that tag skips this block entirely and is recorded exactly as before. A link that no longer exists falls through to the payer's-email path below.
+  if (session.metadata?.booking_link_id && (await recordBookingLinkPayment(session, { now })).handled) return
   const cents = Number(session.amount_total)
   const currency = String(session.currency ?? "").toUpperCase()
   if (!Number.isFinite(cents) || cents <= 0 || (currency !== "EUR" && currency !== "USD")) {

@@ -12,6 +12,8 @@ import { resolveColumns } from '@/lib/crm-lists/columns'
 import { accountExtras } from '@/lib/crm-lists/extras'
 import { companiesByPerson, currentMemberCounts, pickMainContacts, type AccountContactLink, type PersonCompanyRow } from '@/lib/crm-lists/people'
 import { formatListDate } from '@/lib/crm-lists/format'
+import { accountMatchesSearch } from '@/lib/crm-lists/search-match'
+import { loadContractMismatchesForCompanies } from '@/lib/signed-contracts/load'
 
 const PAGE_SIZE = 50
 
@@ -41,16 +43,30 @@ export default async function AccountsPage({
 
   // Every company that matches the search, with just the words the filters use. The filters, the counts on each choice and the
   // header all work off this one list, so they always agree (the old header counted only the 50 on the page).
-  const baseRows = await fetchAllRows((from, to) => {
-    let q = supabase
+  const everyCompany = await fetchAllRows((from, to) =>
+    supabase
       .from('accounts')
       .select('id, company_name, status, account_type, entity_type')
       .order('company_name', { ascending: true })
       .order('id', { ascending: true })
-      .range(from, to)
-    if (query) q = q.ilike('company_name', `%${query}%`)
-    return q
-  })
+      .range(from, to),
+  )
+  // The search matches the same things the search dropdown shows: a company's name, or the name of one of its people. The people are
+  // only read when something is typed.
+  const personNamesByCompany = new Map<string, string[]>()
+  if (query) {
+    const peopleLinks = await fetchAllRows((from, to) =>
+      supabase.from('account_contacts').select('account_id, contact_id, contact:contacts(full_name)').order('account_id', { ascending: true }).order('contact_id', { ascending: true }).range(from, to),
+    )
+    for (const l of peopleLinks as unknown as { account_id: string; contact: { full_name: string | null } | null }[]) {
+      const name = l.contact?.full_name
+      if (!name) continue
+      const list = personNamesByCompany.get(l.account_id) ?? []
+      list.push(name)
+      personNamesByCompany.set(l.account_id, list)
+    }
+  }
+  const baseRows = query ? everyCompany.filter(a => accountMatchesSearch(query, a, personNamesByCompany.get(a.id) ?? [])) : everyCompany
   const base = baseRows.map(a => ({ ...a, overdue_count: overdueMap[a.id] ?? 0 }))
 
   // The letter is one more filter: the choices' counts follow it, and the letter buttons' own counts follow the other filters.
@@ -63,6 +79,12 @@ export default async function AccountsPage({
 
   const pageRows = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
   const accountIds = pageRows.map(a => a.id)
+  // The companies whose signed contract does not match their own installment amounts get the amber flag (dev job a2a663cf). The same rule
+  // as the Contact page and the Contacts list; only the offers filed on THESE companies are read.
+  const contractMismatches = await loadContractMismatchesForCompanies({
+    accountIds,
+    companyNames: new Map(pageRows.map(a => [a.id, a.company_name])),
+  })
 
   type Detail = {
     state_of_formation: string | null
@@ -176,6 +198,7 @@ export default async function AccountsPage({
       chip_2: chipMap[a.id]?.second ?? { kind: 'not_invoiced', count: 0 },
       client_since: formatListDate(d?.client_since),
       contact_card: contactMap[a.id]?.id ? (contactCards[contactMap[a.id].id as string] ?? null) : null,
+      contract_mismatches: contractMismatches.kind === 'ok' ? (contractMismatches.byCompany.get(a.id) ?? []) : [],
       extras: d?.extras ?? {},
     }
   })
@@ -198,6 +221,11 @@ export default async function AccountsPage({
           {stats.total} companies — {stats.smllc} SMLLC, {stats.mmllc} MMLLC, {stats.corp} Corp
           {stats.typeNotSet > 0 ? `, ${stats.typeNotSet} type not set` : ''}
         </p>
+        {contractMismatches.kind === 'failed' && (
+          <p className="mt-1 text-xs text-muted-foreground" data-testid="contract-check-failed">
+            Could not check the contract amounts just now, so no company is marked. Reload the page to try again.
+          </p>
+        )}
       </div>
       <AccountTable
         items={items}

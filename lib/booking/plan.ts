@@ -20,6 +20,7 @@ export const MIN_MINUTES = 1
 export const MAX_MINUTES = 720
 /** Stripe's smallest card charge. */
 export const MIN_PAID_CENTS = 50
+export const PAID_LENGTH_TEXT = "A paid call is 30 minutes for now. Pick 30 minutes."
 
 export type PersonState = "new" | "lead" | "contact"
 export type Recorder = "attach" | "lead" | "none"
@@ -118,6 +119,9 @@ export function decideLinkPlan(input: LinkPlanInput): LinkPlanResult {
     }
   }
 
+  // A paid call is booked on OUR page through Calendly's booking service, which books the call type's own length (the plain call type is 30 minutes): no other length can be offered yet.
+  if (payment && minutes !== null && minutes !== STANDARD_MINUTES) errors.push(PAID_LENGTH_TEXT)
+
   if (errors.length || !parsedKind.ok || minutes === null) return { ok: false, errors }
 
   const rule = parsedKind.rule
@@ -139,7 +143,8 @@ export function decideLinkPlan(input: LinkPlanInput): LinkPlanResult {
   // A referrer earns a credit for whoever claims the link, so the link must close on its first booking (never the reusable standard link, even at 30 minutes).
   const once = minutes !== STANDARD_MINUTES || payment !== null || referrer !== null || input.firstBookingOnly === true
   const autoTemplate: TemplateRole = input.person.state === "new" && payment === null && rule.sales_template && recorder === "lead" ? "sales" : "plain"
-  const template: TemplateRole = input.questions === "full" ? "sales" : input.questions === "short" ? "plain" : autoTemplate
+  // A paid call is booked on our own page, which asks only for a name and an email: always the plain call type, whatever was chosen for the questions.
+  const template: TemplateRole = payment ? "plain" : input.questions === "full" ? "sales" : input.questions === "short" ? "plain" : autoTemplate
 
   return {
     ok: true,

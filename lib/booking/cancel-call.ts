@@ -15,6 +15,7 @@ import { CalendlyError, type CalendlyCtx } from "@/lib/calendly/api"
 import { cancelEvent } from "@/lib/calendly/api-write"
 import { isPlainCalendlyUrl } from "@/lib/booking-links/destination"
 import { bookingUrisOf, loadStoredBookings } from "@/lib/booking/link-bookings"
+import { stopChargingIfPaidLink } from "@/lib/booking/pay-actions"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- booking_links: untyped until the production migration is applied
 type Db = any
@@ -48,7 +49,7 @@ export async function cancelLinkCall(deps: { db: Db; calendly: CalendlyCtx }, id
   const { db } = deps
   try {
     if (!/^[0-9a-fA-F-]{36}$/.test(id)) return { ok: false, status: 404, error: "That link could not be found." }
-    const { data: row, error } = await db.from("booking_links").select("public_id, claimed_event_uri").eq("id", id).maybeSingle()
+    const { data: row, error } = await db.from("booking_links").select("public_id, claimed_event_uri, paid_session_id").eq("id", id).maybeSingle()
     if (error) return { ok: false, status: 500, error: "The call could not be cancelled. Nothing was cancelled. Try again." }
     if (!row) return { ok: false, status: 404, error: "That link could not be found." }
 
@@ -60,7 +61,11 @@ export async function cancelLinkCall(deps: { db: Db; calendly: CalendlyCtx }, id
 
     try {
       const r = await cancelEvent(deps.calendly, uri, CANCEL_REASON)
-      return { ok: true, message: r.alreadyCancelled ? "That call was already cancelled." : "The call is cancelled. Calendly is telling the booker." }
+      // a paid call that was never paid: stop charging for it, so nobody can still pay for a call that no longer exists (best effort, never blocks the cancel)
+      await stopChargingIfPaidLink(db, id, new Date())
+      // A call that was ALREADY PAID: cancelling it does not give the money back and does not void the credit (that is a separate step, still by hand): say so plainly (bug hunter H5).
+      const paidNote = row.paid_session_id ? " This call was already PAID: the payment is NOT refunded and its credit is not removed. Refund it and void the credit by hand." : ""
+      return { ok: true, message: `${r.alreadyCancelled ? "That call was already cancelled." : "The call is cancelled. Calendly is telling the booker."}${paidNote}` }
     } catch (err) {
       const hand = bookings.find((b) => b.eventUri === uri)?.cancelUrl ?? null
       const cancelUrl = offersHandCancel(err) && hand && isPlainCalendlyUrl(hand) ? hand : undefined

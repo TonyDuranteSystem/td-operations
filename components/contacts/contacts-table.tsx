@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useEffect, useRef, useState, useTransition } from 'react'
-import { Search, ChevronLeft, ChevronRight, User, Shield } from 'lucide-react'
+import { ChevronLeft, ChevronRight, User, Shield, TriangleAlert } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { ContactCompanyLine, ContactListItem } from '@/lib/types'
 import { SegmentedFilter } from '@/components/lists/segmented-filter'
@@ -14,6 +14,9 @@ import { LetterBar } from '@/components/lists/letter-bar'
 import { LISTS_CONTAINER, ListStyles } from '@/components/lists/list-styles'
 import { YearSelect } from '@/components/lists/year-select'
 import { ListHoverCard } from '@/components/lists/hover-card'
+import { ListSearchBox } from '@/components/lists/list-search-box'
+import { classifyIncomingQuery } from '@/lib/crm-lists/search-dropdown'
+import { MessageContactButton } from '@/components/contacts/message-contact-button'
 import { useAmountOverrides, type AmountOverride } from '@/components/lists/use-amount-overrides'
 import { isAmountLocked } from '@/lib/crm-lists/amounts'
 import { chosenColumns, gridMinWidth, gridTemplate, hasColumn } from '@/lib/crm-lists/columns'
@@ -89,14 +92,16 @@ export function ContactsTable({ items, query, statusFilter, filters, linkCounts,
     year: yearParam,
   })
 
+  // Every search text we sent while typing (see handleLiveSearch): a slow answer to an EARLIER keystroke must not overwrite the box.
+  const sentQsRef = useRef<Set<string>>(new Set())
+
   // Resync when the URL changed for a reason OTHER than our own action —
   // browser back/forward, or a link elsewhere setting these params. See
   // leads-table.tsx for why this is guarded on the ref, not a plain
   // "prop changed" check.
   useEffect(() => {
     const last = lastFiltersRef.current
-    if (
-      query !== last.q ||
+    const othersChanged =
       statusFilter !== last.status ||
       filters.link !== last.link ||
       filters.cstatus !== last.cstatus ||
@@ -104,10 +109,14 @@ export function ContactsTable({ items, query, statusFilter, filters, linkCounts,
       filters.ctype !== last.ctype ||
       letter !== last.letter ||
       yearParam !== last.year
-    ) {
-      lastFiltersRef.current = { q: query, status: statusFilter, link: filters.link, cstatus: filters.cstatus, kind: filters.kind, ctype: filters.ctype, letter, year: yearParam }
-      setSearch(query)
+    if (!othersChanged) {
+      const kind = classifyIncomingQuery(query, last.q, sentQsRef.current)
+      if (kind === 'settled') { sentQsRef.current.clear(); return }
+      if (kind === 'stale-echo') return // an old answer to something typed a moment ago — keep what is in the box now
     }
+    lastFiltersRef.current = { q: query, status: statusFilter, link: filters.link, cstatus: filters.cstatus, kind: filters.kind, ctype: filters.ctype, letter, year: yearParam }
+    sentQsRef.current.clear()
+    setSearch(query)
   }, [query, statusFilter, filters.link, filters.cstatus, filters.kind, filters.ctype, letter, yearParam])
 
   function buildParams(overrideParams: Partial<Record<FilterKey | 'page', string>> = {}) {
@@ -129,6 +138,7 @@ export function ContactsTable({ items, query, statusFilter, filters, linkCounts,
 
   function updateFilter(key: FilterKey, value: string) {
     lastFiltersRef.current = { ...lastFiltersRef.current, [key]: value }
+    if (key === 'q') sentQsRef.current.add(value)
     startTransition(() => {
       router.push(`/contacts?${buildParams({ [key]: value, page: '1' })}`)
     })
@@ -137,6 +147,18 @@ export function ContactsTable({ items, query, statusFilter, filters, linkCounts,
   function goToPage(page: number) {
     startTransition(() => {
       router.push(`/contacts?${buildParams({ page: String(page) })}`)
+    })
+  }
+
+  // The list follows what is typed once typing pauses (the search box calls this): same filter as pressing Enter, but it REPLACES the
+  // address instead of adding to the Back history for every pause.
+  function handleLiveSearch(typed: string) {
+    const v = typed.trim()
+    if (v === lastFiltersRef.current.q) return
+    lastFiltersRef.current = { ...lastFiltersRef.current, q: v }
+    sentQsRef.current.add(v)
+    startTransition(() => {
+      router.replace(`/contacts?${buildParams({ q: v, page: '1' })}`)
     })
   }
 
@@ -186,16 +208,7 @@ export function ContactsTable({ items, query, statusFilter, filters, linkCounts,
     <div className="space-y-4">
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3">
-        <form onSubmit={handleSearch} className="relative w-full max-w-md flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <input
-            type="text"
-            value={search}
-            onChange={handleSearchChange}
-            placeholder="Search name or email..."
-            className="w-full pl-9 pr-4 py-2 rounded-lg border bg-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-        </form>
+        <ListSearchBox kind="contact" value={search} onChange={handleSearchChange} onSubmit={handleSearch} onLive={handleLiveSearch} placeholder="Search name, email, phone or company..." />
         <div className="ml-auto">
           <ColumnsMenu list="contacts" selected={columns} always="Name, Companies, 1st Inst, 2nd Inst, Setup fee" />
         </div>
@@ -258,12 +271,25 @@ export function ContactsTable({ items, query, statusFilter, filters, linkCounts,
                   <div className="flex items-start gap-2 min-w-0 pt-0.5">
                     <User className="mt-0.5 h-4 w-4 text-muted-foreground shrink-0" />
                     <div className="min-w-0">
-                      <ListHoverCard
-                        card={personCard({ ...item, companies: item.companies.map(c => ({ company_name: c.company_name, status: c.status })) })}
-                        className="min-w-0 max-w-full"
-                      >
-                        <p className="truncate font-medium text-sm">{item.full_name}</p>
-                      </ListHoverCard>
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <ListHoverCard
+                          card={personCard({ ...item, companies: item.companies.map(c => ({ company_name: c.company_name, status: c.status })) })}
+                          className="min-w-0 max-w-full"
+                        >
+                          {/* Amber when a signed contract does not match the company (Antonio 2026-11-15): the card on hover says which. */}
+                          {item.contract_mismatches.length > 0 ? (
+                            <p className="truncate font-medium text-sm text-amber-700" data-testid="contract-mismatch-name">
+                              <TriangleAlert className="mr-1 inline h-3.5 w-3.5 -translate-y-px text-amber-600" aria-hidden="true" />
+                              <span className="sr-only">Check the contract amounts: </span>
+                              {item.full_name}
+                            </p>
+                          ) : (
+                            <p className="truncate font-medium text-sm">{item.full_name}</p>
+                          )}
+                        </ListHoverCard>
+                        {/* Write a portal chat message from here (Antonio 2026-11-15: "directly from the list"). */}
+                        <MessageContactButton contactId={item.id} contactName={item.full_name || ''} variant="icon" />
+                      </div>
                       <div className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
                         {item.language && !hasColumn(columns, 'language') && <span>{item.language}</span>}
                         {item.passport_on_file && (

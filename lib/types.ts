@@ -1,6 +1,7 @@
 import type { MessageReaction } from './portal/reactions'
 import type { InstallmentChip } from './billing/installment-invoices'
 import type { PersonCardSource } from './crm-lists/hover-cards'
+import type { ContractMismatch } from './signed-contracts/types'
 
 export interface TaskAttachment {
   /** Publicly accessible URL (typically a Google Drive file URL). */
@@ -303,6 +304,8 @@ export interface AccountListItem {
   client_since: string | null
   /** The main contact's details for the hover card (null when the company has none). */
   contact_card: PersonCardSource | null
+  /** Signed contracts whose amounts differ from this company's own installment amounts (the amber flag); empty = nothing to check. */
+  contract_mismatches: ContractMismatch[]
   /**
    * Display text for the extra fields this person chose (formation date, EIN, address…), by field id. Only the chosen fields are filled
    * in: a field nobody asked for (the EIN above all) is never sent to the screen.
@@ -392,6 +395,8 @@ export interface ContactListItem {
   created_at: string
   /** One line per linked company (empty when the person has none). */
   companies: ContactCompanyLine[]
+  /** The amber findings about this person's signed contracts (a contract that does not match its company); empty = nothing to flag. */
+  contract_mismatches: ContractMismatch[]
 }
 
 // ─── Contact Detail Types ────────────────────────────────

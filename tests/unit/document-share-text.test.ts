@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildDocumentShareMessage, contactMessageNotice, messageTopicChoices, normalizeTopic, resolveTypedTopic, sameShareAudience, topicChoices, DEFAULT_DOCUMENT_TOPIC, type ShareContext, type ShareTarget } from '@/lib/portal/document-share-text'
+import { buildDocumentShareMessage, contactMessageNotice, messageTopicChoices, normalizeTopic, resolveTypedTopic, sameShareAudience, topicChoices, DEFAULT_DOCUMENT_TOPIC, type ShareContext, type ShareTarget, isChatClosedStatus, companyReachNotice, companyAlertInfo } from '@/lib/portal/document-share-text'
 import { buildShareChatBody, type ShareMessageToSend } from '@/lib/crm-store/document-share-client'
 
 describe('buildDocumentShareMessage', () => {
@@ -99,3 +99,69 @@ describe('contactMessageNotice', () => {
     expect(contactMessageNotice('  ', { exists: false, suspended: false })).toMatch(/^This person has no portal login yet/)
   })
 })
+
+describe('isChatClosedStatus — the one rule for a chat the client cannot see', () => {
+  it('Active and Suspended are open', () => {
+    expect(isChatClosedStatus('Active')).toBe(false)
+    expect(isChatClosedStatus('Suspended')).toBe(false)
+  })
+  it('every other status is closed, including Pending Formation (not greyed on the list, but the portal hides its chat)', () => {
+    for (const s of ['Cancelled', 'Closed', 'Offboarding', 'Pending Formation', '', 'something new']) expect(isChatClosedStatus(s)).toBe(true)
+  })
+  it('a missing status is closed', () => {
+    expect(isChatClosedStatus(null)).toBe(true)
+    expect(isChatClosedStatus(undefined)).toBe(true)
+  })
+})
+
+describe('companyReachNotice — only when NOBODY can read the chat yet', () => {
+  it('no warning as soon as one linked person has a working login', () => {
+    expect(companyReachNotice('Open LLC', { contactCount: 3, contactsWithLogin: 1, chatTeammates: 0 })).toBeNull()
+  })
+  it('no warning when a chat teammate is active, even with no linked login', () => {
+    expect(companyReachNotice('Open LLC', { contactCount: 1, contactsWithLogin: 0, chatTeammates: 1 })).toBeNull()
+  })
+  it('warns when people are linked but none can log in', () => {
+    expect(companyReachNotice('Open LLC', { contactCount: 2, contactsWithLogin: 0, chatTeammates: 0 })).toMatch(/Nobody at Open LLC has a working portal login/)
+  })
+  it('warns differently when nobody is linked at all', () => {
+    expect(companyReachNotice('Open LLC', { contactCount: 0, contactsWithLogin: 0, chatTeammates: 0 })).toMatch(/Nobody is linked to Open LLC yet/)
+  })
+  it('says the message is still saved, and copes with a blank name', () => {
+    const n = companyReachNotice('  ', { contactCount: 1, contactsWithLogin: 0, chatTeammates: 0 })
+    expect(n).toMatch(/This company/)
+    expect(n).toMatch(/still saved/)
+  })
+})
+
+describe('companyAlertInfo — the alert goes to one person', () => {
+  it('names the person and says everyone linked can still read it', () => {
+    const t = companyAlertInfo('Ada Rossi')
+    expect(t).toMatch(/one person only: Ada Rossi/)
+    expect(t).toMatch(/Everyone linked to the company can read/)
+  })
+  it('says nothing when nobody could be resolved', () => {
+    expect(companyAlertInfo(null)).toBeNull()
+    expect(companyAlertInfo('   ')).toBeNull()
+  })
+})
+
+describe('buildShareChatBody — files from the Chat tab box', () => {
+  const company = { key: 'company:a1', kind: 'company' as const, accountId: 'a1', contactId: null, label: 'Open LLC', closed: false, isDefault: false, topics: [] }
+  const person = { key: 'person:c1', kind: 'person' as const, accountId: null, contactId: 'c1', label: 'Ada — personal chat', closed: false, isDefault: false, topics: [] }
+  const files = [{ url: 'https://x/y.pdf', name: 'y.pdf' }]
+  it('a company message carries the files and still no contact id', () => {
+    const b = buildShareChatBody({ target: company, topic: 'Docs', message: 'hi', addressedToMemberId: null, addressedToCompany: false, attachments: files })
+    expect(b).toMatchObject({ account_id: 'a1', sender_context: 'company', topic: 'Docs', message: 'hi', attachments: files })
+    expect('contact_id' in b).toBe(false)
+  })
+  it('a personal message carries the files', () => {
+    const b = buildShareChatBody({ target: person, topic: '', message: 'hi', addressedToMemberId: null, addressedToCompany: false, attachments: files })
+    expect(b).toMatchObject({ contact_id: 'c1', sender_context: 'person', topic: '', attachments: files })
+  })
+  it('no files, or an empty list, adds no attachments key', () => {
+    expect('attachments' in buildShareChatBody({ target: company, topic: '', message: 'hi', addressedToMemberId: null, addressedToCompany: false })).toBe(false)
+    expect('attachments' in buildShareChatBody({ target: person, topic: '', message: 'hi', addressedToMemberId: null, addressedToCompany: false, attachments: [] })).toBe(false)
+  })
+})
+

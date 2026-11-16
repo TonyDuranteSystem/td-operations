@@ -1,0 +1,13 @@
+{
+  "title": "A company turns amber when its signed contract does not match its installment amounts",
+  "tag": "new",
+  "text": "In the Accounts list, a company whose signed contract amounts differ from the installment amounts saved on the company now shows an amber name with a small warning mark. Point at the name and the card opens with an amber block that says what the contract says and what the company has. The company page shows the same amber note at the top of the Annual Installments card. It is the same check as on the contact's page and in the Contacts list. Correct the amounts and the amber goes away by itself; there is no button to hide it.",
+  "points": [
+    "Open Accounts and look for an amber company name with a warning mark.",
+    "Rest the pointer on it: the card shows the contract's January and June and the company's January and June.",
+    "Open the company: the amber note sits above the installment amounts.",
+    "Change an amount in the Accounts list so it matches the contract: the amber goes away once both amounts match.",
+    "It also turns amber when the company has no amounts saved at all."
+  ],
+  "screenshot": "accounts-amber-contract-mismatch.png"
+}

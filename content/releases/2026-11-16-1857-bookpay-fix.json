@@ -1,0 +1,16 @@
+{
+  "title": "Booking: fixes to the book-and-pay page",
+  "tag": "fixed",
+  "text": "A refused booking used to look like nothing happened. Now the message stays on screen and the picked time is written out. A stopped or expired paid link opens the payment page (nothing is due), never your free Meet and Greet call. For someone new, the payment goes to the email they typed when they booked, not a mistyped one. Emails with an apostrophe can book. Cancel the call on an already paid call warns you that nothing is refunded. If Calendly is slow, the person is told to look for its email and you get a report with the time to check.",
+  "points": [
+    "Open a paid link, pick a time and check the line that names it",
+    "Cancel the call on a paid call: read the warning on the button"
+  ],
+  "stepsTitle": "What changed for the person",
+  "steps": [
+    { "name": "Pick a time", "detail": "The chosen time is written out under the times.", "flag": "new" },
+    { "name": "Press Book and pay", "detail": "The call is booked and the card payment opens." },
+    { "name": "If it is refused", "detail": "The message stays on screen and the times reload.", "flag": "new" },
+    { "name": "If the link was stopped", "detail": "The payment page says nothing is due, never a free call.", "flag": "new" }
+  ]
+}

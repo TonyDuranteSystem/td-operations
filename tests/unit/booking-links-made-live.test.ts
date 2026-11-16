@@ -266,6 +266,16 @@ describe("Cancel the call", () => {
     expect(calls[0].url).toBe(`${EV_A}/cancellation`)
     expect(JSON.parse(calls[0].body as string)).toEqual({ reason: CANCEL_REASON })
   })
+  it("cancelling a call that was already PAID says plainly that nothing is refunded and the credit stays (bug hunter H5); an unpaid call's message is unchanged", async () => {
+    const { ctx } = calendly(() => ({ status: 201, body: {} }))
+    const r = await cancelLinkCall({ db: db({ link: { paid_session_id: "cs_live_1" } }), calendly: ctx }, ID)
+    expect(r).toMatchObject({ ok: true })
+    expect((r as { message: string }).message).toContain("The call is cancelled. Calendly is telling the booker.")
+    expect((r as { message: string }).message).toContain("already PAID")
+    expect((r as { message: string }).message).toContain("NOT refunded")
+    const { ctx: ctx2 } = calendly(() => ({ status: 201, body: {} }))
+    expect(await cancelLinkCall({ db: db({ link: { paid_session_id: null } }), calendly: ctx2 }, ID)).toEqual({ ok: true, message: "The call is cancelled. Calendly is telling the booker." })
+  })
   it("already cancelled counts as success (a double click, or cancelled in Calendly a moment ago)", async () => {
     const { ctx } = calendly((req) => (req.method === "POST" ? { status: 400 } : { status: 200, body: eventBody(EV_A, { status: "canceled", ...cancelledByHost }) }))
     expect(await cancelLinkCall({ db: db(), calendly: ctx }, ID)).toEqual({ ok: true, message: "That call was already cancelled." })
