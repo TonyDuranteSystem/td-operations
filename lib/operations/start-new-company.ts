@@ -44,10 +44,12 @@ import {
   describeWaitingPart,
   isReplacementOf,
   namesFromReopenedNote,
+  newJobFailureText,
   replaceBlockers,
   replacementNote,
   seedReopenedWizardData,
   wizardNamesOf,
+  wizardNothingToReopenNote,
   wizardReopenedNote,
 } from '@/lib/operations/start-new-company-rules'
 
@@ -126,7 +128,23 @@ export async function previewStartNewCompany(contactId: string): Promise<StartNe
     ])
     const company = must(acct, 'the company').data as Row | null
     if (!company) continue
-    const classified = classifyOpenPayments((must(payments, 'the company\'s invoices').data ?? []) as OpenPaymentRow[])
+    // Invoices of THIS offer count too, wherever they sit: a later part of the payment is invoiced to the PERSON (no company on the
+    // row), so a company-only look would miss an unpaid part 2 and the message would tell the client "you do not pay again now".
+    type OfferInvoice = OpenPaymentRow & { tranche_seq: number | null }
+    const offerInvoices = token
+      ? ((must(
+          await supabaseAdmin
+            .from('payments')
+            .select('id, invoice_number, status, invoice_status, amount, amount_currency, amount_due, amount_paid, tranche_seq')
+            .eq('tranche_offer_token', token),
+          'the invoices of this offer',
+        ).data ?? []) as OfferInvoice[])
+      : []
+    const openRows = new Map<string, OpenPaymentRow>()
+    for (const r of (must(payments, 'the company\'s invoices').data ?? []) as OpenPaymentRow[]) openRows.set(String(r.id), r)
+    for (const r of offerInvoices) if ((OPEN_PAYMENT_STATUS as readonly string[]).includes(String(r.status))) openRows.set(String(r.id), r)
+    const classified = classifyOpenPayments(Array.from(openRows.values()))
+    const invoicedParts = offerInvoices.filter((r) => String(r.status) !== 'Cancelled' && typeof r.tranche_seq === 'number').map((r) => r.tranche_seq as number)
     const offerRow = token ? (must(await supabaseAdmin.from('offers').select('id, payment_plan').eq('token', token).maybeSingle(), 'the offer').data as Row | null) : null
     const blockers = replaceBlockers({
       jobStatus: String(job.status ?? ''),
@@ -148,7 +166,7 @@ export async function previewStartNewCompany(contactId: string): Promise<StartNe
       openTodos: must(todos, 'the company\'s to-dos').count ?? 0,
       pendingDeadlines: must(deadlines, 'the company\'s deadlines').count ?? 0,
       offerToken: token,
-      waitingPart: describeWaitingPart(offerRow?.payment_plan),
+      waitingPart: describeWaitingPart(offerRow?.payment_plan, invoicedParts),
       blockers,
       draftMessage: buildReplacementMessage({ language: contact.language as string | null, firstName: contact.first_name as string | null, oldCompanyName: companyName }),
     })
@@ -308,7 +326,7 @@ export async function startNewCompany(p: StartNewCompanyParams): Promise<StartNe
       steps.push({ step: 'new formation job', status: 'ok', detail: `Opened a new Company Formation job on the same offer (${newId}).` })
     }
   } catch (e) {
-    return refuse(`Nothing was changed. The new formation could not be opened: ${e instanceof Error ? e.message : String(e)}`)
+    return refuse(`Nothing was changed. ${newJobFailureText(e instanceof Error ? e.message : String(e))}`)
   }
 
   // ── 2. the client's wizard: reopened, names cleared (once) ────────────────────────────────────────────────────────────
@@ -339,6 +357,13 @@ export async function startNewCompany(p: StartNewCompanyParams): Promise<StartNe
           warn('client wizard', `No saved wizard is tied to this offer, but this person has ${count} other saved formation wizard${count === 1 ? '' : 's'} — not touched. The client opens a blank wizard from the link; check by hand that an old one does not still show the refused name.`)
         } else {
           steps.push({ step: 'client wizard', status: 'skipped', detail: 'No saved wizard to reopen — the client starts a blank one.' })
+          // Same marker as a real reopen: from here on this step is DONE. Without it, a press that stops before the end and is repeated
+          // after the client has started typing in the blank wizard would find that draft and reset it (found in browser QA, 2026-11-17).
+          try {
+            await appendNote('service_deliveries', newId, wizardNothingToReopenNote(today()))
+          } catch (e) {
+            failBlocking('note that there was no wizard to reopen (a second press could reset what the client types)', e)
+          }
         }
       } else {
         // The names of EVERY saved row, not just the newest: a newer blank draft must not hide what an older, submitted one held.

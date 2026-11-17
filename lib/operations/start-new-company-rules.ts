@@ -91,7 +91,7 @@ export function replaceBlockers(f: ReplaceFacts): string[] {
   if (!f.sourceOfferToken) out.push('This formation job is not tied to an offer, so the payment cannot follow the new company.')
   else if (!f.offerFound) out.push('The offer this formation came from could not be found, so the payment cannot follow the new company.')
   if (f.unpaidInvoices > 0) {
-    out.push(`The company has ${f.unpaidInvoices} unpaid invoice${f.unpaidInvoices === 1 ? '' : 's'}. Settle or cancel ${f.unpaidInvoices === 1 ? 'it' : 'them'} first.`)
+    out.push(`The company or its offer has ${f.unpaidInvoices} unpaid invoice${f.unpaidInvoices === 1 ? '' : 's'}. Settle or cancel ${f.unpaidInvoices === 1 ? 'it' : 'them'} first.`)
   }
   if (f.leaseInForce > 0) out.push('The company has an office lease in force. End the lease first.')
   return out
@@ -106,13 +106,16 @@ interface PlanPartLike {
 
 /**
  * The sentence for the pop-up about the part of the payment that waits for the new company. Only a part that waits for a
- * Company Formation step is mentioned (it is the one that follows the job); null when the offer has no such part.
+ * Company Formation step is mentioned (it is the one that follows the job); null when the offer has no such part, or when that
+ * part has already been invoiced (`alreadyInvoiced` = the part numbers that have an invoice).
  */
-export function describeWaitingPart(plan: unknown): string | null {
+export function describeWaitingPart(plan: unknown, alreadyInvoiced: readonly number[] = []): string | null {
   if (!Array.isArray(plan)) return null
   for (const raw of plan as PlanPartLike[]) {
     const t = raw?.trigger
     if (t?.kind !== 'step' || (t.service_type ?? '').trim().toLowerCase() !== 'company formation') continue
+    // A part that already has an invoice is not waiting for anything any more — saying it "waits" would be untrue.
+    if (typeof raw.seq === 'number' && alreadyInvoiced.includes(raw.seq)) continue
     const amount = typeof raw.amount === 'number' ? `${raw.amount.toLocaleString('en-US')} ${raw.currency ?? ''}`.trim() : null
     const part = typeof raw.seq === 'number' ? `Part ${raw.seq}` : 'The next part'
     const label = t.label?.trim()
@@ -156,6 +159,24 @@ export const WIZARD_REOPENED_MARKER = 'Wizard reopened'
 /** The line that carries the marker, plus the names the client had given (the wizard forgets them when it is reopened). */
 export function wizardReopenedNote(on: string, names: string[]): string {
   return `${on} — ${WIZARD_REOPENED_MARKER} for the new names.${names.length ? ` Names the client had given: ${names.join(' / ')}.` : ''}`
+}
+
+/**
+ * The words for staff when the new job could not be opened. The database allows ONE waiting formation per offer, so a second press
+ * that arrives at the same moment as the first is stopped by a "duplicate key" error — say that in plain words instead of showing
+ * the raw database message (found pressing twice at once in browser QA, 2026-11-17; nothing had changed and only one press went through).
+ */
+export function newJobFailureText(message: string | null | undefined): string {
+  const m = (message ?? '').trim()
+  if (/duplicate key|uq_formation_sd_active_per_offer/i.test(m)) {
+    return 'Someone else pressed this button for the same company at the same moment, so a new formation is already being opened. Nothing was changed by this press — wait a few seconds and refresh the page.'
+  }
+  return `The new formation could not be opened: ${m || 'unknown error'}`
+}
+
+/** Written when the press found NO saved wizard: it carries the same marker, so a repeated press never touches a wizard the client has started since. */
+export function wizardNothingToReopenNote(on: string): string {
+  return `${on} — ${WIZARD_REOPENED_MARKER}: nothing was saved to reopen, so any wizard the client starts from now on is left untouched.`
 }
 
 /** The names recorded by `wizardReopenedNote`, so a resumed press can still write them into the old job's history. */

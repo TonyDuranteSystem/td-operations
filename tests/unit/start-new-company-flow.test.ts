@@ -481,3 +481,71 @@ describe('the names the client had given are all remembered (second bug-hunter p
     expect(Object.keys(wizard().data as Row)).toEqual(['members'])
   })
 })
+
+describe('a later part of the payment already invoiced to the person (QA pass, sandbox)', () => {
+  const partTwo = (over: Row = {}) => ({ id: 'pay-p2', account_id: null, contact_id: BUYER, tranche_offer_token: TOKEN, tranche_seq: 2, invoice_number: 'INV-000002', status: 'Pending', invoice_status: 'Sent', amount: 1900, amount_currency: 'EUR', amount_due: 1900, amount_paid: 0, ...over })
+
+  it('an unpaid part invoiced to the person (no company on the row) blocks, like an unpaid company invoice', async () => {
+    h.state.db.payments = [partTwo()]
+    const c = (await previewStartNewCompany(BUYER)).candidates[0]
+    expect(c.blockers.join(' ')).toContain('unpaid invoice')
+    const r = await press()
+    expect(r.success).toBe(false)
+    expect(h.state.createSDCalls).toBe(0)
+    expect(sd(OLD_JOB)?.status).toBe('active')
+    expect(h.state.messages).toHaveLength(0)
+  })
+
+  it('a part that is already invoiced is no longer described as waiting for the new company', async () => {
+    h.state.db.payments = [partTwo({ status: 'Paid', invoice_status: 'Paid', amount_due: 0, amount_paid: 1900 })]
+    const c = (await previewStartNewCompany(BUYER)).candidates[0]
+    expect(c.blockers).toEqual([])
+    expect(c.waitingPart).toBeNull()
+  })
+
+  it('an invoice of ANOTHER offer on the same person does not block', async () => {
+    h.state.db.payments = [partTwo({ tranche_offer_token: 'some-other-offer' })]
+    const c = (await previewStartNewCompany(BUYER)).candidates[0]
+    expect(c.blockers).toEqual([])
+    expect(c.waitingPart).toContain('Part 2')
+  })
+
+  it('a cancelled invoice of the part does not block and the part counts as invoiced only if not cancelled', async () => {
+    h.state.db.payments = [partTwo({ status: 'Cancelled', invoice_status: 'Cancelled' })]
+    const c = (await previewStartNewCompany(BUYER)).candidates[0]
+    expect(c.blockers).toEqual([])
+    expect(c.waitingPart).toContain('Part 2')
+  })
+})
+
+describe('a press that found no saved wizard, then stopped, then the client started typing (browser QA, 2026-11-17)', () => {
+  it('the repeated press leaves the wizard the client started untouched', async () => {
+    h.state.db.wizard_progress = []
+    h.state.inject.push({ table: 'portal_messages', mode: 'insert', message: 'chat is down' })
+    const first = await press()
+    expect(first.finished).toBe(false)
+    expect(String(newJob()?.notes)).toContain('Wizard reopened')
+    // the client opens the (blank) wizard from the portal and types new names
+    h.state.db.wizard_progress.push({ id: 'wiz-typed', wizard_type: 'formation', status: 'in_progress', lead_id: 'lead-1', offer_id: null, contact_id: BUYER, current_step: 2, updated_at: '2026-11-17T10:00:00Z', data: { llc_name_1: 'Typed Since LLC', llc_name_2: 'Second Choice LLC' } })
+
+    const second = await press()
+    expect(second.finished).toBe(true)
+    const typed = h.state.db.wizard_progress.find((w) => w.id === 'wiz-typed') as Row
+    expect(typed).toMatchObject({ status: 'in_progress', current_step: 2 })
+    expect((typed.data as Row).llc_name_1).toBe('Typed Since LLC')
+    expect(second.steps.find((s) => s.step === 'client wizard')?.status).toBe('skipped')
+  })
+})
+
+describe('two presses at the same moment (browser QA, 2026-11-17)', () => {
+  it('the second one is refused in plain words and changes nothing', async () => {
+    const { createSD } = await import('@/lib/operations/service-delivery')
+    ;(createSD as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => { throw new Error('dbWrite[service_deliveries.insert]: duplicate key value violates unique constraint "uq_formation_sd_active_per_offer"') })
+    const r = await press()
+    expect(r.success).toBe(false)
+    expect(r.error).toContain('same moment')
+    expect(r.error).not.toContain('uq_formation')
+    expect(sd(OLD_JOB)?.status).toBe('active')
+    expect(h.state.messages).toHaveLength(0)
+  })
+})

@@ -10,11 +10,13 @@ import {
   describeWaitingPart,
   isReplacementOf,
   namesFromReopenedNote,
+  newJobFailureText,
   replaceBlockers,
   replacementNote,
   seedReopenedWizardData,
   wasCancelledByCompanyReplacement,
   wizardNamesOf,
+  wizardNothingToReopenNote,
   wizardReopenedNote,
 } from '@/lib/operations/start-new-company-rules'
 import { localeFromLanguage } from '@/lib/locale'
@@ -191,6 +193,23 @@ describe('describeWaitingPart', () => {
   })
 })
 
+describe('describeWaitingPart skips a part that already has an invoice', () => {
+  const plan = [
+    { seq: 1, amount: 1900, currency: 'EUR', trigger: { kind: 'signing' } },
+    { seq: 2, amount: 1900, currency: 'EUR', trigger: { kind: 'step', service_type: 'Company Formation', stage: 'EIN Received', label: 'After the EIN arrives' } },
+  ]
+
+  it('still names the waiting part when nothing is invoiced yet', () => {
+    expect(describeWaitingPart(plan, [1])).toContain('Part 2')
+    expect(describeWaitingPart(plan, [])).toContain('Part 2')
+  })
+
+  it('says nothing once that part has been invoiced — it no longer waits', () => {
+    expect(describeWaitingPart(plan, [2])).toBeNull()
+    expect(describeWaitingPart(plan, [1, 2])).toBeNull()
+  })
+})
+
 describe('the replacement note', () => {
   it('is recognised for the job it replaced and only that one', () => {
     const note = replacementNote('11111111-aaaa', 'Novag LLC', '2026-11-16', 'staff@example.com')
@@ -206,6 +225,28 @@ describe('the replacement note', () => {
 
   it('has a stable marker for "the message already went out"', () => {
     expect(MESSAGE_SENT_MARKER).toBe('Client message sent')
+  })
+})
+
+describe('newJobFailureText', () => {
+  it('turns the duplicate-key error of a simultaneous press into a plain sentence', () => {
+    const t = newJobFailureText('dbWrite[service_deliveries.insert]: duplicate key value violates unique constraint "uq_formation_sd_active_per_offer"')
+    expect(t).toContain('same moment')
+    expect(t).not.toContain('uq_formation')
+    expect(t).not.toContain('dbWrite')
+  })
+  it('keeps any other reason as it is', () => {
+    expect(newJobFailureText('database busy')).toBe('The new formation could not be opened: database busy')
+    expect(newJobFailureText('')).toBe('The new formation could not be opened: unknown error')
+  })
+})
+
+describe('the "nothing to reopen" note', () => {
+  it('carries the same marker as a real reopen, so a repeated press leaves the wizard alone', () => {
+    expect(wizardNothingToReopenNote('2026-11-17')).toContain(WIZARD_REOPENED_MARKER)
+  })
+  it('has no names to give back', () => {
+    expect(namesFromReopenedNote(wizardNothingToReopenNote('2026-11-17'))).toEqual([])
   })
 })
 
