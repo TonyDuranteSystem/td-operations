@@ -39,6 +39,57 @@ export async function createShareLink(ctx: CalendlyCtx, input: ShareLinkInput): 
   return { url }
 }
 
+export interface BookInput {
+  /** the Calendly event type the call is booked on (an address taken from app_settings.booking_templates) */
+  eventTypeUri: string
+  /** the start of one free time, as Calendly listed it (UTC) */
+  startTime: string
+  name: string
+  email: string
+  /** the booker's IANA time zone, for Calendly's own emails */
+  timezone: string
+  /** the booking link's id, written as the tag (utm_term) the webhook reads back, exactly as for a booking made on Calendly's own page */
+  tag: string
+  /** where the call happens, when the event type names one that needs nothing more ("zoom_conference", ...); null = leave it to Calendly */
+  locationKind: string | null
+}
+
+export interface BookedInvitee {
+  inviteeUri: string
+  eventUri: string
+  cancelUrl: string | null
+}
+
+/** Calendly makes the Zoom link while it books, which can take longer than a plain read: a booking is given 25 seconds (the plain calls 10). */
+const BOOK_TIMEOUT_MS = 25_000
+
+const INVITEE_URI_RE = /^https:\/\/api\.calendly\.com\/scheduled_events\/[0-9a-fA-F-]{36}\/invitees\/[0-9a-fA-F-]{36}$/
+
+/**
+ * Books one call for a person (Calendly's Scheduling API, POST /invitees, scope `scheduled_events:write`). Calendly then sends the booker its own confirmation with the
+ * Zoom link and tells the webhook, which stores the booking as for any other. A time that is no longer free comes back as a refused request (kind "bad_request").
+ * The answer is trusted only if it holds a booking address and an invitee address of Calendly's exact shape.
+ */
+export async function bookInvitee(ctx: CalendlyCtx, input: BookInput): Promise<BookedInvitee> {
+  const uuid = eventTypeUuidOf(input.eventTypeUri)
+  if (!uuid) throw new CalendlyError("bad_request", null, "The Calendly event type address was not valid.")
+  const json = await calendlyRequest(ctx, "POST", "/invitees", {
+    event_type: eventTypeUri(uuid),
+    // the time in the same shape Calendly lists it in ("2026-11-17T15:00:00Z"): its own reference says to pass the listed time on as it is, so the fraction of a second is left off
+    start_time: input.startTime.replace(/\.0+Z$/, "Z"),
+    invitee: { name: input.name, email: input.email, timezone: input.timezone },
+    ...(input.locationKind ? { location: { kind: input.locationKind } } : {}),
+    // Calendly's reference lists all six tracking fields (each may be null): all six are sent, only the tag is filled
+    tracking: { utm_campaign: null, utm_source: null, utm_medium: null, utm_content: null, utm_term: input.tag, salesforce_uuid: null },
+  }, undefined, BOOK_TIMEOUT_MS)
+  const r = isRec(json) && isRec(json.resource) ? json.resource : null
+  const inviteeUri = r && typeof r.uri === "string" ? r.uri : null
+  const eventUri = r && typeof r.event === "string" ? r.event : null
+  if (!inviteeUri || !INVITEE_URI_RE.test(inviteeUri) || !eventUri || !eventUuidOf(eventUri)) throw new CalendlyError("bad_response", 201, "Calendly booked the call but the answer did not hold usable addresses.")
+  const cancel = r && typeof r.cancel_url === "string" && isPlainCalendlyUrl(r.cancel_url) ? r.cancel_url : null
+  return { inviteeUri, eventUri, cancelUrl: cancel }
+}
+
 export interface CancelResult {
   /** true = the booking was already cancelled (counts as success) */
   alreadyCancelled: boolean

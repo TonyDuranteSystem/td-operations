@@ -47,7 +47,13 @@ export interface PayRow {
   person_name: string | null
   person_emails: string[] | null
   claimed_event_uri: string | null
+  /** the email the person typed when they booked on OUR page (lower-case); absent on a link booked on Calendly's own page or not booked yet */
+  claimed_email?: string | null
   revoked_at: string | null
+  /** open | claimed (a time is booked) — read by the book-and-pay page; absent in older fixtures */
+  status?: string | null
+  expires_at?: string | null
+  duration_minutes?: number | null
   pay_amount_cents: number | null
   pay_currency: string | null
   pay_label: string | null
@@ -61,7 +67,7 @@ export interface PayRow {
 }
 
 const PAY_COLUMNS =
-  "id, public_id, contact_id, lead_id, person_name, person_emails, claimed_event_uri, revoked_at, pay_amount_cents, pay_currency, pay_label, pay_mode, pay_code, stripe_session_id, session_expires_at, session_claim_at, paid_session_id, not_charging_at"
+  "id, public_id, contact_id, lead_id, person_name, person_emails, claimed_event_uri, claimed_email, revoked_at, status, expires_at, duration_minutes, pay_amount_cents, pay_currency, pay_label, pay_mode, pay_code, stripe_session_id, session_expires_at, session_claim_at, paid_session_id, not_charging_at"
 
 export type PayLookup = { state: "found"; row: PayRow } | { state: "none" } | { state: "error" }
 
@@ -99,8 +105,11 @@ export async function identityEmail(db: Db, row: PayRow): Promise<string | null>
       const e = text(data?.email)
       if (e) return e.toLowerCase()
     }
-    // A link made for SOMEONE NEW: the email Antonio typed may have a typo, and the booker may have used another address; whoever actually BOOKED is the person, so
-    // the stored booking comes first. Only when nobody has booked yet is the typed email used.
+    // A link made for SOMEONE NEW: the email Antonio typed may have a typo, and the booker may have used another address; whoever actually BOOKED is the person.
+    // First the email the person typed on OUR booking page (kept on the link at the moment they booked: the Calendly delivery arrives seconds LATER, after the card page is
+    // already being made), then the stored Calendly booking. Only when nobody has booked yet is the typed email used.
+    const claimed = text(row.claimed_email)
+    if (claimed) return claimed.toLowerCase()
     const stored = await loadStoredBookings(db, [row.public_id])
     if (stored.ok) {
       const b = (stored.byTag.get(row.public_id) ?? []).map((s) => s.booker?.email).find((e): e is string => !!e)

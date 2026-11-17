@@ -4,9 +4,9 @@
  */
 import { describe, it, expect, vi } from "vitest"
 import { miniDb } from "./helpers/mini-db"
-import { decideLinkPlan } from "@/lib/booking/plan"
+import { decideLinkPlan, PAID_LENGTH_TEXT } from "@/lib/booking/plan"
 import { describePlan } from "@/lib/booking/preview"
-import { isPaidLink, moneyText, parsePayMode, payModeText, payStateOf, payUrl, paymentDraft } from "@/lib/booking/payment"
+import { isBookableEmail, isPaidLink, isPlainEmail, moneyText, parsePayMode, payModeText, payStateOf, payUrl, paymentDraft } from "@/lib/booking/payment"
 import { makeLink, judgeLink, LARGE_AMOUNT_TEXT } from "@/lib/booking/make-link"
 import { openPayment, findPayLink, identityEmail, identityName, SAYS, type StripeOps } from "@/lib/booking/pay-session"
 import { recordBookingLinkPayment, type BookingPaySession } from "@/lib/booking/pay-record"
@@ -206,7 +206,9 @@ describe("the plan for a paid link", () => {
     const lines = describePlan({ plan: r.plan, personState: "contact", personName: "Maria Rossi", hasEmails: true })
     expect(lines.find((l) => l.label === "Payment")?.text).toMatch(/€397\.00/)
     expect(lines.find((l) => l.label === "Money")?.text).toMatch(/revenue only/i)
-    expect(lines.find((l) => l.label === "Length")?.text).toMatch(/one-time/)
+    expect(lines.find((l) => l.label === "Length")?.text).toMatch(/30 minutes and can be booked only once/)
+    // 16 Nov 2026: the person books AND pays on our own page, the call is booked as soon as the time is picked
+    expect(lines.find((l) => l.label === "Payment")?.text).toMatch(/book and pay by card, all on our own page/)
   })
 })
 
@@ -225,15 +227,14 @@ const makerSeed = () => ({
 const shareOk = { status: 201, body: { resource: { scheduling_links: [{ booking_url: "https://calendly.com/d/abc-123/new-meeting" }] } } }
 
 describe("making a paid link", () => {
-  it("stores the price, how it is recorded and a pay code, as a one-time Calendly link EVEN at 30 minutes", async () => {
+  it("stores the price, how it is recorded and a pay code, and makes NO Calendly link (the person books on our own page)", async () => {
     const db = miniDb(makerSeed())
     const { ctx, calls } = calendly(() => shareOk)
     const r = await makeLink({ db, calendly: ctx, createdBy: "antonio@x" }, { person: { type: "contact", id: C1 }, kindSlug: "client", minutes: 30, payment: { amount: "397", currency: "EUR", label: " Strategic   call " } })
     expect(r).toMatchObject({ ok: true })
-    expect(calls).toHaveLength(1) // a share link was asked for although 30 minutes is the standard length
-    expect(calls[0].url).toMatch(/\/shares$/)
+    expect(calls).toHaveLength(0) // 16 Nov 2026: no share link; /r/b/<id> sends the person to /pay/b/<code>
     const row = db.tables.booking_links[0]
-    expect(row).toMatchObject({ pay_amount_cents: 39700, pay_currency: "EUR", pay_label: "Strategic call", pay_mode: "revenue_only", once: true, template_slug: "plain", share_url: "https://calendly.com/d/abc-123/new-meeting" })
+    expect(row).toMatchObject({ pay_amount_cents: 39700, pay_currency: "EUR", pay_label: "Strategic call", pay_mode: "revenue_only", once: true, template_slug: "plain", share_url: null })
     expect(typeof row.pay_code).toBe("string")
     expect(row.pay_code).toMatch(/^[A-Za-z0-9_-]{22}$/)
     expect(row.pay_code).not.toBe(row.public_id)
@@ -241,7 +242,7 @@ describe("making a paid link", () => {
   it("a person who is only a lead is recorded in credit mode", async () => {
     const db = miniDb(makerSeed())
     const { ctx } = calendly(() => shareOk)
-    await makeLink({ db, calendly: ctx, createdBy: "a" }, { person: { type: "lead", id: L1 }, kindSlug: "lead", minutes: 45, payment: { amount: "100", currency: "USD" } })
+    await makeLink({ db, calendly: ctx, createdBy: "a" }, { person: { type: "lead", id: L1 }, kindSlug: "lead", minutes: 30, payment: { amount: "100", currency: "USD" } })
     expect(db.tables.booking_links[0]).toMatchObject({ pay_mode: "credit", pay_amount_cents: 10000, pay_currency: "USD", pay_label: null })
   })
   it("a FREE link is made exactly as before: no payment columns written, and 30 minutes needs no Calendly call", async () => {
@@ -262,12 +263,21 @@ describe("making a paid link", () => {
     const ok = await makeLink({ db, calendly: ctx, createdBy: "a" }, { person: { type: "contact", id: C1 }, kindSlug: "client", minutes: 30, payment: { amount: "3970", currency: "USD", confirmed: true } })
     expect(ok).toMatchObject({ ok: true })
   })
-  it("if Calendly cannot make the one-time link, no row is written", async () => {
+  it("a paid link asks Calendly for nothing when it is made, so a Calendly that is down or refuses the app does not stop it", async () => {
     const db = miniDb(makerSeed())
-    const { ctx } = calendly(() => ({ status: 403 }))
+    const { ctx, calls } = calendly(() => ({ status: 403 }))
     const r = await makeLink({ db, calendly: ctx, createdBy: "a" }, { person: { type: "contact", id: C1 }, kindSlug: "client", minutes: 30, payment: { amount: "100", currency: "USD" } })
-    expect(r).toMatchObject({ ok: false })
+    expect(r).toMatchObject({ ok: true })
+    expect(calls).toHaveLength(0)
+    expect(db.tables.booking_links).toHaveLength(1)
+  })
+  it("a paid call longer or shorter than 30 minutes is refused in plain words, and nothing is written", async () => {
+    const db = miniDb(makerSeed())
+    const { ctx, calls } = calendly(() => shareOk)
+    const r = await makeLink({ db, calendly: ctx, createdBy: "a" }, { person: { type: "contact", id: C1 }, kindSlug: "client", minutes: 60, payment: { amount: "100", currency: "USD" } })
+    expect(r).toEqual({ ok: false, errors: [PAID_LENGTH_TEXT] })
     expect(db.tables.booking_links).toHaveLength(0)
+    expect(calls).toHaveLength(0)
   })
   it("the preview and the made link judge the same (judgeLink reports the tick)", async () => {
     const j = await judgeLink(miniDb(makerSeed()), { person: { type: "contact", id: C1 }, kindSlug: "client", minutes: 30, payment: { amount: "5000", currency: "USD" } })
@@ -400,6 +410,26 @@ describe("who the payment is recorded on", () => {
     const row = ({ ...paidRow({ contact_id: null, person_emails: ["mario@gmial.com"] }) }) as never
     expect(await identityEmail(withDeliveries(miniDb({}), [delivery({ payload: { payload: { event: EV, name: "Mario", email: "mario@gmail.com", tracking: { utm_term: TAG }, scheduled_event: { start_time: "2026-11-17T15:00:00Z" } } } })]), row)).toBe("mario@gmail.com")
     expect(await identityEmail(miniDb({}), row)).toBe("mario@gmial.com") // nobody has booked yet: the typed one
+  })
+  it("someone who booked on OUR page: the email they typed THERE (kept on the link at the moment they booked) beats the typed-by-staff typo even before Calendly's delivery arrives; a contact's or lead's own email is unchanged (bug hunter B2)", async () => {
+    const row = (over: Record<string, unknown>) => ({ ...paidRow(over) }) as never
+    expect(await identityEmail(miniDb({}), row({ contact_id: null, person_emails: ["tonny@gmial.com"], claimed_email: "Tony@Real.com" }))).toBe("tony@real.com")
+    expect(await identityEmail(withDeliveries(miniDb({}), [delivery()]), row({ contact_id: null, person_emails: ["tonny@gmial.com"], claimed_email: "tony@real.com" }))).toBe("tony@real.com")
+    expect(await identityEmail(miniDb({ contacts: [{ id: C1, email: "maria@example.com" }] }), row({ claimed_email: "someone@else.com" }))).toBe("maria@example.com")
+    expect(await identityEmail(miniDb({ leads: [{ id: L1, email: "daniel@example.com" }] }), row({ contact_id: null, lead_id: L1, claimed_email: "someone@else.com" }))).toBe("daniel@example.com")
+    expect(await identityEmail(miniDb({}), row({ contact_id: null, person_emails: ["a@b.com"], claimed_email: "   " }))).toBe("a@b.com") // an empty claim is no claim
+  })
+  it("a link made for someone new with a typo email: the card page and the payment's identity carry the address and name the person typed on our page", async () => {
+    const db = miniDb({ booking_links: [paidRow({ contact_id: null, person_name: "Tony Real", person_emails: ["tonny@gmial.com"], claimed_email: "tony@real.com", status: "claimed", claimed_event_uri: "https://api.calendly.com/scheduled_events/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" })] })
+    const s = fakeStripe()
+    await openPayment({ db, now: NOW, stripe: s.ops }, PAYCODE)
+    expect(s.created[0]).toMatchObject({ clientEmail: "tony@real.com", metadata: { client_email: "tony@real.com", client_name: "Tony Real" } })
+  })
+  it("isBookableEmail allows what a real address can hold (apostrophe, &, =) and refuses markup and separators; isPlainEmail (Stripe, mail links) stays strict", () => {
+    for (const e of ["d'amico@example.it", "r&d@example.com", "a=b@example.com", "maria@example.com"]) expect(isBookableEmail(e), e).toBe(true)
+    for (const e of ["a<b@example.com", "a,b@example.com", "a b@example.com", 'a"b@example.com', "a;b@example.com", "a(b)@example.com", "ab@example", "", null, 5]) expect(isBookableEmail(e), String(e)).toBe(false)
+    for (const e of ["d'amico@example.it", "r&d@example.com", "a=b@example.com"]) expect(isPlainEmail(e), e).toBe(false)
+    expect(isPlainEmail("maria@example.com")).toBe(true)
   })
   it("the name a new contact would get: the link's own name, else the booker's — never the name on the card", async () => {
     const row = (over: Record<string, unknown>) => ({ ...paidRow(over) }) as never

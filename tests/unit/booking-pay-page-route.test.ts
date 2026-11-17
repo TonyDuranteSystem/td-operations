@@ -34,8 +34,10 @@ const hardened = (res: Response) => {
   expect(res.headers.get("x-frame-options")).toBe("DENY")
 }
 
+const BOOKED = { status: "claimed", claimed_event_uri: "https://api.calendly.com/scheduled_events/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }
+
 describe("GET /pay/b/<code>", () => {
-  it("shows the amount and what it is for, escaped, and NOTHING about the person; changes nothing", async () => {
+  it("nobody has booked yet: the BOOK view (free times, details, one button); amount and label escaped; the person's name and email only as the typed-in defaults; changes nothing", async () => {
     const res = await GET(req("GET"), ctx(PAYCODE))
     const html = await res.text()
     expect(res.status).toBe(200)
@@ -43,11 +45,44 @@ describe("GET /pay/b/<code>", () => {
     expect(html).toContain("€397.00")
     expect(html).toContain("Strategic &lt;b&gt;call&lt;/b&gt; &amp; &quot;more&quot;")
     expect(html).not.toContain("<b>call</b>")
+    expect(html).toContain("Book and pay")
+    expect(html).toContain('id="name"')
+    expect(html).toContain('value="Secret Person Name"') // pre-filled in a field the person can change, escaped; never printed as page text
+    expect(html).toContain('value="secret@example.com"')
+    expect(html).toContain("30-minute video call")
+    expect(html).toContain('id="pick"') // the chosen time is written out under the chips, so a pick is always visible
+    expect(html).toContain("load(true)") // after a refused booking the times reload but the message stays on screen
+    expect(html).not.toContain("Pay by card") // the card button only exists once a time is booked
+    expect(html).toContain(`/pay/b/'+CODE+'/times`) // the script talks to this page's own two addresses only
+    expect(h.open).not.toHaveBeenCalled() // a mail scanner or a chat app opening the link never books or makes a card page
+    expect(h.db.log.every((l) => l.op === "select")).toBe(true)
+  })
+  it("a name with markup or quotes can never break out of the page", async () => {
+    h.db = miniDb({ booking_links: [row({ person_name: `"><script>alert(1)</script>`, person_emails: [`a"onfocus="x@example.com`] })] })
+    const html = await (await GET(req("GET"), ctx(PAYCODE))).text()
+    expect(html).not.toContain("<script>alert(1)")
+    expect(html).not.toContain(`value="a"onfocus`)
+    expect((html.match(/<script>/g) ?? []).length).toBe(1) // only the page's own script
+  })
+  it("a time is booked and nothing is paid: the PAY view (amount, Pay by card), nothing about the person", async () => {
+    h.db = miniDb({ booking_links: [row(BOOKED)] })
+    const res = await GET(req("GET"), ctx(PAYCODE))
+    const html = await res.text()
+    expect(res.status).toBe(200)
+    hardened(res)
+    expect(html).toContain("€397.00")
+    expect(html).toContain("Pay by card")
+    expect(html).toContain('method="post"')
     expect(html).not.toContain("Secret Person Name")
     expect(html).not.toContain("secret@example.com")
-    expect(html).toContain('method="post"')
-    expect(h.open).not.toHaveBeenCalled() // a mail scanner or a chat app opening the link never makes a card page
+    expect(html).not.toContain("Book and pay")
     expect(h.db.log.every((l) => l.op === "select")).toBe(true)
+  })
+  it("an expired link that nobody booked on cannot take a booking (410); a link revoked says nothing is due", async () => {
+    h.db = miniDb({ booking_links: [row({ expires_at: "2020-01-01T00:00:00Z" })] })
+    expect((await GET(req("GET"), ctx(PAYCODE))).status).toBe(410)
+    h.db = miniDb({ booking_links: [row({ revoked_at: "2026-11-15T10:00:00Z" })] })
+    expect((await GET(req("GET"), ctx(PAYCODE))).status).toBe(410)
   })
   it("a paid link says so; a stopped / 'Not charging' link says nothing is due (410); an unknown, malformed or free link is the same 404", async () => {
     h.db = miniDb({ booking_links: [row({ paid_session_id: "cs_1" })] })

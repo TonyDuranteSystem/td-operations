@@ -1,0 +1,12 @@
+{
+  "title": "The Chat tab box on the Contact page now lets you choose who and which topic",
+  "tag": "improved",
+  "text": "The message box in the Chat tab of a Contact page used to write only into the person's own personal chat. It now has the same choices as the Message window, shown above the box: the person's own chat or one of their companies, who it is addressed to (for a company with several members) and the topic. It keeps everything it had: the paperclip for files, the AI polish and suggestions.",
+  "points": [
+    "Nothing is picked for you when there are several choices, and Enter does not send until you pick one. A closed company is greyed out.",
+    "A person with no company still has only their personal chat, already chosen, so writing is as quick as before.",
+    "The window says who can see a company message, and warns when the person has no portal login yet.",
+    "Files you attach to a company message go into that company's chat."
+  ],
+  "screenshot": "chat-tab-destination.png"
+}

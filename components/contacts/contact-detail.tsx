@@ -24,6 +24,8 @@ import { ActivityFeed } from '@/components/accounts/activity-feed'
 import { DeliveryRowActions } from '@/components/trackers/delivery-row-actions'
 import { ComposeEmailButton } from '@/components/inbox/compose-email-button'
 import { MessageContactButton, CONTACT_CHAT_SENT_EVENT } from '@/components/contacts/message-contact-button'
+import { MessageTargetFields, useMessageTarget, type MessageSelection, type MessageTargetContext } from '@/components/storage/message-target-fields'
+import { buildShareChatBody } from '@/lib/crm-store/document-share-client'
 import { NewWhatsAppConversationDialog } from '@/components/messaging/new-whatsapp-conversation-dialog'
 import { ThreadEmailPanel } from '@/components/portal-chats/thread-email-panel'
 import { ChainAuditDialog } from '@/components/contacts/chain-audit-dialog'
@@ -1752,6 +1754,23 @@ interface GmailThread {
   messageCount: number
 }
 
+/**
+ * The Chat tab box's "who and which topic" choices (Antonio 2026-11-16: "change the old box"): the SAME choices as the Message window
+ * (shared state + fields in components/storage/message-target-fields.tsx), shown above the box so the old box keeps its paperclip, AI
+ * polish and suggestions. It reports the chosen destination up (null until one is chosen).
+ */
+function ChatDestination({ ctx, onChange }: { ctx: MessageTargetContext; onChange: (s: MessageSelection | null) => void }) {
+  const t = useMessageTarget(ctx, true)
+  const sel = t.selection
+  const key = sel ? `${sel.target.key}|${sel.topic}|${sel.addressedToMemberId ?? ''}|${sel.addressedToCompany}` : ''
+  useEffect(() => { onChange(sel) }, [key]) // eslint-disable-line react-hooks/exhaustive-deps -- `key` is the identity of `sel`
+  return (
+    <div className="space-y-3 border-t px-3 py-3 text-sm">
+      <MessageTargetFields t={t} ctx={ctx} isMessage />
+    </div>
+  )
+}
+
 function ChatTab({
   contactId,
   onUnreadChange,
@@ -1779,6 +1798,11 @@ function ChatTab({
   // Cross-border advisory notes (dev job 09cc3aec) — INTERNAL ONLY, never
   // auto-inserted into draft. Same contract as the Portal Chats page.
   const [crossBorderNotes, setCrossBorderNotes] = useState<{ lens: string; label: string; status: string; text: string }[]>([])
+  // Who the box writes to: loaded like the Message window's choices. If they cannot be loaded the box behaves as it always did (the
+  // person's own personal chat) rather than refusing to send.
+  const [destCtx, setDestCtx] = useState<MessageTargetContext | null>(null)
+  const [destState, setDestState] = useState<'loading' | 'ready' | 'failed'>('loading')
+  const [destination, setDestination] = useState<MessageSelection | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -1790,6 +1814,15 @@ function ChatTab({
     el.style.height = 'auto'
     el.style.height = Math.min(el.scrollHeight, 120) + 'px'
   }, [draft])
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/contacts/${encodeURIComponent(contactId)}/message-context`, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error('no destinations'))))
+      .then((d) => { if (!cancelled && d?.askable) { setDestCtx(d as MessageTargetContext); setDestState('ready') } else if (!cancelled) setDestState('failed') })
+      .catch(() => { if (!cancelled) setDestState('failed') })
+    return () => { cancelled = true }
+  }, [contactId])
 
   const fetchMessages = useCallback(async () => {
     try {
@@ -1843,6 +1876,12 @@ function ChatTab({
 
   const handleSend = async () => {
     if ((!draft.trim() && pendingFiles.length === 0) || sending) return
+    // With the choices loaded, a destination must be picked first (a message to the wrong chat can reach every member of a company).
+    const dest = destState === 'ready' ? destination : null
+    if (destState === 'ready' && !dest) {
+      toast.error('Pick who the message goes to first.')
+      return
+    }
     setSending(true)
     const filesToSend = pendingFiles
     const msg = draft.trim()
@@ -1855,8 +1894,9 @@ function ChatTab({
       if (filesToSend.length > 0) {
         setUploading(true)
         try {
+          const scope = dest?.target.kind === 'company' ? { accountId: dest.target.accountId } : { contactId }
           uploaded = await Promise.all(filesToSend.map((pf) =>
-            uploadChatAttachment(pf.file, { contactId })
+            uploadChatAttachment(pf.file, scope)
           ))
         } finally {
           setUploading(false)
@@ -1865,11 +1905,11 @@ function ChatTab({
       const res = await fetch('/api/portal/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contact_id: contactId,
-          message: msg,
-          attachments: uploaded,
-        }),
+        body: JSON.stringify(
+          dest
+            ? buildShareChatBody({ ...dest, message: msg, attachments: uploaded })
+            : { contact_id: contactId, message: msg, attachments: uploaded },
+        ),
       })
       if (!res.ok) {
         const err = await res.json()
@@ -2146,6 +2186,9 @@ function ChatTab({
             ))}
           </div>
         )}
+
+        {/* Who and which topic — the same choices as the Message window */}
+        {destState === 'ready' && destCtx && <ChatDestination ctx={destCtx} onChange={setDestination} />}
 
         {/* Send area — portal chat style */}
         <div className="border-t p-3">

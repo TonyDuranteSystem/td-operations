@@ -189,7 +189,7 @@ export function LinkMaker({
     }
     if (again.kindSlug) setKindSlug(again.kindSlug)
     setKindHint("")
-    const m = again.minutes ?? 30
+    const m = again.pay ? 30 : again.minutes ?? 30 // a paid call is 30 minutes for now
     if (DURATIONS.some(([v]) => v === String(m))) { setDurPick(String(m)); setDurOther("") } else { setDurPick("other"); setDurOther(String(m)) }
     setFirstOnly(again.once)
     setQuestions(again.asks ?? "auto")
@@ -340,7 +340,7 @@ export function LinkMaker({
           <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-zinc-500">Free or paid?</span>
           <div className="inline-flex overflow-hidden rounded-md border" role="group" aria-label="Free or paid">
             {([[false, "Free"], [true, "Paid"]] as const).map(([k, label]) => (
-              <button key={label} type="button" aria-pressed={paid === k} onClick={() => setPaid(k)} className={`px-3 py-1.5 text-sm font-medium ${paid === k ? "bg-zinc-900 text-white" : "text-zinc-600 hover:bg-zinc-50"}`} data-testid={`price-${label.toLowerCase()}`}>{label}</button>
+              <button key={label} type="button" aria-pressed={paid === k} onClick={() => { setPaid(k); if (k) { setDurPick("30"); setDurOther("") } }} className={`px-3 py-1.5 text-sm font-medium ${paid === k ? "bg-zinc-900 text-white" : "text-zinc-600 hover:bg-zinc-50"}`} data-testid={`price-${label.toLowerCase()}`}>{label}</button>
             ))}
           </div>
           {paid && (
@@ -356,7 +356,7 @@ export function LinkMaker({
               {needsTick && (
                 <label className="flex items-center gap-2 text-sm font-semibold text-amber-900"><input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} data-testid="pay-confirm" /> Yes, {symbol}{amount.trim()} is the right amount</label>
               )}
-              <p className="text-xs text-zinc-500">The person books a time first, then pays by card on our own page. A card in Calls to check lets you send or copy the payment link.</p>
+              <p className="text-xs text-zinc-500">The person opens your link, picks a free time, and books and pays by card, all on our own page. The call is booked as soon as they pick the time. If they never pay, a card in Calls to check lets you cancel the call or send them the payment link.</p>
             </div>
           )}
         </div>
@@ -366,12 +366,12 @@ export function LinkMaker({
           <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-zinc-500">How long?</span>
           <div className="flex flex-wrap gap-1.5" data-testid="durations">
             {DURATIONS.map(([v, label]) => (
-              <button key={v} type="button" aria-pressed={durPick === v} onClick={() => setDurPick(v)} className={`rounded-full border px-3 py-1 text-sm font-medium ${durPick === v ? "border-blue-500 bg-blue-500/10 ring-1 ring-blue-500" : "hover:border-zinc-400"}`}>{label}</button>
+              <button key={v} type="button" aria-pressed={durPick === v} disabled={paid && v !== "30"} onClick={() => setDurPick(v)} className={`rounded-full border px-3 py-1 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-40 ${durPick === v ? "border-blue-500 bg-blue-500/10 ring-1 ring-blue-500" : "hover:border-zinc-400"}`}>{label}</button>
             ))}
           </div>
           {durPick === "other" && <input type="text" inputMode="numeric" value={durOther} onChange={(e) => setDurOther(e.target.value)} placeholder="Minutes, for example 90" aria-label="Minutes" className="mt-2 w-full rounded-md border px-3 py-2 text-sm" data-testid="minutes-other" />}
           <p className="mt-1.5 text-xs text-zinc-500">
-            {minutes === null ? "Type a number of minutes from 1 to 720." : standard && !paid ? "30 minutes is the standard length. Any other length makes a one-time link." : `Made as a one-time Calendly link of ${lengthWords(minutes)}. Calendly closes it after the first booking, even if that booking is cancelled, so you would make a new link.`}
+            {minutes === null ? "Type a number of minutes from 1 to 720." : paid ? "A paid call is 30 minutes for now." : standard ? "30 minutes is the standard length. Any other length makes a one-time link." : `Made as a one-time Calendly link of ${lengthWords(minutes)}. Calendly closes it after the first booking, even if that booking is cancelled, so you would make a new link.`}
           </p>
         </div>
 
@@ -379,19 +379,25 @@ export function LinkMaker({
         <div className="grid gap-1.5">
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={effectiveFirstOnly} disabled={minutes !== 30 || paid} onChange={(e) => setFirstOnly(e.target.checked)} data-testid="first-only" /> Attach to the first booking only</label>
           <p className="text-xs text-zinc-500">
-            {paid ? "A paid link is closed by Calendly after one booking, so the payment belongs to one call." : minutes !== 30 ? "A link with its own length is closed by Calendly after one booking." : effectiveFirstOnly ? "A standard 30-minute link cannot be closed by Calendly, so a later booking on it is saved as usual and a card asks you." : "The link stays open: every booking on it is attached the same way."} Their name and email are filled in by us when they open the link; they never appear in the link you send.
+            {paid ? "A paid link takes one booking: the person books and pays on our own page, and the link closes after that booking, so the payment belongs to one call." : minutes !== 30 ? "A link with its own length is closed by Calendly after one booking." : effectiveFirstOnly ? "A standard 30-minute link cannot be closed by Calendly, so a later booking on it is saved as usual and a card asks you." : "The link stays open: every booking on it is attached the same way."} Their name and email are filled in by us when they open the link; they never appear in the link you send.
           </p>
         </div>
 
         {/* QUESTIONS FOR THE BOOKER */}
         <div data-testid="questions-block">
           <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-zinc-500">What is the booker asked?</span>
-          <div className="flex flex-wrap gap-1.5" data-testid="question-choices">
-            {QUESTION_CHOICES.map(([v, label]) => (
-              <button key={v} type="button" aria-pressed={questions === v} onClick={() => setQuestions(v)} className={`rounded-full border px-3 py-1 text-sm font-medium ${questions === v ? "border-blue-500 bg-blue-500/10 ring-1 ring-blue-500" : "hover:border-zinc-400"}`}>{label}</button>
-            ))}
-          </div>
-          <QuestionsList questions={questions} preview={preview} asked={asked} askedError={askedError} />
+          {paid ? (
+            <p className="text-xs text-zinc-500" data-testid="paid-asks">On our page the person is asked only for their name and email, then picks a time and pays.</p>
+          ) : (
+            <>
+              <div className="flex flex-wrap gap-1.5" data-testid="question-choices">
+                {QUESTION_CHOICES.map(([v, label]) => (
+                  <button key={v} type="button" aria-pressed={questions === v} onClick={() => setQuestions(v)} className={`rounded-full border px-3 py-1 text-sm font-medium ${questions === v ? "border-blue-500 bg-blue-500/10 ring-1 ring-blue-500" : "hover:border-zinc-400"}`}>{label}</button>
+                ))}
+              </div>
+              <QuestionsList questions={questions} preview={preview} asked={asked} askedError={askedError} />
+            </>
+          )}
         </div>
 
         {/* PREVIEW */}

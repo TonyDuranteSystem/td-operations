@@ -169,7 +169,7 @@ export function LinksMade({ links, error, off, onChanged, onMakeAgain }: { links
                       {booked && (
                         <>
                           {!l.once && <button type="button" onClick={() => copy(l)} className={`mr-1.5 ${BTN}`}>Copy</button>}
-                          <button type="button" disabled={off || busy === l.id} onClick={() => cancelCall(l)} className={BTN} data-testid="cancel-call">{sureCancel === l.id ? "Sure? Calendly emails the booker" : "Cancel the call"}</button>
+                          <button type="button" disabled={off || busy === l.id} onClick={() => cancelCall(l)} className={BTN} data-testid="cancel-call">{sureCancel === l.id ? (l.pay?.state === "paid" ? "Sure? PAID: Calendly emails the booker, no refund" : "Sure? Calendly emails the booker") : "Cancel the call"}</button>
                         </>
                       )}
                       {!booked && !cancelled && l.status === "open" && (

@@ -8,7 +8,8 @@
  *   5. a standard 30-minute link needs nothing from Calendly (the redirect resolves the booking page at click time, so a renamed page keeps working);
  *      any other length asks Calendly for a one-time link of that length, and the address it returns is stored
  *   6. the row is written with a fresh random id (a clash on the id retries with a new one)
- * A PAID link also stores the price, how it will be recorded (decideLinkPlan's `payMode`) and a random pay code; it is always a one-time Calendly link. No referrer yet (Stage 2).
+ * A PAID link also stores the price, how it will be recorded (decideLinkPlan's `payMode`) and a random pay code. It makes NO Calendly link: /r/b/<id> sends the person to our own
+ * page /pay/b/<code>, where they pick a free time (booked through Calendly's booking service), and pay. No referrer yet (Stage 2).
  */
 
 import { APP_BASE_URL } from "@/lib/config"
@@ -134,11 +135,10 @@ export async function makeLink(deps: MakeDeps, input: MakeLinkInput): Promise<{ 
   const tpl = templateFor(templates, plan.template)
   if (!tpl) return { ok: false, errors: [TEMPLATES_MISSING_TEXT] }
 
-  // A paid call is always a one-time Calendly link, even at 30 minutes: the standard link can be booked again and again, and a payment must belong to ONE booking.
+  // A paid call has NO Calendly link: the person books and pays on OUR page (/pay/b/<code>, reached through the link below), and the link closes after the one booking made there.
   const paid = plan.payment
   if (paid) {
-    // The payment columns arrive with the Stage 3 migration. Check BEFORE asking Calendly for a link: on a database without them the save would fail afterwards and leave a
-    // one-time Calendly link that nobody can use.
+    // The payment columns arrive with the Stage 3 migration: on a database without them the save would fail, so say so plainly first.
     try {
       const probe = await db.from("booking_links").select("pay_code").limit(1)
       if (probe.error) return { ok: false, errors: [(probe.error as { code?: unknown }).code === "42703" ? PAID_NOT_READY_TEXT : "The link could not be saved. Try again."] }
@@ -147,7 +147,7 @@ export async function makeLink(deps: MakeDeps, input: MakeLinkInput): Promise<{ 
     }
   }
   let shareUrl: string | null = null
-  if (plan.minutes !== STANDARD_MINUTES || paid) {
+  if (plan.minutes !== STANDARD_MINUTES && !paid) {
     try {
       shareUrl = (await createShareLink(deps.calendly, { eventTypeUri: tpl.eventTypeUri, minutes: plan.minutes })).url
     } catch (err) {
