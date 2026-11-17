@@ -22,6 +22,10 @@ const h = vi.hoisted(() => {
     nextId: 1,
     createSDCalls: 0,
     messages: [] as Row[],
+    /** Notification types whose next save fails; e-mail failure switch. */
+    bellFail: [] as string[],
+    emailFail: false,
+    bells: [] as string[],
   }
 
   type Result = { data: unknown; error: { message: string } | null; count?: number | null }
@@ -123,8 +127,14 @@ vi.mock('@/lib/portal/mark-thread-read', () => ({
   markClientMessagesReadForStaffReply: vi.fn(async () => 0),
 }))
 vi.mock('@/lib/portal/notifications', () => ({
-  createPortalNotification: vi.fn(async () => undefined),
-  notifyClientOfAdminMessage: vi.fn(async () => undefined),
+  createPortalNotification: vi.fn(async (p: { type: string }) => {
+    const i = h.state.bellFail.indexOf(p.type)
+    if (i >= 0) { h.state.bellFail.splice(i, 1); return { error: `${p.type} bell broke` } }
+    h.state.bells.push(p.type)
+    h.state.events.push(`bell:${p.type}`)
+    return { error: null }
+  }),
+  notifyClientOfAdminMessage: vi.fn(async () => { if (h.state.emailFail) throw new Error('mail server down') }),
   waitForClientAlert: vi.fn(async () => undefined),
 }))
 
@@ -156,7 +166,7 @@ function seed() {
     deadlines: [{ id: 'dl-1', account_id: ACCOUNT, status: 'Pending' }],
     payments: [],
     lease_agreements: [],
-    offers: [{ id: 'offer-1', token: TOKEN, lead_id: 'lead-1', payment_plan: [{ seq: 2, amount: 1250, currency: 'EUR', trigger: { kind: 'step', service_type: 'Company Formation', stage: 'EIN Received' } }] }],
+    offers: [{ id: 'offer-1', token: TOKEN, lead_id: 'lead-1', account_id: ACCOUNT, payment_plan: [{ seq: 2, amount: 1250, currency: 'EUR', trigger: { kind: 'step', service_type: 'Company Formation', stage: 'EIN Received' } }] }],
     wizard_progress: [
       {
         id: 'wiz-1', wizard_type: 'formation', status: 'submitted', lead_id: 'lead-1', offer_id: null, contact_id: BUYER, current_step: 4, updated_at: '2026-11-01T00:00:00Z',
@@ -170,6 +180,9 @@ function seed() {
   h.state.nextId = 1
   h.state.createSDCalls = 0
   h.state.messages = []
+  h.state.bellFail = []
+  h.state.emailFail = false
+  h.state.bells = []
 }
 
 const press = (over: Partial<Parameters<typeof startNewCompany>[0]> = {}) =>
@@ -370,5 +383,101 @@ describe('finding the client\'s saved wizard', () => {
     expect(r.finished).toBe(true)
     expect(r.problems).toEqual([])
     expect(r.steps.find((s) => s.step === 'client wizard')?.detail).toContain('starts a blank one')
+  })
+})
+
+describe('the signed offer follows the replacement (second bug-hunter pass)', () => {
+  const offer = () => h.state.db.offers[0]
+
+  it('is taken off the old company, so the new company picks it up when it is created', async () => {
+    expect(offer().account_id).toBe(ACCOUNT)
+    const r = await press()
+    expect(r.finished).toBe(true)
+    expect(offer().account_id).toBeNull()
+    expect(r.steps.find((s) => s.step === 'signed offer')?.status).toBe('ok')
+  })
+
+  it('is left alone when it points somewhere else (never moves an offer it does not own)', async () => {
+    offer().account_id = 'some-other-company'
+    await press()
+    expect(offer().account_id).toBe('some-other-company')
+  })
+
+  it('is left alone when it already waits for a company, and a repeat press finds nothing to do', async () => {
+    offer().account_id = null
+    const r = await press()
+    expect(r.finished).toBe(true)
+    expect(r.steps.find((s) => s.step === 'signed offer')).toBeUndefined()
+  })
+
+  it('a failed write holds the press back, and the repeat finishes it', async () => {
+    h.state.inject.push({ table: 'offers', mode: 'update', message: 'offers are locked' })
+    const first = await press()
+    expect(first.finished).toBe(false)
+    expect(first.problems.join(' ')).toContain('offers are locked')
+    expect(sd(OLD_JOB)?.status).toBe('active')
+    expect(h.state.messages).toHaveLength(0)
+    const second = await press()
+    expect(second.finished).toBe(true)
+    expect(offer().account_id).toBeNull()
+  })
+})
+
+describe('what the client is sent is checked, not assumed (second bug-hunter pass)', () => {
+  it('sends the way into the wizard BEFORE the chat message', async () => {
+    await press()
+    const order = h.state.events
+    expect(order.indexOf('bell:wizard_reminder')).toBeGreaterThanOrEqual(0)
+    expect(order.indexOf('bell:wizard_reminder')).toBeLessThan(order.indexOf('message'))
+  })
+
+  it('a wizard notification that cannot be saved stops everything: nothing is sent, the old job stays, the repeat finishes', async () => {
+    h.state.bellFail.push('wizard_reminder')
+    const first = await press()
+    expect(first.finished).toBe(false)
+    expect(first.problems.join(' ')).toContain('wizard_reminder bell broke')
+    expect(h.state.messages).toHaveLength(0) // the client has been told nothing
+    expect(sd(OLD_JOB)?.status).toBe('active')
+    expect(String(newJob()?.notes)).not.toContain('Client message sent')
+
+    const second = await press()
+    expect(second.finished).toBe(true)
+    expect(h.state.messages).toHaveLength(1)
+  })
+
+  it('a chat notification that fails after the message is in is reported, but the press is still finished', async () => {
+    h.state.bellFail.push('chat')
+    const r = await press()
+    expect(r.finished).toBe(true)
+    expect(h.state.messages).toHaveLength(1)
+    expect(String(newJob()?.notes)).toContain('Client message sent')
+    const w = r.steps.find((s) => s.step === 'client notification')
+    expect(w?.status).toBe('warning')
+    expect(r.problems.join(' ')).toContain('chat notification could not be saved')
+    expect(String(newJob()?.notes)).toContain('Needs a person')
+  })
+
+  it('an e-mail that fails after the message is in is reported the same way', async () => {
+    h.state.emailFail = true
+    const r = await press()
+    expect(r.finished).toBe(true)
+    expect(h.state.messages).toHaveLength(1)
+    expect(r.problems.join(' ')).toContain('mail server down')
+  })
+})
+
+describe('the names the client had given are all remembered (second bug-hunter pass)', () => {
+  it('a newer blank draft does not hide the names an older submitted copy held', async () => {
+    Object.assign(wizard(), { lead_id: null, offer_id: 'offer-1' })
+    h.state.db.wizard_progress.push({ id: 'wiz-new', wizard_type: 'formation', status: 'in_progress', lead_id: null, offer_id: 'offer-1', contact_id: BUYER, current_step: 0, updated_at: '2026-11-15T00:00:00Z', data: {} })
+    await press()
+    expect(String(h.state.db.accounts[0].notes)).toContain('Novag Group LLC')
+    expect(String(newJob()?.notes)).toContain('Novag Group LLC')
+  })
+
+  it('the older single-name keys are cleared too, so the refused name cannot return through them', async () => {
+    Object.assign(wizard().data as Row, { chosen_name_final: 'Novag LLC', company_name: 'Novag LLC' })
+    await press()
+    expect(Object.keys(wizard().data as Row)).toEqual(['members'])
   })
 })

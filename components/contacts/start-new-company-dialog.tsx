@@ -187,7 +187,7 @@ function StartNewCompanyDialog({ open, onClose, contactId, contactName }: { open
                             , and the company is marked Closed.
                             {candidate.peopleOnCompany > 1 ? ` It has ${candidate.peopleOnCompany} people on it; their portal login stays.` : ""}
                           </li>
-                          <li>A new formation job opens for {firstName} on the same paid offer. Nothing is charged again.</li>
+                          <li>A new formation job opens for {firstName} on the same paid offer. Nothing is charged again. The signed offer waits for the new company, and anything bought with the formation starts again on it.</li>
                           <li>The formation wizard reopens at step 1 with the people and documents kept and the company names cleared.</li>
                           <li>The message below goes to {firstName} in the portal chat.</li>
                           {candidate.waitingPart && <li>{candidate.waitingPart}</li>}

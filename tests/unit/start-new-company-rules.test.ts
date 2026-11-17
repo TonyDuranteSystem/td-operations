@@ -3,6 +3,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import {
+  COMPANY_REPLACED_REASON,
   MESSAGE_SENT_MARKER,
   WIZARD_REOPENED_MARKER,
   buildReplacementMessage,
@@ -12,6 +13,7 @@ import {
   replaceBlockers,
   replacementNote,
   seedReopenedWizardData,
+  wasCancelledByCompanyReplacement,
   wizardNamesOf,
   wizardReopenedNote,
 } from '@/lib/operations/start-new-company-rules'
@@ -204,5 +206,34 @@ describe('the replacement note', () => {
 
   it('has a stable marker for "the message already went out"', () => {
     expect(MESSAGE_SENT_MARKER).toBe('Client message sent')
+  })
+})
+
+describe('the older single-name wizard shapes', () => {
+  it('are cleared when the wizard is reopened, so the refused name cannot come back through them', () => {
+    const seeded = seedReopenedWizardData({
+      llc_name_1: 'Novag LLC', llc_name: 'Novag LLC', company_name: 'Novag LLC', business_name: 'Novag', chosen_name: 'Novag LLC', chosen_name_final: 'Novag LLC',
+      members: [{ name: 'Ugo' }], business_purpose: 'Marketing',
+    })
+    expect(seeded).toEqual({ members: [{ name: 'Ugo' }], business_purpose: 'Marketing' })
+  })
+
+  it('are remembered for the history note, once each', () => {
+    // keys are read in alphabetical order: chosen_name_final, company_name, llc_name_1 (a repeat of the first)
+    expect(wizardNamesOf({ llc_name_1: 'A LLC', chosen_name_final: 'A LLC', company_name: 'B LLC', other: 'x' })).toEqual(['A LLC', 'B LLC'])
+  })
+})
+
+describe('a job cancelled because its company was replaced', () => {
+  it('is recognised by the status AND the words the button writes', () => {
+    const notes = `2026-11-17 — Service deactivated: ${COMPANY_REPLACED_REASON} (job n1).`
+    expect(wasCancelledByCompanyReplacement('cancelled', notes)).toBe(true)
+  })
+
+  it('is not recognised when a person cancelled it, or it is still running, or there are no notes', () => {
+    expect(wasCancelledByCompanyReplacement('cancelled', '2026-11-17 — Service deactivated: client changed their mind')).toBe(false)
+    expect(wasCancelledByCompanyReplacement('active', COMPANY_REPLACED_REASON)).toBe(false)
+    expect(wasCancelledByCompanyReplacement('cancelled', null)).toBe(false)
+    expect(wasCancelledByCompanyReplacement(null, undefined)).toBe(false)
   })
 })

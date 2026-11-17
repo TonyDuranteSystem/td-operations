@@ -3,8 +3,8 @@
  *  1. the offer's "after the EIN arrives" part reads the job that carries the offer token and ignores a CANCELLED one
  *     (lib/plan-invoices/classify.ts) — so after the swap only the NEW job can make part 2 due;
  *  2. a formation is identified by its offer and a cancelled formation is ignored (lib/portal/formation-resubmit-gate.ts) —
- *     so the client's re-submitted wizard lands on the NEW job, which is editable at its first step, and is not refused as the
- *     "re-submit of a finished formation" it would have been with the old company still live.
+ *     so the client's re-submitted wizard lands on the NEW job, which is editable at its first step. (While both are live the open
+ *     new job is already preferred — the old job is cancelled last for resumability, not for this routing.)
  */
 import { describe, it, expect } from 'vitest'
 import { stepKey, stepReached, hasActiveJob, type OfferJob } from '@/lib/plan-invoices/classify'
@@ -52,10 +52,13 @@ describe('the client wizard lands on the new job', () => {
     expect(d.deliveryId).toBe('b-new')
   })
 
-  it('WHY the old company must be cancelled: while it stays live, the same re-submit is refused as a finished formation', () => {
+  it('while the old job is still live the open NEW job is already the one picked — so cancelling the old job last costs the client nothing', () => {
     const d = decideFormationRun({ offerToken: TOKEN, formations: [oldLive, fresh], clientAlreadyNotified: false })
-    // the open one is preferred when both are live — but the old one with a company would be "finished"
-    expect(['use_existing', 'refuse_finished']).toContain(d.action)
+    expect(d.action).toBe('use_existing')
+    expect(d.deliveryId).toBe('b-new')
+  })
+
+  it('a live old job on its own is a finished formation: a re-submit is refused (why the NEW job has to exist first)', () => {
     const onlyOld = decideFormationRun({ offerToken: TOKEN, formations: [oldLive], clientAlreadyNotified: false })
     expect(onlyOld.action).toBe('refuse_finished')
   })

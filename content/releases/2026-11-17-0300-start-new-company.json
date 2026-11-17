@@ -5,7 +5,7 @@
   "points": [
     "Open the buyer's Contact page and look for \"Start a new company\" in the Wizard card",
     "Pressing the blue button sends the message you read in the pop-up to the client, once everything else is ready",
-    "If it says \"Not finished yet\", press the button again: what is done is not repeated and the message is never sent twice"
+    "If it says \"Not finished yet\", press the button again: what is done is not repeated, and the message goes out only once everything else is ready"
   ],
   "stepsTitle": "What happens when you press it",
   "steps": [

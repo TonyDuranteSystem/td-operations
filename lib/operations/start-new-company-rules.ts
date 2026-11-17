@@ -8,6 +8,11 @@
  */
 
 import { isItalian } from '@/lib/locale'
+import { FORMATION_NAME_KEYS } from '@/lib/flows/formation-names'
+
+const NAME_KEYS: ReadonlySet<string> = new Set(FORMATION_NAME_KEYS)
+/** Every wizard key that holds a company name — the three choices and the older single-name shapes (chosen/final/company/business name). */
+const isNameKey = (key: string): boolean => /^llc_name/i.test(key) || NAME_KEYS.has(key)
 
 /**
  * The client-facing words of the first thing the client sees. Italian when the client's language on file is Italian — read
@@ -44,20 +49,23 @@ export function buildReplacementMessage(p: {
 export function seedReopenedWizardData(data: Record<string, unknown> | null | undefined): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(data ?? {})) {
-    if (/^llc_name/i.test(key)) continue
+    if (isNameKey(key)) continue
     if (key === 'disclaimer_accepted') continue
     out[key] = value
   }
   return out
 }
 
-/** The names the client had given, for the note left on the cancelled job (so the history keeps them after the wizard is reset). */
+/**
+ * The names the client had given, for the note left on the cancelled job (so the history keeps them after the wizard is reset).
+ * Reads every name key, not only the three choices, so an older single-name wizard is remembered too. Order and duplicates: first seen wins.
+ */
 export function wizardNamesOf(data: Record<string, unknown> | null | undefined): string[] {
   const names: string[] = []
   for (const [key, value] of Object.entries(data ?? {}).sort(([a], [b]) => a.localeCompare(b))) {
-    if (!/^llc_name/i.test(key)) continue
+    if (!isNameKey(key)) continue
     const text = typeof value === 'string' ? value.trim() : ''
-    if (text) names.push(text)
+    if (text && !names.includes(text)) names.push(text)
   }
   return names
 }
@@ -122,6 +130,18 @@ export function replacementNote(oldDeliveryId: string, oldCompanyName: string, o
 /** True when this job's notes say it replaced that job. */
 export function isReplacementOf(notes: string | null | undefined, oldDeliveryId: string): boolean {
   return (notes ?? '').includes(`Replaces job ${oldDeliveryId} `)
+}
+
+/**
+ * The words every cancellation made by the button carries (the reason handed to the job cancellation, which writes it into the job's
+ * notes). One place, so the button and the add-on check agree: a job cancelled for this reason belonged to the company that was
+ * replaced, so the NEW company still gets its own copy (see lib/operations/activation-start-services.ts).
+ */
+export const COMPANY_REPLACED_REASON = 'The company was replaced by a new one'
+
+/** True when a job was cancelled because the button replaced its company (as opposed to a person cancelling it on purpose). */
+export function wasCancelledByCompanyReplacement(status: string | null | undefined, notes: string | null | undefined): boolean {
+  return status === 'cancelled' && (notes ?? '').includes(COMPANY_REPLACED_REASON)
 }
 
 /** The marker written once the client's message has gone out, so a resumed press does not send it twice. */

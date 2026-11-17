@@ -37,6 +37,7 @@ import { logAction } from '@/lib/mcp/action-log'
 import { buildPortalChatLink } from '@/lib/portal/chat-link'
 import { classifyOpenPayments, type OpenPaymentRow } from '@/lib/closure/closing-payments'
 import {
+  COMPANY_REPLACED_REASON,
   MESSAGE_SENT_MARKER,
   WIZARD_REOPENED_MARKER,
   buildReplacementMessage,
@@ -340,7 +341,8 @@ export async function startNewCompany(p: StartNewCompanyParams): Promise<StartNe
           steps.push({ step: 'client wizard', status: 'skipped', detail: 'No saved wizard to reopen — the client starts a blank one.' })
         }
       } else {
-        oldNames = wizardNamesOf(rows[0].data)
+        // The names of EVERY saved row, not just the newest: a newer blank draft must not hide what an older, submitted one held.
+        oldNames = rows.flatMap((r) => wizardNamesOf(r.data)).filter((n, i, all) => all.indexOf(n) === i)
         for (const row of rows) {
           const { error: uErr } = await supabaseAdmin
             .from('wizard_progress')
@@ -368,7 +370,7 @@ export async function startNewCompany(p: StartNewCompanyParams): Promise<StartNe
     if (error) throw new Error(error.message)
     const done: string[] = []
     for (const sd of (data ?? []) as Array<{ id: string; service_type: string }>) {
-      const r = await deactivateSD({ delivery_id: sd.id, actor: p.actorLabel, reason: `The company was replaced by a new one (job ${newId}).`, clear_renewal_date: true })
+      const r = await deactivateSD({ delivery_id: sd.id, actor: p.actorLabel, reason: `${COMPANY_REPLACED_REASON} (job ${newId}).`, clear_renewal_date: true })
       if (r.success || r.outcome === 'already_terminal') done.push(sd.service_type)
       else failBlocking(`could not cancel ${sd.service_type}`, r.error ?? r.outcome)
     }
@@ -410,6 +412,18 @@ export async function startNewCompany(p: StartNewCompanyParams): Promise<StartNe
     failBlocking('old company', e)
   }
 
+  // The signed offer was filed on the old company when that was formed. It has to wait for the NEW company again: the formation of
+  // the new one links an offer that has no company yet, and a part of the payment that is billed to "the offer's company" must not
+  // land on a Closed one. Only this offer, and only if it still points at the old company.
+  try {
+    // eslint-disable-next-line no-restricted-syntax -- same link the formation writes (lib/operations/formation-materialize.ts), undone for the replaced company
+    const { data, error } = await supabaseAdmin.from('offers').update({ account_id: null, updated_at: new Date().toISOString() }).eq('token', token).eq('account_id', old.accountId).select('token')
+    if (error) throw new Error(error.message)
+    if (data?.length) steps.push({ step: 'signed offer', status: 'ok', detail: 'No longer filed on the old company — the new company picks it up when it is created.' })
+  } catch (e) {
+    failBlocking('signed offer (it would stay filed on the old company)', e)
+  }
+
   // ── 4. the message to the client — only when the wizard and the old company are ready ─────────────────────────────────
   let messageSent = (newNotes ?? '').includes(MESSAGE_SENT_MARKER)
   if (messageSent) {
@@ -418,9 +432,11 @@ export async function startNewCompany(p: StartNewCompanyParams): Promise<StartNe
     steps.push({ step: 'message to the client', status: 'warning', detail: 'Not sent yet — a step above failed. Press the button again once it is fixed; the client is told only when everything is ready.' })
   } else {
     try {
-      await sendClientMessage({ contactId: p.contactId, message, actorUserId: p.actorUserId, wizardLeadId: leadId, wizardOfferId: offerId })
+      const notices = await sendClientMessage({ contactId: p.contactId, message, actorUserId: p.actorUserId, wizardLeadId: leadId, wizardOfferId: offerId })
       messageSent = true
       steps.push({ step: 'message to the client', status: 'ok', detail: 'Sent in the portal chat, with a notification.' })
+      // The message and the way into the wizard are in; only the extra alerts failed — say so, do not hold the press back.
+      for (const notice of notices) warn('client notification', `${notice}. The message is in the portal chat and the wizard notification was saved.`)
       try {
         await appendNote('service_deliveries', newId, `${today()} — ${MESSAGE_SENT_MARKER} (${contact.language ?? 'language not on file'}).`)
       } catch (e) {
@@ -503,10 +519,30 @@ export async function startNewCompany(p: StartNewCompanyParams): Promise<StartNe
   return { success: true, newDeliveryId: newId, resumed, finished, steps, problems }
 }
 
-/** The portal chat message to the person (a personal thread — the old company's own thread goes away with its portal), plus the bell + email. */
-async function sendClientMessage(p: { contactId: string; message: string; actorUserId: string; wizardLeadId: string | null; wizardOfferId: string | null }): Promise<void> {
+/**
+ * The portal chat message to the person (a personal thread — the old company's own thread goes away with its portal), plus the
+ * notifications. The way into the wizard goes FIRST: if that notification cannot be saved nothing has reached the client yet, so
+ * this throws and the press can simply be repeated. The chat message itself throws when it cannot be saved. Once the message is in
+ * the chat, a failing chat notification or e-mail no longer blocks (the message is there to read) — it comes back as a notice so the
+ * person pressing is told. Returns those notices.
+ */
+async function sendClientMessage(p: { contactId: string; message: string; actorUserId: string; wizardLeadId: string | null; wizardOfferId: string | null }): Promise<string[]> {
   const { resolveFallbackReplyTopic, markClientMessagesReadForStaffReply } = await import('@/lib/portal/mark-thread-read')
+  const { createPortalNotification, notifyClientOfAdminMessage, waitForClientAlert } = await import('@/lib/portal/notifications')
+  const notices: string[] = []
   const topic = await resolveFallbackReplyTopic({ account_id: null, contact_id: p.contactId }).catch(() => null)
+
+  // The wizard itself: a bell row that opens it (the same link the sidebar's "New company" entry uses). The chat text has no link.
+  const wizardLink = p.wizardLeadId ? `/portal/wizard?type=formation&lead=${p.wizardLeadId}` : p.wizardOfferId ? `/portal/wizard?type=formation&offer=${p.wizardOfferId}` : '/portal/wizard'
+  const wizardAlert = await createPortalNotification({
+    contact_id: p.contactId,
+    type: 'wizard_reminder',
+    title: 'Complete your setup wizard',
+    body: 'Please fill in the form for your new company.',
+    link: wizardLink,
+  })
+  if (wizardAlert.error) throw new Error(`the "Complete your setup wizard" notification could not be saved (${wizardAlert.error}) — nothing was sent to the client`)
+
   const { data: msg, error } = await supabaseAdmin
     .from('portal_messages')
     .insert({
@@ -524,24 +560,22 @@ async function sendClientMessage(p: { contactId: string; message: string; actorU
   logAction({ action_type: 'create', table_name: 'portal_messages', record_id: (msg as { id: string }).id, contact_id: p.contactId, summary: 'Portal chat message sent: new company opened' })
   await markClientMessagesReadForStaffReply({ account_id: null, contact_id: p.contactId, topic }).catch(() => 0)
 
-  const { createPortalNotification, notifyClientOfAdminMessage, waitForClientAlert } = await import('@/lib/portal/notifications')
-  const chatAlert = createPortalNotification({
+  const chatAlert = await createPortalNotification({
     contact_id: p.contactId,
     type: 'chat',
     title: 'New message from Tony Durante Team',
     body: p.message.slice(0, 100),
     link: buildPortalChatLink({ accountId: null, topic }),
   })
-  notifyClientOfAdminMessage({ account_id: null, contact_id: p.contactId, topic, messagePreview: p.message }).catch(() => {})
-  // The wizard itself: a bell row that opens it (the same link the sidebar's "New company" entry uses).
-  const wizardLink = p.wizardLeadId ? `/portal/wizard?type=formation&lead=${p.wizardLeadId}` : p.wizardOfferId ? `/portal/wizard?type=formation&offer=${p.wizardOfferId}` : '/portal/wizard'
-  const wizardAlert = createPortalNotification({
-    contact_id: p.contactId,
-    type: 'wizard_reminder',
-    title: 'Complete your setup wizard',
-    body: 'Please fill in the form for your new company.',
-    link: wizardLink,
-  })
-  await waitForClientAlert(chatAlert)
-  await waitForClientAlert(wizardAlert)
+  if (chatAlert.error) notices.push(`the chat notification could not be saved (${chatAlert.error})`)
+  try {
+    // Awaited: a serverless function may be stopped once it has answered, which would cut off an un-awaited e-mail. Its own 2-hour
+    // limit per conversation may skip it — the wizard notification above reaches the client by e-mail in the next digest anyway.
+    await notifyClientOfAdminMessage({ account_id: null, contact_id: p.contactId, topic, messagePreview: p.message })
+  } catch (e) {
+    notices.push(`the e-mail about the chat message could not be sent (${e instanceof Error ? e.message : String(e)})`)
+  }
+  await waitForClientAlert(Promise.resolve(wizardAlert))
+  await waitForClientAlert(Promise.resolve(chatAlert))
+  return notices
 }
