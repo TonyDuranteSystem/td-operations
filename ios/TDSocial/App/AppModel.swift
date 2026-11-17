@@ -131,7 +131,7 @@ final class AppModel: ObservableObject {
     func openFromAlert(url: String?, thread: String?) {
         guard let tab = AlertRouting.tab(url: url, thread: thread), me?.tabs.contains(where: { $0.id == tab }) == true else { return }
         selectedTab = tab
-        if let path = AlertRouting.safeRelativePath(url) { host(for: tab).load(path) }
+        if let path = AlertRouting.pagePath(url: url) { host(for: tab).load(path) }
     }
 
     // MARK: alerts permission and the phone registration
