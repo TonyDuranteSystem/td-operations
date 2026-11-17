@@ -3,7 +3,7 @@
  *
  * The case: the state accepted a new company's filing, the company already exists (Articles, EIN request), and then the
  * state refused the NAME (Novag LLC, Wyoming, 13 Nov 2026 — "not distinguishable from LLC Novag LLC"). Antonio does not
- * amend the name; the client opens a NEW company on the SAME paid offer. One button on the Contact page does it
+ * amend the name; the client opens a NEW company on the SAME paid offer. One panel in the formation job's workspace does it
  * (lib/operations/start-new-company.ts); this file holds the decisions that need no I/O so they can be tested alone.
  */
 

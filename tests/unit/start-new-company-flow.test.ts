@@ -251,6 +251,35 @@ describe('the preview', () => {
     h.state.db.lease_agreements = [{ id: 'l1', account_id: ACCOUNT, status: 'awaiting_signature' }]
     expect((await previewStartNewCompany(BUYER)).candidates[0].blockers.join(' ')).toContain('lease')
   })
+
+  describe('asked by the formation workspace about ONE job (Antonio, 2026-11-17)', () => {
+    function addSecondFormation() {
+      h.state.db.accounts.push({ id: 'acct-two', company_name: 'Second LLC', state_of_formation: 'Wyoming', status: 'Active', portal_account: true, portal_tier: 'active', notes: null })
+      h.state.db.account_contacts.push({ account_id: 'acct-two', contact_id: BUYER, ended_at: null })
+      h.state.db.service_deliveries.push({ id: 'second-job', service_type: 'Company Formation', status: 'active', stage: 'Articles Received', contact_id: BUYER, account_id: 'acct-two', source_offer_token: 'offer-token-2', notes: null })
+    }
+
+    it('answers about that job only, even when the person has another open formation', async () => {
+      addSecondFormation()
+      expect((await previewStartNewCompany(BUYER)).candidates.map((c) => c.deliveryId).sort()).toEqual(['old-job', 'second-job'])
+      const only = await previewStartNewCompany(BUYER, OLD_JOB)
+      expect(only.candidates.map((c) => c.deliveryId)).toEqual([OLD_JOB])
+      expect(only.candidates[0].companyName).toBe('Novag LLC')
+      expect((await previewStartNewCompany(BUYER, 'second-job')).candidates.map((c) => c.companyName)).toEqual(['Second LLC'])
+    })
+
+    it('answers with no company for a job that is not an open formation of this person', async () => {
+      expect((await previewStartNewCompany(BUYER, 'other-service')).candidates).toEqual([])
+      expect((await previewStartNewCompany(BUYER, 'no-such-job')).candidates).toEqual([])
+      expect((await previewStartNewCompany(CO_MEMBER, OLD_JOB)).candidates).toEqual([])
+    })
+
+    it('still gives the person and the same draft message, so the pop-up reads the same as before', async () => {
+      const p = await previewStartNewCompany(BUYER, OLD_JOB)
+      expect(p.contact?.firstName).toBe('Ugo')
+      expect(p.candidates[0].draftMessage.startsWith('Ciao Ugo,')).toBe(true)
+    })
+  })
 })
 
 describe('a full press', () => {
@@ -313,6 +342,9 @@ describe('a press that stops half-way is finished by pressing again', () => {
     // what needs a person is in the notes, not only on screen
     expect(String(newJob()?.notes)).toContain('NOT FINISHED')
     expect(String(newJob()?.notes)).toContain('chat is down')
+    // the panel is on the OLD job (the new one has no company yet), so the note says where to go and gives its path
+    expect(String(newJob()?.notes)).toContain('OLD formation job')
+    expect(String(newJob()?.notes)).toContain(`/flows/${OLD_JOB}`)
 
     const second = await press()
     expect(second.finished).toBe(true)

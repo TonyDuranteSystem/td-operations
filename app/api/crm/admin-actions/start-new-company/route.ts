@@ -1,7 +1,8 @@
 /**
  * "Start a new company" — staff only (dev job bf9886a3).
  *
- *   GET  ?contact_id=…                                   → the pop-up's facts (which company, what will happen, the draft message)
+ *   GET  ?contact_id=…[&delivery_id=…]                   → the pop-up's facts (which company, what will happen, the draft message);
+ *                                                          the formation workspace passes its own job as delivery_id
  *   POST { contact_id, replace_delivery_id, message }    → does it (lib/operations/start-new-company.ts)
  *
  * Errors carry a plain-English `error` the pop-up shows as it is.
@@ -22,8 +23,11 @@ export async function GET(req: NextRequest) {
   if (denied) return denied
   const contactId = req.nextUrl.searchParams.get('contact_id') ?? ''
   if (!UUID.test(contactId)) return NextResponse.json({ error: 'Missing or invalid contact_id.' }, { status: 400 })
+  // the formation workspace asks about its OWN job; absent = every active formation of the person
+  const deliveryId = req.nextUrl.searchParams.get('delivery_id')
+  if (deliveryId !== null && !UUID.test(deliveryId)) return NextResponse.json({ error: 'Invalid delivery_id.' }, { status: 400 })
   try {
-    return NextResponse.json(await previewStartNewCompany(contactId))
+    return NextResponse.json(await previewStartNewCompany(contactId, deliveryId ?? undefined))
   } catch (e) {
     return NextResponse.json({ error: `Could not read this company: ${e instanceof Error ? e.message : String(e)}` }, { status: 500 })
   }
@@ -63,6 +67,6 @@ export async function POST(req: NextRequest) {
     if (!result.success) return NextResponse.json({ error: result.error ?? 'Nothing was changed.' }, { status: 409 })
     return NextResponse.json(result)
   } catch (e) {
-    return NextResponse.json({ error: `Something went wrong: ${e instanceof Error ? e.message : String(e)}. Check the contact page before pressing again.` }, { status: 500 })
+    return NextResponse.json({ error: `Something went wrong: ${e instanceof Error ? e.message : String(e)}. Check the formation page before pressing again.` }, { status: 500 })
   }
 }
