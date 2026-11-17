@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { logPortalAction, PortalAction } from '@/lib/portal/audit'
-import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
+import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
+import { auditAccountIdFor } from '@/lib/portal/audit-scope'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -25,15 +26,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: false }, { status: 400 })
     }
 
-    // Resolve account_id if not provided
-    let resolvedAccountId = account_id
-    if (!resolvedAccountId) {
-      const contactId = getClientContactId(user)
-      if (contactId) {
-        const ids = await getClientAccountIds(contactId)
-        resolvedAccountId = ids[0] || undefined
-      }
-    }
+    // File the line under a company this login actually belongs to — never the one the browser names
+    // unless it is one of the login's own (a team login always gets its one company).
+    const identity = await resolvePortalIdentity(user)
+    const isStaff = (user.app_metadata as Record<string, unknown> | undefined)?.role !== 'client'
+    const resolvedAccountId = auditAccountIdFor(identity, account_id, isStaff)
 
     logPortalAction({
       user_id: user.id,

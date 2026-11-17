@@ -1,5 +1,29 @@
 import type { PortalIdentity } from '@/lib/portal/resolve-portal-identity'
-import { isPersonOwnedWizard } from '@/lib/portal/wizard-map'
+import { hasCapability, type CapabilityFlags } from '@/lib/portal/team/capabilities'
+
+/**
+ * Which wizards a TEAM login may use, and under which tick (team rules, 2026-11-17).
+ *   - the bank application (Payset / Relay)  -> the "Bank applications" tick
+ *   - the company data form (onboarding)     -> the "Company data form" tick
+ *   - everything else is refused, whatever ticks the login holds: tax and tax confirmations, ITIN, closing
+ *     the company, formation (a new company belongs to the buyer, a person), the TD Communication audit, and
+ *     any wizard type not named here (default-deny).
+ * Before this, the server refused only the ITIN wizard and checked the company, so a team login with NO ticks
+ * could post the tax, closure, banking, onboarding or formation forms straight to the server.
+ * PURE — shared by the wizard-submit / wizard-progress routes, the upload routes and the wizard page.
+ */
+export function teammateMayUseWizard(capabilities: CapabilityFlags | null | undefined, wizardType: string | undefined): boolean {
+  switch (wizardType) {
+    case 'banking': // the bank picker (it never posts; it leads to Payset / Relay)
+    case 'banking_payset':
+    case 'banking_relay':
+      return hasCapability(capabilities, 'bank_applications')
+    case 'onboarding':
+      return hasCapability(capabilities, 'company_data_form')
+    default:
+      return false
+  }
+}
 
 /**
  * Whether the logged-in portal identity may submit a wizard for this subject.
@@ -36,14 +60,8 @@ export function canSubmitWizard(
     return true
   }
   if (identity.kind === 'teammate') {
-    // A person-owned wizard (ITIN) files a federal application in a named
-    // INDIVIDUAL's name and writes that person's identity fields onto their
-    // contact record. A teammate is scoped to a company and has no contact
-    // identity of their own, so there is no person they could legitimately
-    // submit one for. The company scope check below cannot help here either:
-    // these submissions deliberately carry no account_id, so it would pass
-    // unconditionally. Deny outright.
-    if (isPersonOwnedWizard(wizardType)) return false
+    // Only the wizards a tick covers (see teammateMayUseWizard) — ITIN, tax, closure, formation and the rest are refused.
+    if (!teammateMayUseWizard(identity.capabilities, wizardType)) return false
     // Teammates are scoped to exactly one company.
     if (accountId && accountId !== identity.accountId) return false
     return true

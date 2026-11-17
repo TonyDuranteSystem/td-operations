@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { canSubmitWizard } from '@/lib/portal/wizard-submit-access'
+import { canSubmitWizard, teammateMayUseWizard } from '@/lib/portal/wizard-submit-access'
 import type { PortalIdentity } from '@/lib/portal/resolve-portal-identity'
 
 const contact = (contactId: string, accountIds: string[]): PortalIdentity => ({
@@ -7,8 +7,6 @@ const contact = (contactId: string, accountIds: string[]): PortalIdentity => ({
   contactId,
   accountIds,
 })
-const teammate = (accountId: string): PortalIdentity =>
-  ({ kind: 'teammate', accountId, teamMemberId: 'tm-1' } as PortalIdentity)
 const none: PortalIdentity = { kind: 'none' }
 
 describe('canSubmitWizard — contact', () => {
@@ -45,36 +43,60 @@ describe('canSubmitWizard — person-owned wizard (ITIN)', () => {
   it('BLOCKS a contact submitting an ITIN under someone else', () => {
     expect(canSubmitWizard(contact('C1', ['ACC-X']), null, 'C2', 'itin')).toBe(false)
   })
+})
 
-  it('BLOCKS a teammate from submitting an ITIN at all', () => {
-    // An ITIN files a federal application in a named individual's name and
-    // writes that person's identity fields onto their contact record. A
-    // teammate is scoped to a company and has no contact identity, so there is
-    // no person they could legitimately file for. The company-scope check
-    // cannot catch this: ITIN submissions deliberately carry no account_id, so
-    // without an explicit denial the teammate branch would pass unconditionally.
-    expect(canSubmitWizard(teammate('ACC-X'), null, 'C1', 'itin')).toBe(false)
-    expect(canSubmitWizard(teammate('ACC-X'), 'ACC-X', 'C1', 'itin')).toBe(false)
+const teamWith = (accountId: string, capabilities: Record<string, boolean>): PortalIdentity =>
+  ({ kind: 'teammate', accountId, teamMemberId: 'tm-1', displayName: 'T', email: null, capabilities } as PortalIdentity)
+const everyTick = {
+  documents: true, invoices_billing: true, chat: true, company_services: true,
+  bank_applications: true, sales_customers: true, company_data_form: true,
+  announcements: true, payment_links: true, invoice_history: true,
+}
+
+describe('canSubmitWizard — teammate (only the wizards a tick covers)', () => {
+  it('a login with NO ticks cannot submit ANY wizard (the hole)', () => {
+    const noTicks = teamWith('ACC-X', {})
+    for (const type of ['tax', 'closure', 'itin', 'formation', 'onboarding', 'banking_payset', 'banking_relay', 'company_info', 'td_communication', 'nonsense', undefined]) {
+      expect(canSubmitWizard(noTicks, 'ACC-X', null, type)).toBe(false)
+    }
   })
 
-  it('a teammate can still submit a company-owned wizard (unchanged)', () => {
-    expect(canSubmitWizard(teammate('ACC-X'), 'ACC-X', null, 'tax')).toBe(true)
+  it('the Bank applications tick opens the bank application (Payset / Relay) for its own company', () => {
+    const id = teamWith('ACC-X', { bank_applications: true })
+    expect(canSubmitWizard(id, 'ACC-X', null, 'banking_payset')).toBe(true)
+    expect(canSubmitWizard(id, 'ACC-X', null, 'banking_relay')).toBe(true)
+    expect(canSubmitWizard(id, 'ACC-X', null, 'onboarding')).toBe(false)
+  })
+
+  it('the Company data form tick opens the onboarding form for its own company, and nothing else', () => {
+    const id = teamWith('ACC-X', { company_data_form: true })
+    expect(canSubmitWizard(id, 'ACC-X', null, 'onboarding')).toBe(true)
+    expect(canSubmitWizard(id, 'ACC-X', null, 'banking_payset')).toBe(false)
+  })
+
+  it('NO tick — not even all of them — ever opens tax, tax confirmation, ITIN, closure, formation or the TD Communication audit', () => {
+    const id = teamWith('ACC-X', everyTick)
+    for (const type of ['tax', 'tax_return', 'company_info', 'itin', 'closure', 'formation', 'td_communication', 'nonsense', undefined]) {
+      expect(canSubmitWizard(id, 'ACC-X', null, type)).toBe(false)
+    }
+  })
+
+  it('BLOCKS a submit for a different company even with the right tick', () => {
+    const id = teamWith('ACC-X', { bank_applications: true })
+    expect(canSubmitWizard(id, 'ACC-Y', null, 'banking_payset')).toBe(false)
+  })
+
+  it('allows the tick-covered wizard when no account is targeted (the server scopes it)', () => {
+    expect(canSubmitWizard(teamWith('ACC-X', { bank_applications: true }), null, null, 'banking_payset')).toBe(true)
   })
 })
 
-describe('canSubmitWizard — teammate', () => {
-  const id = teammate('ACC-X')
-
-  it('allows a submit for the teammate’s own company', () => {
-    expect(canSubmitWizard(id, 'ACC-X', null)).toBe(true)
-  })
-
-  it('BLOCKS a submit for a different company', () => {
-    expect(canSubmitWizard(id, 'ACC-Y', null)).toBe(false)
-  })
-
-  it('allows when no account is targeted', () => {
-    expect(canSubmitWizard(id, null, null)).toBe(true)
+describe('teammateMayUseWizard', () => {
+  it('opens the bank picker only with the Bank applications tick', () => {
+    expect(teammateMayUseWizard({ bank_applications: true }, 'banking')).toBe(true)
+    expect(teammateMayUseWizard({}, 'banking')).toBe(false)
+    expect(teammateMayUseWizard(null, 'banking_payset')).toBe(false)
+    expect(teammateMayUseWizard(undefined, 'onboarding')).toBe(false)
   })
 })
 
