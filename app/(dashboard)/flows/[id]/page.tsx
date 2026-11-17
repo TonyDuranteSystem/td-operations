@@ -9,6 +9,8 @@ import { resolveMailingAddress } from '@/lib/addresses'
 import { deriveFlowYear } from '@/lib/flows/resolve-flows'
 import { StageStepper, type StepperStage } from '@/components/flows/stage-stepper'
 import { StageRenderer } from '@/components/flows/stage-renderer'
+import { StartNewCompanyPanel } from '@/components/flows/start-new-company-panel'
+import { ARTICLES_RECEIVED_STAGE, showStartNewCompanyPanel } from '@/lib/flows/start-new-company-panel'
 import { WorkspaceGuide } from '@/components/flows/workspace-guide'
 import { guideHintFor, parseGuideParam, stageDefsFromRows } from '@/lib/flows/workspace-guide'
 import { buildStepHints } from '@/lib/flows/storage-step-rules'
@@ -308,6 +310,17 @@ export default async function FlowWorkspacePage({ params, searchParams }: { para
     itinContractUrl = offer?.token ? `/api/crm/offer-preview?token=${encodeURIComponent(offer.token)}` : null
   }
 
+  // "The state refused the company name?" — only on an open Company Formation that already has its company, from "Articles Received" onward
+  // (lib/flows/start-new-company-panel.ts). The names step handles a refusal before the company exists.
+  const showRefusedNamePanel = showStartNewCompanyPanel({
+    serviceType: sd.service_type,
+    status: sd.status,
+    accountId: sd.account_id,
+    contactId: sd.contact_id,
+    stageOrder: currentStageRow?.stage_order,
+    articlesReceivedOrder: stages.find((s) => s.stage_name === ARTICLES_RECEIVED_STAGE)?.stage_order,
+  })
+
   return (
     <div className="p-6 lg:p-8 max-w-5xl mx-auto">
       {/* Back link */}
@@ -395,6 +408,16 @@ export default async function FlowWorkspacePage({ params, searchParams }: { para
         secondInstallment={secondInstallment}
         needsDocument={currentStageRow?.requires_document_to_advance === true}
         flowYear={year}
+        extraPanel={
+          showRefusedNamePanel && sd.contact_id ? (
+            <StartNewCompanyPanel
+              serviceDeliveryId={sd.id}
+              contactId={sd.contact_id}
+              contactName={contactName ?? 'the client'}
+              companyName={account.company_name ?? 'The company'}
+            />
+          ) : null
+        }
       />
 
       {/* The step-by-step guide: only when the pop-up "Open the workspace" opened the case (?guide=<document type>) for a document the step table

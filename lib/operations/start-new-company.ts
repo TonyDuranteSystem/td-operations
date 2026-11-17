@@ -1,5 +1,5 @@
 /**
- * "Start a new company" (dev job bf9886a3) — the Contact-page button for a company whose NAME the state refused after the
+ * "Start a new company" (dev job bf9886a3) — the button, in the Company Formation workspace, for a company whose NAME the state refused after the
  * company already exists. Antonio's design (16 Nov 2026, Novag LLC / Wyoming): no name amendment; the client opens a NEW
  * company on the SAME paid offer.
  *
@@ -92,8 +92,12 @@ function must<T>(res: { data: T | null; error: { message: string } | null; count
   return { data: res.data, count: res.count ?? null }
 }
 
-/** Everything the pop-up shows. THROWS on a read error (the caller answers 500): never guess about a company that is about to be closed. */
-export async function previewStartNewCompany(contactId: string): Promise<StartNewCompanyPreview> {
+/**
+ * Everything the pop-up shows. THROWS on a read error (the caller answers 500): never guess about a company that is about to be closed.
+ * `onlyDeliveryId` (the formation workspace's panel) narrows the answer to that ONE job, so the pop-up opened from a job's own page is
+ * always about that job; the press itself re-reads without it and finds the job by id, so the two can never disagree.
+ */
+export async function previewStartNewCompany(contactId: string, onlyDeliveryId?: string): Promise<StartNewCompanyPreview> {
   const contact = must(
     await supabaseAdmin.from('contacts').select('id, full_name, first_name, language').eq('id', contactId).maybeSingle(),
     'the person',
@@ -102,16 +106,15 @@ export async function previewStartNewCompany(contactId: string): Promise<StartNe
 
   // The formation job THIS PERSON bought. A job that belongs to another person on the same company is not listed: pressing the
   // button from a co-member's page must never replace the buyer's formation (the new job and the message would go to the wrong person).
-  const jobs = (must(
-    await supabaseAdmin
-      .from('service_deliveries')
-      .select('id, stage, status, account_id, contact_id, source_offer_token, notes')
-      .eq('contact_id', contactId)
-      .eq('service_type', 'Company Formation')
-      .eq('status', 'active')
-      .not('account_id', 'is', null),
-    'the formation jobs',
-  ).data ?? []) as Row[]
+  let jobQuery = supabaseAdmin
+    .from('service_deliveries')
+    .select('id, stage, status, account_id, contact_id, source_offer_token, notes')
+    .eq('contact_id', contactId)
+    .eq('service_type', 'Company Formation')
+    .eq('status', 'active')
+    .not('account_id', 'is', null)
+  if (onlyDeliveryId) jobQuery = jobQuery.eq('id', onlyDeliveryId)
+  const jobs = (must(await jobQuery, 'the formation jobs').data ?? []) as Row[]
 
   const candidates: ReplaceCandidate[] = []
   for (const job of jobs) {
@@ -524,7 +527,7 @@ export async function startNewCompany(p: StartNewCompanyParams): Promise<StartNe
       }
       await appendNote('service_deliveries', newId, `${today()} — Opened because the state refused the name of ${old.companyName}. Old company closed and its formation job cancelled.${needsPerson}`, 'Old company closed and its formation job cancelled')
     } else {
-      await appendNote('service_deliveries', newId, `${today()} — NOT FINISHED: the old company ${old.companyName} is still open.${needsPerson} Press "Start a new company" on the contact page again to finish.`)
+      await appendNote('service_deliveries', newId, `${today()} — NOT FINISHED: the old company ${old.companyName} is still open.${needsPerson} Open this formation job and press "State refused the name" again to finish.`)
     }
   } catch (e) {
     fail('note on the new job', e)
