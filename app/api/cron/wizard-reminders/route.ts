@@ -17,7 +17,8 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createPortalNotification } from "@/lib/portal/notifications"
 import { logCron } from "@/lib/cron-log"
 import { wizardLabelFor, buildWizardReminderTitle } from "@/lib/portal/wizard-reminder-copy"
-import { isFormationDoneForAccounts } from "@/lib/portal/wizard-reminder-rules"
+import { isFormationWizardDone } from "@/lib/portal/wizard-reminder-rules"
+import { hasFormationWaitingForItsCompany } from "@/lib/portal/formation-waiting"
 
 const REMINDER_3D_MS = 3 * 24 * 60 * 60 * 1000
 const REMINDER_7D_MS = 7 * 24 * 60 * 60 * 1000
@@ -133,7 +134,9 @@ async function isWizardCompletedElsewhere(w: WizardRow): Promise<boolean> {
       .from("accounts")
       .select("id, formation_date")
       .in("id", accountIds)
-    return isFormationDoneForAccounts(data ?? [])
+    // A formation job still waiting for its company (e.g. reopened by "Start a new company") means there IS something to complete.
+    const waiting = await hasFormationWaitingForItsCompany(w.contact_id)
+    return isFormationWizardDone({ accounts: data ?? [], hasFormationWaitingForItsCompany: waiting })
   }
 
   if (w.wizard_type === "onboarding") {

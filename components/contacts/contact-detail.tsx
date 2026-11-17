@@ -29,6 +29,7 @@ import { buildShareChatBody } from '@/lib/crm-store/document-share-client'
 import { NewWhatsAppConversationDialog } from '@/components/messaging/new-whatsapp-conversation-dialog'
 import { ThreadEmailPanel } from '@/components/portal-chats/thread-email-panel'
 import { ChainAuditDialog } from '@/components/contacts/chain-audit-dialog'
+import { StartNewCompanyButton } from '@/components/contacts/start-new-company-dialog'
 import { MessageReactions } from '@/components/chat/message-reactions'
 import type { MessageReaction } from '@/lib/portal/reactions'
 import { ContactHealthPanel } from '@/components/contacts/contact-health-panel'
@@ -903,7 +904,7 @@ function OverviewTab({
       </div>
 
       {/* Wizard Progress Card */}
-      <WizardProgressCard wizardProgress={wizardProgress} pendingActivations={pendingActivations} contactId={contact.id} />
+      <WizardProgressCard wizardProgress={wizardProgress} pendingActivations={pendingActivations} contactId={contact.id} contactName={contact.full_name ?? 'this person'} />
 
     </div>
   )
@@ -1566,10 +1567,12 @@ function WizardProgressCard({
   wizardProgress,
   pendingActivations,
   contactId,
+  contactName,
 }: {
   wizardProgress: WizardProgressRecord[]
   pendingActivations: PendingActivationRecord[]
   contactId: string
+  contactName: string
 }) {
   const primaryWizard = wizardProgress[0] ?? null
   const primaryActivation = pendingActivations[0] ?? null
@@ -1627,6 +1630,9 @@ function WizardProgressCard({
           )}>
             {primaryWizard.status === 'submitted' ? 'Submitted' : 'In progress'}
           </span>
+          {wizardProgress.some(w => w.wizard_type === 'formation') && (
+            <StartNewCompanyButton contactId={contactId} contactName={contactName} />
+          )}
         </div>
       </div>
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isFormationDoneForAccounts, shouldSuppressReminder } from '@/lib/portal/wizard-reminder-rules'
+import { isFormationDoneForAccounts, isFormationWizardDone, shouldSuppressReminder } from '@/lib/portal/wizard-reminder-rules'
 
 const DAY = 24 * 60 * 60 * 1000
 
@@ -41,6 +41,19 @@ describe('isFormationDoneForAccounts', () => {
 
   it('treats a missing key as not formed', () => {
     expect(isFormationDoneForAccounts([{}])).toBe(false)
+  })
+})
+
+describe('isFormationWizardDone', () => {
+  it('is NOT done while a formation job is still waiting for its company, even when every company the person has is formed', () => {
+    // The reopened wizard after "Start a new company": the old company is formed (and Closed), the new one does not exist yet.
+    expect(isFormationWizardDone({ accounts: [{ formation_date: '2026-11-11' }], hasFormationWaitingForItsCompany: true })).toBe(false)
+  })
+
+  it('judges by the companies alone when nothing is waiting — the old behaviour', () => {
+    expect(isFormationWizardDone({ accounts: [{ formation_date: '2026-04-20' }], hasFormationWaitingForItsCompany: false })).toBe(true)
+    expect(isFormationWizardDone({ accounts: [{ formation_date: '2026-04-20' }, { formation_date: null }], hasFormationWaitingForItsCompany: false })).toBe(false)
+    expect(isFormationWizardDone({ accounts: [], hasFormationWaitingForItsCompany: false })).toBe(false)
   })
 })
 
