@@ -37,22 +37,26 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tonydurante.myllcmanager.core.BarRules
 import com.tonydurante.myllcmanager.core.MeOutcome
 import com.tonydurante.myllcmanager.core.Msg
+import com.tonydurante.myllcmanager.core.TextSizeRules
 
 private val BadgeRed = Color(0xFFD32F2F)
 
@@ -80,6 +84,8 @@ private fun CountBadge(count: Int, modifier: Modifier = Modifier, textSize: Int 
 /** The bottom bar, drawn from the server's answer: the buttons the person chose (Chat is always one) with their waiting numbers. */
 @Composable
 fun BottomBar(me: Me, vm: ClientViewModel) {
+    val density = LocalDensity.current
+    CompositionLocalProvider(LocalDensity provides Density(density.density, TextSizeRules.barFontScale(density.fontScale))) {
     Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
         HorizontalDivider(color = Color(0x1F000000))
         Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp).navigationBarsPadding()) {
@@ -109,6 +115,7 @@ fun BottomBar(me: Me, vm: ClientViewModel) {
                 }
             }
         }
+    }
     }
 }
 
