@@ -27,6 +27,7 @@ import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-
 import { VoiceNote } from '@/components/team-chat/voice-note'
 import { chatPreviewText, isVoiceAttachment } from '@/lib/portal/chat-voice'
 import { isChatEventMessage } from '@/lib/portal/chat-scope'
+import { mergePins, pinSetChanged, PIN_JUMP_MAX_PAGES } from '@/lib/portal/pins'
 import { applyLandingToUrl, parseStaffChatTab, parseStaffChatTopic, pickUnreadTopicToOpen } from '@/lib/portal/staff-chat-landing'
 import { subscribeToDashboardPush } from '@/lib/push/dashboard-push'
 import { NewCardDialog } from '@/components/dashboard/action-board-new-card-dialog'
@@ -311,10 +312,30 @@ export default function PortalChatsPage() {
   // To-Do cards created from a message (the ⋯ → "To Do" action). Once messages for
   // the scoped thread load, we switch to the message's topic, scroll to it, and
   // flash a highlight ring. See message-actions route + action-board card href.
-  const [targetMessageId] = useState<string | null>(urlParams.get('message'))
+  const [targetMessageId, setTargetMessageId] = useState<string | null>(urlParams.get('message'))
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
   const didScrollToTargetRef = useRef(false)
   const deepLinkPagesRef = useRef(0) // bounded back-paging when the target is older than the live window
+  // A click on a pinned message (or a quoted reply) drives the SAME jump as a ?message= link: load older pages until the message is
+  // there (up to PIN_JUMP_MAX_PAGES), switch to its topic, scroll to it, highlight it. `jumpNonce` lets the same message be clicked again.
+  // Only a click-driven jump hands the scroll position back afterwards (a link keeps owning it for the page view, as before).
+  const [jumpNonce, setJumpNonce] = useState(0)
+  const jumpFromClickRef = useRef(false)
+  const jumpMaxPagesRef = useRef(10)
+  const targetMessageIdRef = useRef<string | null>(targetMessageId)
+  targetMessageIdRef.current = targetMessageId
+  const requestJump = useCallback((id: string) => {
+    didScrollToTargetRef.current = false
+    deepLinkPagesRef.current = 0
+    jumpFromClickRef.current = true
+    jumpMaxPagesRef.current = PIN_JUMP_MAX_PAGES
+    setTargetMessageId(id)
+    setJumpNonce(n => n + 1)
+  }, [])
+  // Leaving the conversation ends a click-driven jump (a ?message= link keeps its old behaviour).
+  useEffect(() => {
+    if (jumpFromClickRef.current) { jumpFromClickRef.current = false; setTargetMessageId(null) }
+  }, [selectedAccountId, selectedContactId])
   // Unified thread state: which company the admin is sending as, and all companies for badge lookup.
   // selectedCompanyId is the EXPLICIT send target only — null by default on person
   // threads (2026-08-07 leak fix, dev job 4bad3094: the old auto-selected first
@@ -957,6 +978,16 @@ export default function PortalChatsPage() {
     refetchInterval: 30_000, // fallback reconciliation; realtime subscription below is primary
   })
 
+  // The conversation's pinned messages, read from the server on their own so a pin older than the loaded messages still shows in the
+  // Pinned strip (Antonio, 2026-11-17). Refreshed when anyone pins/unpins (below) and every minute as a fallback.
+  const pinsScopeKey = selectedAccountId || selectedContactId
+  const { data: serverPins } = useQuery<ChatMessage[]>({
+    queryKey: ['portal-chat-pins', pinsScopeKey],
+    queryFn: () => fetch(`/api/portal/chat?${chatQueryParam}&pinned=1`).then(r => r.json()).then(d => (Array.isArray(d.messages) ? d.messages : [])),
+    enabled: !!(selectedAccountId || selectedContactId),
+    refetchInterval: 60_000,
+  })
+
   // Older-message pagination (manual accumulation; the API supports
   // ?before=<created_at>&limit=50). olderMessages holds every older page fetched
   // via the "Older messages" button, prepended oldest-first ahead of the live
@@ -1085,12 +1116,13 @@ export default function PortalChatsPage() {
       // Not in what's loaded. Copyable links get clicked WEEKS later, so dig
       // backward through history (bounded) instead of silently giving up —
       // the old behaviour opened the chat with no jump and no explanation.
-      if (hasMoreOlder && deepLinkPagesRef.current < 10) {
+      if (hasMoreOlder && deepLinkPagesRef.current < jumpMaxPagesRef.current) {
         if (!loadingOlder) { deepLinkPagesRef.current += 1; void loadOlderMessages() }
         return // effect re-runs as older pages land in combinedMessages
       }
       didScrollToTargetRef.current = true
       toast.error("Couldn't find that message — it may be much older or deleted.")
+      if (jumpFromClickRef.current) { jumpFromClickRef.current = false; setTargetMessageId(null) }
       return
     }
     setAdminActiveTopic(target.topic ?? null)
@@ -1133,7 +1165,11 @@ export default function PortalChatsPage() {
           if (check && onScreen) {
             didScrollToTargetRef.current = true
             setHighlightedMessageId(targetMessageId)
-            setTimeout(() => setHighlightedMessageId(null), 2800)
+            setTimeout(() => {
+              setHighlightedMessageId(null)
+              // a click-driven jump is finished: give the scroll position back (new messages follow the bottom again)
+              if (jumpFromClickRef.current) { jumpFromClickRef.current = false; setTargetMessageId(null) }
+            }, 2800)
             return
           }
           attempts += 1
@@ -1146,7 +1182,7 @@ export default function PortalChatsPage() {
     }
     let timer = setTimeout(tryScroll, 120) // let the topic switch re-render the list first
     return () => clearTimeout(timer)
-  }, [targetMessageId, combinedMessages, hasMoreOlder, loadingOlder, loadOlderMessages])
+  }, [targetMessageId, jumpNonce, combinedMessages, hasMoreOlder, loadingOlder, loadOlderMessages])
 
   // Unread count per topic tab (client + plain-system messages not yet read
   // by admin). Chat-event notices (wizard submitted, document uploaded,
@@ -1241,6 +1277,10 @@ export default function PortalChatsPage() {
         ['portal-chat-messages', threadId],
         (prev) => prev ? prev.map(m => m.id === updated.id ? { ...m, ...updated } : m) : prev
       )
+      // someone pinned / unpinned / deleted a pinned message (maybe an old one that is not on screen): refresh the Pinned strip's list
+      if (pinSetChanged(queryClient.getQueryData<ChatMessage[]>(['portal-chat-pins', threadId]), updated)) {
+        queryClient.invalidateQueries({ queryKey: ['portal-chat-pins', threadId] })
+      }
     }
 
     let channel = supabase
@@ -1567,6 +1607,7 @@ export default function PortalChatsPage() {
     },
     onSuccess: (_d, vars) => {
       queryClient.invalidateQueries({ queryKey: ['portal-chat-messages', selectedAccountId || selectedContactId] })
+      queryClient.invalidateQueries({ queryKey: ['portal-chat-pins', selectedAccountId || selectedContactId] })
       toast.success(vars.pinned ? 'Message pinned' : 'Message unpinned')
     },
     onError: (err) => {
@@ -1598,7 +1639,8 @@ export default function PortalChatsPage() {
   // Scroll a message into view + flash-highlight it (used by the Pinned strip).
   const scrollToMessage = (messageId: string) => {
     const el = document.getElementById(`pc-msg-${messageId}`)
-    if (!el) return
+    // Not on screen (older than what is loaded, or in another topic): load older pages / switch topic until it is, then scroll to it.
+    if (!el) { requestJump(messageId); return }
     el.scrollIntoView({ behavior: 'smooth', block: 'center' })
     setHighlightedMessageId(messageId)
     window.setTimeout(() => setHighlightedMessageId(null), 2800)
@@ -2157,7 +2199,7 @@ export default function PortalChatsPage() {
     // the right product behaviour regardless of the bug: someone who followed
     // a link to one historical message is reading history, not asking to be
     // snapped to "latest" the moment any background refetch lands.
-    if (targetMessageId) return
+    if (targetMessageIdRef.current) return
     if (isThreadSwitch) {
       // Two frames + a short fallback so late layout (images, tabs) can't strand
       // the view above the last message.
@@ -2167,7 +2209,7 @@ export default function PortalChatsPage() {
       return () => clearTimeout(t)
     }
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
-  }, [messages, selectedAccountId, selectedContactId, targetMessageId])
+  }, [messages, selectedAccountId, selectedContactId])
 
   // Auto-grow textareas
   useEffect(() => {
@@ -3919,9 +3961,9 @@ export default function PortalChatsPage() {
             ) : (
             <>
 
-            {/* Pinned messages strip — shared with the client; click to jump. No limit. */}
+            {/* Pinned messages strip — shared with the client; click to jump (loads older messages if needed). Pins come from the server, not just what is loaded. */}
             {(() => {
-              const pinned = combinedMessages.filter(m => m.pinned_at && !m.deleted_at)
+              const pinned = mergePins(serverPins, messages ?? [], combinedMessages)
               if (pinned.length === 0) return null
               return (
                 <div className="shrink-0 border-b border-amber-100 bg-amber-50/70 px-3 py-1.5">

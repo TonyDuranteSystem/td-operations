@@ -4,11 +4,16 @@
 import { describe, it, expect } from 'vitest'
 import {
   COMPANY_REPLACED_REASON,
+  MESSAGE_BEING_SENT_TEXT,
+  MESSAGE_CLAIM_LIVE_MS,
   MESSAGE_SENT_MARKER,
   WIZARD_REOPENED_MARKER,
   buildReplacementMessage,
+  clientMessageState,
   describeWaitingPart,
   isReplacementOf,
+  messageClaimNote,
+  messageFailedNote,
   namesFromReopenedNote,
   newJobFailureText,
   replaceBlockers,
@@ -276,5 +281,51 @@ describe('a job cancelled because its company was replaced', () => {
     expect(wasCancelledByCompanyReplacement('active', COMPANY_REPLACED_REASON)).toBe(false)
     expect(wasCancelledByCompanyReplacement('cancelled', null)).toBe(false)
     expect(wasCancelledByCompanyReplacement(null, undefined)).toBe(false)
+  })
+})
+
+describe('where the client message stands (claim before send, 2026-11-17)', () => {
+  const now = new Date('2026-11-17T12:00:00.000Z')
+  const at = (msAgo: number) => new Date(now.getTime() - msAgo).toISOString()
+
+  it('is open when the notes say nothing about the message', () => {
+    expect(clientMessageState(null, now)).toBe('open')
+    expect(clientMessageState('', now)).toBe('open')
+    expect(clientMessageState('2026-11-17 — Wizard reopened for the new names.', now)).toBe('open')
+  })
+  it('is sending while a claim is fresh', () => {
+    expect(clientMessageState(messageClaimNote('2026-11-17', at(5_000)), now)).toBe('sending')
+    expect(clientMessageState(messageClaimNote('2026-11-17', at(MESSAGE_CLAIM_LIVE_MS - 1)), now)).toBe('sending')
+  })
+  it('is open again once a claim is two minutes old (the press that made it is gone)', () => {
+    expect(clientMessageState(messageClaimNote('2026-11-17', at(MESSAGE_CLAIM_LIVE_MS)), now)).toBe('open')
+    expect(clientMessageState(messageClaimNote('2026-11-17', at(10 * 60_000)), now)).toBe('open')
+  })
+  it('is sent as soon as the sent line is there, whatever else the notes say', () => {
+    const notes = [messageClaimNote('2026-11-17', at(1_000)), '2026-11-17 — Client message sent (Italian).'].join('\n')
+    expect(clientMessageState(notes, now)).toBe('sent')
+  })
+  it('is open again when the claim was let go after a failed send, and the next claim counts', () => {
+    const failed = [messageClaimNote('2026-11-17', at(20_000)), messageFailedNote('2026-11-17', at(15_000), 'chat is down')].join('\n')
+    expect(clientMessageState(failed, now)).toBe('open')
+    const reclaimed = [failed, messageClaimNote('2026-11-17', at(2_000))].join('\n')
+    expect(clientMessageState(reclaimed, now)).toBe('sending')
+  })
+  it('treats a claim without a readable time as open, so it can never block for good', () => {
+    expect(clientMessageState('2026-11-17 — Client message sending (started soon).', now)).toBe('open')
+  })
+  it('keeps a failure reason on one short line', () => {
+    const note = messageFailedNote('2026-11-17', at(0), 'line one\nline two ' + 'x'.repeat(500))
+    expect(note.split('\n')).toHaveLength(1)
+    expect(note.length).toBeLessThan(330)
+    expect(messageFailedNote('2026-11-17', at(0), '')).toContain('unknown error')
+  })
+  it('does not mistake the sending or not-sent lines for the sent line', () => {
+    expect(messageClaimNote('2026-11-17', at(0)).includes(MESSAGE_SENT_MARKER)).toBe(false)
+    expect(messageFailedNote('2026-11-17', at(0), 'x').includes(MESSAGE_SENT_MARKER)).toBe(false)
+  })
+  it('tells the person who pressed second what happened, in plain words', () => {
+    expect(MESSAGE_BEING_SENT_TEXT).toContain('sending the client')
+    expect(MESSAGE_BEING_SENT_TEXT).toContain('did not send the message or cancel')
   })
 })

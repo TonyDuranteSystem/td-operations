@@ -1,4 +1,5 @@
 import { waitForPhoneLeg } from '@/lib/app/phone-leg'
+import { PINS_LIMIT } from '@/lib/portal/pins'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
@@ -49,7 +50,10 @@ export async function GET(request: NextRequest) {
   const contactIdParam = searchParams.get('contact_id')
   const scope = searchParams.get('scope') // 'company' | 'personal' (client per-company scoping) | absent (legacy/admin)
   const before = searchParams.get('before')
-  const limit = Math.min(Number(searchParams.get('limit') ?? '50'), 100)
+  // `pinned=1` = the conversation's pinned messages only (the Pinned strip), newest pin first, never deleted ones. It is the SAME query as
+  // a normal page — every scope, history-cutoff and visibility rule below applies unchanged — with a different filter, order and cap.
+  const pinnedOnly = searchParams.get('pinned') === '1'
+  const limit = pinnedOnly ? PINS_LIMIT : Math.min(Number(searchParams.get('limit') ?? '50'), 100)
 
   if (!accountId && !contactIdParam) {
     return NextResponse.json({ error: 'account_id or contact_id required' }, { status: 400 })
@@ -116,8 +120,6 @@ export async function GET(request: NextRequest) {
   let query = supabaseAdmin
     .from('portal_messages')
     .select('*, contacts:contact_id(full_name), addressed_to_contact:addressed_to_contact_id(full_name)')
-    .order('created_at', { ascending: false })
-    .limit(limit)
 
   // Client users (contacts AND teammates) never see soft-deleted messages.
   // Admins see them so they can render tombstones.
@@ -189,8 +191,13 @@ export async function GET(request: NextRequest) {
     query = query.eq('account_id', accountId)
   }
 
-  if (before) {
-    query = query.lt('created_at', before)
+  if (pinnedOnly) {
+    // A deleted message keeps its pin mark (the delete route sets only deleted_at), so deleted rows are excluded here — for staff too:
+    // a pins list must never carry a deleted body.
+    query = query.not('pinned_at', 'is', null).is('deleted_at', null).order('pinned_at', { ascending: false }).limit(limit)
+  } else {
+    query = query.order('created_at', { ascending: false }).limit(limit)
+    if (before) query = query.lt('created_at', before)
   }
 
   const { data: rawData, error } = await query
@@ -262,7 +269,7 @@ export async function GET(request: NextRequest) {
   // (and appears at all), so it can be opened and cleared. Same rule as the
   // sidebar total (lib/portal/client-chat-unread). First page only.
   let unreadByTopic: Record<string, number> | undefined
-  if (isClientUser && authContactId && scopedPlan && !before) {
+  if (isClientUser && authContactId && scopedPlan && !before && !pinnedOnly) {
     try {
       const planAccount = scopedPlan.mode === 'personal_only' ? [] : [scopedPlan.accountId]
       const rows = await fetchClientUnreadRows(authContactId, planAccount)
