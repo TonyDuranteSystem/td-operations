@@ -2,13 +2,14 @@
 
 /**
  * "Delete / Merge" on a contact: step 1 picks the contact to KEEP (search by name or email; contacts sharing this one's email are
- * suggested first), step 2 is the usual confirm dialog with a plain-English preview of what moves. The merge itself runs in the
+ * suggested first), step 2 is the side-by-side review (components/contacts/merge-review-dialog.tsx: both contacts, which one stays
+ * with a swap, personal details, owner-less documents, logins, type MERGE). The merge itself runs in the
  * delete-contact route (database function merge_contacts). "Delete instead" hands over to the existing delete dialog.
  */
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Loader2, Search, X, GitMerge } from "lucide-react"
-import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog"
+import { MergeReviewDialog } from "@/components/contacts/merge-review-dialog"
 
 interface Candidate { id: string; full_name: string | null; email: string | null; phone: string | null }
 
@@ -54,33 +55,12 @@ export function MergeContactDialog({
 
   if (target) {
     return (
-      <ConfirmDestructiveDialog
+      <MergeReviewDialog
         open
         onClose={() => setTarget(null)}
-        title="Merge contacts"
-        description={`"${contact.full_name ?? "This contact"}" will be merged INTO "${target.full_name ?? "the chosen contact"}". The chosen contact is the one that stays; everything of this contact moves to it.`}
-        severity="red"
-        requireTypeToConfirm="MERGE"
-        confirmLabel="Merge contacts"
-        loadPreview={async () => {
-          const res = await fetch("/api/crm/admin-actions/delete-contact", {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ contact_id: contact.id, dry_run: true, mode: "merge", merge_into_contact_id: target.id }),
-          })
-          const data = await res.json().catch(() => ({}))
-          if (!res.ok) throw new Error(data.error || "Could not load the merge preview")
-          return data.preview
-        }}
-        onConfirm={async () => {
-          const res = await fetch("/api/crm/admin-actions/delete-contact", {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ contact_id: contact.id, mode: "merge", merge_into_contact_id: target.id }),
-          })
-          const data = await res.json().catch(() => ({}))
-          if (!res.ok) return { success: false, error: data.error || "Merge failed — nothing was changed." }
-          return { success: true, message: data.message }
-        }}
-        onSuccess={() => { onClose(); router.push(`/contacts/${target.id}`) }}
+        current={contact}
+        other={target}
+        onMerged={(keptId) => { onClose(); router.push(`/contacts/${keptId}`); router.refresh() }}
       />
     )
   }
