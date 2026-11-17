@@ -141,6 +141,17 @@ object BarRules {
     }
 }
 
+/**
+ * 16 Nov 2026: with the phone's "Font size" turned up, the page and the bar grew with it (oversized text, cramped cards, a cut-off bar). The page is drawn
+ * for normal text size, so it is shown at 100% whatever the phone's setting, and the bar keeps its labels at the size they were drawn for.
+ */
+object TextSizeRules {
+    const val PAGE_ZOOM_PERCENT = 100
+
+    /** The text size the bar is drawn with: never larger than normal, but a phone set to SMALLER text keeps its smaller text. */
+    fun barFontScale(systemFontScale: Float): Float = if (systemFontScale > 1f) 1f else systemFontScale
+}
+
 object PageRules {
     /**
      * The app's own questions to the server (who am I) run with the page's sign-in, so they may run only while the page IS our server: on a card page
