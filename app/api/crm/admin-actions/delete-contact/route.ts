@@ -17,7 +17,10 @@
  *     DB function and keeps the loser as an audit tombstone (merged_into set,
  *     email blanked). The loser's portal login is then removed.
  *
- * Body: { contact_id, dry_run?, mode?: "delete"|"merge", merge_into_contact_id? }
+ * Body: { contact_id, dry_run?, mode?: "delete"|"merge", merge_into_contact_id?,
+ *          wanted_email? (dry-run report: the email the person wants — decides which contact is suggested to stay),
+ *          field_choices? ({ detail: "loser"|"winner" } for personal details that differ or are only on the removed contact),
+ *          document_ids? (owner-less personal documents to give to the kept contact) }
  *
  * "blocking references" = NO ACTION FK rows, computed by contact_reference_report()
  * (migration 20260610-1740). Pattern mirrors delete-lead/route.ts.
@@ -74,6 +77,9 @@ export async function POST(request: Request) {
       dry_run?: boolean
       mode?: "delete" | "merge"
       merge_into_contact_id?: string
+      wanted_email?: string
+      field_choices?: Record<string, string>
+      document_ids?: string[]
     }
     const { contact_id, dry_run, mode, merge_into_contact_id } = body
 
@@ -99,7 +105,15 @@ export async function POST(request: Request) {
     if (dry_run && mode === "merge") {
       const { buildMergePreview } = await import("@/lib/operations/contact-merge-preview")
       const preview = await buildMergePreview({ loserId: contact_id, winnerId: merge_into_contact_id ?? null, report, portalLoginCount: portalUsers.length })
-      return NextResponse.json({ ok: true, preview })
+      // The side-by-side report (both people, details, documents, logins). Reads only — the dry run never writes.
+      let mergeReport = null
+      if (merge_into_contact_id) {
+        const { buildMergeReport } = await import("@/lib/operations/contact-merge-report")
+        const built = await buildMergeReport(contact_id, merge_into_contact_id, body.wanted_email ?? null)
+        if ("error" in built) return NextResponse.json({ error: built.error }, { status: 400 })
+        mergeReport = built
+      }
+      return NextResponse.json({ ok: true, preview, report: mergeReport })
     }
 
     // ── Dry-run preview (shown in ConfirmDestructiveDialog) ──────────────────
@@ -160,6 +174,23 @@ export async function POST(request: Request) {
       const checked = await buildMergePreview({ loserId: contact_id, winnerId: merge_into_contact_id, report, portalLoginCount: portalUsers.length })
       if (checked.blocker) return NextResponse.json({ error: checked.blocker }, { status: 409 })
 
+      // Personal details and owner-less documents: re-read here (never trust the screen). Identity details that differ need an
+      // explicit choice; only documents the report really offers can be given to the kept contact.
+      const { buildMergeReport } = await import("@/lib/operations/contact-merge-report")
+      const { cleanChoices, unresolvedIdentityConflicts } = await import("@/lib/contacts/merge-details")
+      const mergeReport = await buildMergeReport(contact_id, merge_into_contact_id, null)
+      if ("error" in mergeReport) return NextResponse.json({ error: mergeReport.error }, { status: 400 })
+      const choices = cleanChoices(mergeReport.details, body.field_choices)
+      const missing = unresolvedIdentityConflicts(mergeReport.details, choices)
+      if (missing.length > 0) {
+        return NextResponse.json({ error: `The two contacts have different ${missing.map((m) => m.label.toLowerCase()).join(", ")}. Choose which one is right, then merge again — nothing was changed.` }, { status: 400 })
+      }
+      const offered = new Set(mergeReport.documents.ownerless.map((d) => d.id))
+      const documentIds = Array.from(new Set(Array.isArray(body.document_ids) ? body.document_ids : []))
+      if (documentIds.some((id) => typeof id !== "string" || !offered.has(id))) {
+        return NextResponse.json({ error: "One of the chosen documents is no longer a personal document without an owner. Reload the merge window and try again — nothing was changed." }, { status: 409 })
+      }
+
       // The owner records that belong to the merged-away contact will point at the kept one: remember them to give them the kept name.
       const { memberRowsOf } = await import("@/lib/operations/contact-name-follow")
       const loserMemberIds = (await memberRowsOf(contact_id).catch(() => [])).map((m) => m.id)
@@ -168,6 +199,8 @@ export async function POST(request: Request) {
         p_loser: contact_id,
         p_winner: merge_into_contact_id,
         p_merged_by: actor,
+        p_field_choices: choices,
+        p_document_ids: documentIds,
       })
       if (mergeErr) {
         return NextResponse.json(
@@ -207,7 +240,7 @@ export async function POST(request: Request) {
         table_name: "contacts",
         record_id: contact_id,
         summary: `Merged contact "${contact.full_name}" into "${target.full_name}"`,
-        details: { loser: contact_id, winner: merge_into_contact_id, mergeResult, removedLogins },
+        details: { loser: contact_id, winner: merge_into_contact_id, mergeResult, removedLogins, field_choices: choices, document_ids: documentIds },
       })
 
       return NextResponse.json({
