@@ -4,14 +4,57 @@
 import { describe, it, expect } from 'vitest'
 import {
   MESSAGE_SENT_MARKER,
+  WIZARD_REOPENED_MARKER,
   buildReplacementMessage,
   describeWaitingPart,
   isReplacementOf,
+  namesFromReopenedNote,
   replaceBlockers,
   replacementNote,
   seedReopenedWizardData,
   wizardNamesOf,
+  wizardReopenedNote,
 } from '@/lib/operations/start-new-company-rules'
+import { localeFromLanguage } from '@/lib/locale'
+
+describe('Italian detection uses the shared helper', () => {
+  // The values real clients carry in contacts.language (lib/locale.ts header lists them).
+  const cases = ['Italian', 'Italiano', 'it', 'IT', ' it ', 'Italian - englis', 'it-IT', 'it_IT']
+  for (const language of cases) {
+    it(`"${language}" gets the Italian draft, exactly when the rest of the system calls it Italian`, () => {
+      const m = buildReplacementMessage({ language, firstName: 'Ugo', oldCompanyName: 'Novag LLC' })
+      expect(m.startsWith('Ciao Ugo,')).toBe(true)
+      expect(localeFromLanguage(language)).toBe('it')
+    })
+  }
+  for (const language of ['English', 'en', '', null, undefined, 'French']) {
+    it(`${JSON.stringify(language)} gets the English draft`, () => {
+      expect(buildReplacementMessage({ language, firstName: 'Sam', oldCompanyName: 'X LLC' }).startsWith('Hi Sam,')).toBe(true)
+    })
+  }
+})
+
+describe('the "wizard reopened" note', () => {
+  it('carries the marker and the names the client had given', () => {
+    const note = wizardReopenedNote('2026-11-16', ['Novag LLC', 'Novag Group LLC'])
+    expect(note).toContain(WIZARD_REOPENED_MARKER)
+    expect(namesFromReopenedNote(`first line\n${note}\nlast line`)).toEqual(['Novag LLC', 'Novag Group LLC'])
+  })
+
+  it('keeps a name that itself ends with a full stop', () => {
+    expect(namesFromReopenedNote(wizardReopenedNote('2026-11-16', ['Novag Inc.', 'Novag Co']))).toEqual(['Novag Inc.', 'Novag Co'])
+  })
+
+  it('has no names to give back when the wizard held none, or the notes are empty', () => {
+    expect(namesFromReopenedNote(wizardReopenedNote('2026-11-16', []))).toEqual([])
+    expect(namesFromReopenedNote(null)).toEqual([])
+    expect(namesFromReopenedNote('')).toEqual([])
+  })
+
+  it('has a stable marker', () => {
+    expect(WIZARD_REOPENED_MARKER).toBe('Wizard reopened')
+  })
+})
 
 describe('buildReplacementMessage', () => {
   it('is Italian for an Italian client and names the refused company', () => {

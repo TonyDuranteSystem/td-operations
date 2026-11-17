@@ -3,22 +3,29 @@
  * company already exists. Antonio's design (16 Nov 2026, Novag LLC / Wyoming): no name amendment; the client opens a NEW
  * company on the SAME paid offer.
  *
- * What it does, in this order (the first step that cannot be undone safely comes last):
+ * What it does, in this order. The old formation job is cancelled LAST, and only when every step before it worked: while it is
+ * still active the button still lists the company, so a press that stopped half-way (a failure, a timeout) is finished by
+ * pressing again — each step below checks what is already done and does not repeat it.
  *   1. creates a NEW Company Formation job for the same person on the SAME offer token — the payment sits on the person and
  *      the offer, and the offer's "after the EIN arrives" part reads the job that carries the token (a cancelled job never
- *      counts, lib/plan-invoices/classify.ts), so the second part now follows the new company;
+ *      counts, lib/plan-invoices/classify.ts), so the second part follows the new company once the old job is cancelled;
  *   2. reopens the client's formation wizard: same answers (people, passports, address), the company NAMES cleared, step 1 —
- *      the client sends new names through the normal wizard, and its submit finds the NEW job because a cancelled formation
- *      is ignored (lib/portal/formation-resubmit-gate.ts);
- *   3. cancels the old formation job and closes the old company (its other open services, pending deadlines and open to-dos
- *      too; the company is set to Closed with its portal off, exactly as the closure clean-up does it, and the people's portal
- *      level is recomputed — a person with no other company keeps the level they have, so the client is not locked out);
- *   4. leaves a dated note on the old company, the person and the cancelled job, and sends the client the message the staff
- *      member saw (and could edit) in the pop-up.
+ *      the client sends new names through the normal wizard. Marked on the new job ("Wizard reopened") so a later press never
+ *      wipes what the client has typed since;
+ *   3. closes the old company's loose ends: its other open services, pending deadlines and open to-dos are cancelled and the
+ *      company is set to Closed with its portal off, exactly as the closure clean-up does it;
+ *   4. sends the client the message the staff member saw (and could edit) in the pop-up — only when steps 2 and 3 worked, so a
+ *      client is never told about a company that is not ready. Marked ("Client message sent") so it goes out once;
+ *   5. cancels the old formation job — the commit point. From here the client's wizard submit finds the NEW job, because a
+ *      cancelled formation is ignored (lib/portal/formation-resubmit-gate.ts);
+ *   6. best effort, after the commit point: the people's portal level is recomputed (a person with no other company keeps the
+ *      level they have, so the client is not locked out) and the old company's suite goes back to the pool;
+ *   7. dated notes on the old company, the person and the new job, and an action-log row. Any step that needs a person is
+ *      written into those notes too, not only shown in the pop-up.
  *
  * Money and leases are NEVER touched: a company with unpaid invoices or a lease in force is refused up front (the pop-up
- * says why). Each later step is independent — one that fails is reported in `problems`, it does not stop the others — and a
- * second press on the same company resumes (it reuses the new job and does not send the message twice).
+ * says why). The button only lists a formation that belongs to THIS person: pressing it from a co-member's page cannot
+ * replace the buyer's formation.
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -31,20 +38,27 @@ import { buildPortalChatLink } from '@/lib/portal/chat-link'
 import { classifyOpenPayments, type OpenPaymentRow } from '@/lib/closure/closing-payments'
 import {
   MESSAGE_SENT_MARKER,
+  WIZARD_REOPENED_MARKER,
   buildReplacementMessage,
   describeWaitingPart,
   isReplacementOf,
+  namesFromReopenedNote,
   replaceBlockers,
   replacementNote,
   seedReopenedWizardData,
   wizardNamesOf,
+  wizardReopenedNote,
 } from '@/lib/operations/start-new-company-rules'
 
 type Row = Record<string, unknown>
 
 const OPEN_SERVICE = ['active', 'on_hold', 'blocked'] as const
 const OPEN_TODO = ['To Do', 'In Progress', 'Waiting'] as const
-const LIVE_LEASE = ['signed', 'viewed', 'sent'] as const
+/** A lease that is out with the client or signed. 'awaiting_signature' is the lease-in-flight status the portal itself uses (lib/portal/queries.ts). */
+const LIVE_LEASE = ['signed', 'viewed', 'sent', 'awaiting_signature'] as const
+/** An invoice that is still owed. 'Delinquent' is a real payment status (lib/billing/overdue.ts) — an unpaid invoice must block too. */
+const OPEN_PAYMENT_STATUS = ['Pending', 'Overdue', 'Delinquent'] as const
+const WIZARD_OPEN_STATUS = ['in_progress', 'submitted'] as const
 
 export interface ReplaceCandidate {
   deliveryId: string
@@ -83,27 +97,21 @@ export async function previewStartNewCompany(contactId: string): Promise<StartNe
   ).data as Row | null
   if (!contact) return { contact: null, candidates: [] }
 
-  // The company's own formation job: tied to the person directly, or to a company the person belongs to.
-  const links = must(await supabaseAdmin.from('account_contacts').select('account_id').eq('contact_id', contactId).is('ended_at', null), 'the person\'s companies')
-    .data as Array<{ account_id: string }> | null
-  const accountIds = Array.from(new Set((links ?? []).map((l) => l.account_id)))
-
-  const cols = 'id, stage, status, account_id, contact_id, source_offer_token, notes'
-  const byContact = must(
-    await supabaseAdmin.from('service_deliveries').select(cols).eq('contact_id', contactId).eq('service_type', 'Company Formation').eq('status', 'active').not('account_id', 'is', null),
+  // The formation job THIS PERSON bought. A job that belongs to another person on the same company is not listed: pressing the
+  // button from a co-member's page must never replace the buyer's formation (the new job and the message would go to the wrong person).
+  const jobs = (must(
+    await supabaseAdmin
+      .from('service_deliveries')
+      .select('id, stage, status, account_id, contact_id, source_offer_token, notes')
+      .eq('contact_id', contactId)
+      .eq('service_type', 'Company Formation')
+      .eq('status', 'active')
+      .not('account_id', 'is', null),
     'the formation jobs',
-  ).data as Row[] | null
-  const byAccount = accountIds.length
-    ? (must(
-        await supabaseAdmin.from('service_deliveries').select(cols).in('account_id', accountIds).eq('service_type', 'Company Formation').eq('status', 'active'),
-        'the formation jobs of the companies',
-      ).data as Row[] | null)
-    : []
-  const jobs = new Map<string, Row>()
-  for (const j of [...(byContact ?? []), ...(byAccount ?? [])]) jobs.set(String(j.id), j)
+  ).data ?? []) as Row[]
 
   const candidates: ReplaceCandidate[] = []
-  for (const job of Array.from(jobs.values())) {
+  for (const job of jobs) {
     const accountId = String(job.account_id)
     const token = (job.source_offer_token as string | null) ?? null
     const [acct, people, services, todos, deadlines, payments, leases] = await Promise.all([
@@ -112,7 +120,7 @@ export async function previewStartNewCompany(contactId: string): Promise<StartNe
       supabaseAdmin.from('service_deliveries').select('service_type').eq('account_id', accountId).in('status', [...OPEN_SERVICE]).neq('id', String(job.id)),
       supabaseAdmin.from('tasks').select('id', { count: 'exact', head: true }).eq('account_id', accountId).in('status', [...OPEN_TODO]),
       supabaseAdmin.from('deadlines').select('id', { count: 'exact', head: true }).eq('account_id', accountId).eq('status', 'Pending'),
-      supabaseAdmin.from('payments').select('id, invoice_number, status, invoice_status, amount, amount_currency, amount_due, amount_paid').eq('account_id', accountId).in('status', ['Pending', 'Overdue']),
+      supabaseAdmin.from('payments').select('id, invoice_number, status, invoice_status, amount, amount_currency, amount_due, amount_paid').eq('account_id', accountId).in('status', [...OPEN_PAYMENT_STATUS]),
       supabaseAdmin.from('lease_agreements').select('id', { count: 'exact', head: true }).eq('account_id', accountId).in('status', [...LIVE_LEASE]),
     ])
     const company = must(acct, 'the company').data as Row | null
@@ -127,7 +135,7 @@ export async function previewStartNewCompany(contactId: string): Promise<StartNe
       unpaidInvoices: classified.cancel.length + classified.partPaid.length,
       leaseInForce: must(leases, 'the company\'s leases').count ?? 0,
     })
-    const companyName = String(company.company_name ?? 'the company')
+    const companyName = String(company.company_name || 'the company')
     candidates.push({
       deliveryId: String(job.id),
       stage: (job.stage as string | null) ?? null,
@@ -177,34 +185,72 @@ export interface StartNewCompanyResult {
   success: boolean
   error?: string
   newDeliveryId: string | null
+  /** True when an earlier press had already opened the new job (this press continued it). */
   resumed: boolean
+  /** True once the old formation job is cancelled — the last step. False = press the button again to finish. */
+  finished: boolean
   steps: StepResult[]
-  /** Steps that failed after the new job existed — the screen shows them so a person finishes them by hand. */
+  /** Steps that failed or need a person — shown on the screen AND written into the notes. */
   problems: string[]
 }
 
 const today = () => new Date().toISOString().split('T')[0]
 
-/** Append one dated line to a text column, read-modify-write, guarded on the value that was read. */
-async function appendNote(table: 'accounts' | 'contacts' | 'service_deliveries', id: string, line: string): Promise<void> {
+/**
+ * Append one dated line to a text column, read-modify-write, guarded on the value that was read. With `onlyIfMissing`, a line
+ * whose key is already in the notes is not written again (a resumed press must not repeat the notes). THROWS if the guarded write
+ * changed no row (the notes changed at the same moment) — a silent lost write would hide a marker.
+ */
+async function appendNote(table: 'accounts' | 'contacts' | 'service_deliveries', id: string, line: string, onlyIfMissing?: string): Promise<void> {
   const { data, error } = await supabaseAdmin.from(table).select('notes').eq('id', id).maybeSingle()
   if (error) throw new Error(error.message)
   const before = ((data as Row | null)?.notes as string | null) ?? null
+  if (onlyIfMissing && (before ?? '').includes(onlyIfMissing)) return
   const next = before ? `${before}\n${line}` : line
   const q = supabaseAdmin.from(table).update({ notes: next, updated_at: new Date().toISOString() }).eq('id', id)
-  const { error: uErr } = await (before === null ? q.is('notes', null) : q.eq('notes', before))
+  const { data: written, error: uErr } = await (before === null ? q.is('notes', null) : q.eq('notes', before)).select('id')
   if (uErr) throw new Error(uErr.message)
+  if (!written?.length) throw new Error('the notes changed at the same moment — try again')
+}
+
+type WizardRow = { id: string; data: Record<string, unknown> | null; status: string; updated_at: string | null }
+
+/** The client's saved formation wizard for THIS offer: the rows under the offer's lead and under the offer itself (the two keys the portal and its reminder links use). Newest first. */
+async function offerWizardRows(leadId: string | null, offerId: string | null): Promise<WizardRow[]> {
+  const found = new Map<string, WizardRow>()
+  const cols = 'id, data, status, updated_at'
+  if (leadId) {
+    const { data, error } = await supabaseAdmin.from('wizard_progress').select(cols).eq('wizard_type', 'formation').in('status', [...WIZARD_OPEN_STATUS]).eq('lead_id', leadId)
+    if (error) throw new Error(error.message)
+    for (const r of (data ?? []) as unknown as WizardRow[]) found.set(r.id, r)
+  }
+  if (offerId) {
+    const { data, error } = await supabaseAdmin.from('wizard_progress').select(cols).eq('wizard_type', 'formation').in('status', [...WIZARD_OPEN_STATUS]).eq('offer_id', offerId)
+    if (error) throw new Error(error.message)
+    for (const r of (data ?? []) as unknown as WizardRow[]) found.set(r.id, r)
+  }
+  return Array.from(found.values()).sort((a, b) => String(b.updated_at ?? '').localeCompare(String(a.updated_at ?? '')))
 }
 
 export async function startNewCompany(p: StartNewCompanyParams): Promise<StartNewCompanyResult> {
   const steps: StepResult[] = []
   const problems: string[] = []
-  const fail = (what: string, why: unknown) => {
+  /** Failures that stop the old job from being cancelled — the press is not finished, so the button stays and a second press retries. */
+  let blocking = 0
+  const failBlocking = (what: string, why: unknown) => {
+    blocking += 1
+    fail(what, why)
+  }
+  function fail(what: string, why: unknown) {
     const text = `${what}: ${why instanceof Error ? why.message : String(why)}`
     problems.push(text)
     steps.push({ step: what, status: 'error', detail: text })
   }
-  const refuse = (error: string): StartNewCompanyResult => ({ success: false, error, newDeliveryId: null, resumed: false, steps, problems })
+  const warn = (what: string, text: string) => {
+    problems.push(`${what}: ${text}`)
+    steps.push({ step: what, status: 'warning', detail: text })
+  }
+  const refuse = (error: string): StartNewCompanyResult => ({ success: false, error, newDeliveryId: null, resumed: false, finished: false, steps, problems })
 
   const message = (p.message ?? '').trim()
   if (!message) return refuse('The message to the client is empty.')
@@ -264,54 +310,59 @@ export async function startNewCompany(p: StartNewCompanyParams): Promise<StartNe
     return refuse(`Nothing was changed. The new formation could not be opened: ${e instanceof Error ? e.message : String(e)}`)
   }
 
-  // ── 2. the client's wizard: reopened, names cleared ───────────────────────────────────────────────────────────────────
+  // ── 2. the client's wizard: reopened, names cleared (once) ────────────────────────────────────────────────────────────
   let leadId: string | null = null
   let offerId: string | null = null
-  let oldNames: string[] = []
+  let oldNames: string[] = namesFromReopenedNote(newNotes)
   try {
     const { data: offer, error: oErr } = await supabaseAdmin.from('offers').select('id, lead_id').eq('token', token).maybeSingle()
     if (oErr) throw new Error(oErr.message)
     leadId = ((offer as Row | null)?.lead_id as string | null) ?? null
     offerId = ((offer as Row | null)?.id as string | null) ?? null
-    // The same scope the client's wizard page reads (lib/portal/wizard-scope.ts): the lead, else the offer.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- dynamic scope column over a union trips TS2589 on the typed builder
-    let q: any = supabaseAdmin.from('wizard_progress').select('id, data, status, updated_at').eq('wizard_type', 'formation').in('status', ['in_progress', 'submitted'])
-    q = leadId ? q.eq('lead_id', leadId) : offerId ? q.eq('offer_id', offerId) : q.eq('contact_id', p.contactId).is('lead_id', null)
-    const { data: rows, error } = await q.order('updated_at', { ascending: false }).limit(1)
-    if (error) throw new Error(error.message)
-    const row = (rows as Array<{ id: string; data: Record<string, unknown> | null; status: string }> | null)?.[0]
-    if (!row) {
-      steps.push({ step: 'client wizard', status: 'skipped', detail: 'No saved wizard to reopen — the client starts a blank one.' })
-    } else if (resumed && row.status === 'in_progress') {
-      // An earlier press already reopened it, and the client may have started filling it in: never wipe that.
+
+    if ((newNotes ?? '').includes(WIZARD_REOPENED_MARKER)) {
+      // An earlier press already reopened it, and the client may have typed — or re-submitted — the new names since: never touch it again.
       steps.push({ step: 'client wizard', status: 'skipped', detail: 'Already reopened by an earlier press — left as it is.' })
     } else {
-      oldNames = wizardNamesOf(row.data)
-      const { error: uErr } = await supabaseAdmin
-        .from('wizard_progress')
-        .update({ status: 'in_progress', current_step: 0, data: seedReopenedWizardData(row.data) as never, updated_at: new Date().toISOString() })
-        .eq('id', row.id)
-      if (uErr) throw new Error(uErr.message)
-      steps.push({ step: 'client wizard', status: 'ok', detail: 'Reopened at step 1 with the people and documents kept and the company names cleared.' })
+      const rows = await offerWizardRows(leadId, offerId)
+      if (rows.length === 0) {
+        // Nothing under this offer. A saved formation wizard kept under the person alone could be another company's — never guess, say so.
+        const { count, error } = await supabaseAdmin
+          .from('wizard_progress')
+          .select('id', { count: 'exact', head: true })
+          .eq('wizard_type', 'formation')
+          .eq('contact_id', p.contactId)
+          .in('status', [...WIZARD_OPEN_STATUS])
+        if (error) throw new Error(error.message)
+        if ((count ?? 0) > 0) {
+          warn('client wizard', `No saved wizard is tied to this offer, but this person has ${count} other saved formation wizard${count === 1 ? '' : 's'} — not touched. The client opens a blank wizard from the link; check by hand that an old one does not still show the refused name.`)
+        } else {
+          steps.push({ step: 'client wizard', status: 'skipped', detail: 'No saved wizard to reopen — the client starts a blank one.' })
+        }
+      } else {
+        oldNames = wizardNamesOf(rows[0].data)
+        for (const row of rows) {
+          const { error: uErr } = await supabaseAdmin
+            .from('wizard_progress')
+            .update({ status: 'in_progress', current_step: 0, data: seedReopenedWizardData(row.data) as never, updated_at: new Date().toISOString() })
+            .eq('id', row.id)
+          if (uErr) throw new Error(uErr.message)
+        }
+        steps.push({ step: 'client wizard', status: 'ok', detail: 'Reopened at step 1 with the people and documents kept and the company names cleared.' })
+        // The marker is what stops a later press from wiping the new answers — if it cannot be written, say so loudly and do not go on.
+        try {
+          await appendNote('service_deliveries', newId, wizardReopenedNote(today(), oldNames))
+        } catch (e) {
+          failBlocking('note that the wizard was reopened (a second press could wipe the client\'s new answers)', e)
+        }
+      }
     }
   } catch (e) {
-    fail('client wizard', e)
+    failBlocking('client wizard', e)
   }
-
-  // ── 3. the old company ────────────────────────────────────────────────────────────────────────────────────────────────
   const names = oldNames.length ? ` Names the client had given: ${oldNames.join(' / ')}.` : ''
-  try {
-    const r = await deactivateSD({
-      delivery_id: old.deliveryId,
-      actor: p.actorLabel,
-      reason: `Replaced by new formation job ${newId} — the state refused the company name.${names}`,
-    })
-    if (r.success || r.outcome === 'already_terminal') steps.push({ step: 'old formation job', status: 'ok', detail: 'Cancelled (kept in the history).' })
-    else fail('old formation job', r.error ?? r.outcome)
-  } catch (e) {
-    fail('old formation job', e)
-  }
 
+  // ── 3. the old company's loose ends ───────────────────────────────────────────────────────────────────────────────────
   try {
     const { data, error } = await supabaseAdmin.from('service_deliveries').select('id, service_type').eq('account_id', old.accountId).in('status', [...OPEN_SERVICE]).neq('id', old.deliveryId)
     if (error) throw new Error(error.message)
@@ -319,11 +370,11 @@ export async function startNewCompany(p: StartNewCompanyParams): Promise<StartNe
     for (const sd of (data ?? []) as Array<{ id: string; service_type: string }>) {
       const r = await deactivateSD({ delivery_id: sd.id, actor: p.actorLabel, reason: `The company was replaced by a new one (job ${newId}).`, clear_renewal_date: true })
       if (r.success || r.outcome === 'already_terminal') done.push(sd.service_type)
-      else fail(`could not cancel ${sd.service_type}`, r.error ?? r.outcome)
+      else failBlocking(`could not cancel ${sd.service_type}`, r.error ?? r.outcome)
     }
     if (done.length) steps.push({ step: 'old company services', status: 'ok', detail: `Cancelled: ${done.join(', ')}.` })
   } catch (e) {
-    fail('old company services', e)
+    failBlocking('old company services', e)
   }
 
   try {
@@ -332,7 +383,7 @@ export async function startNewCompany(p: StartNewCompanyParams): Promise<StartNe
     if (error) throw new Error(error.message)
     if (data?.length) steps.push({ step: 'old company deadlines', status: 'ok', detail: `Cancelled ${data.length} upcoming deadline${data.length === 1 ? '' : 's'}.` })
   } catch (e) {
-    fail('old company deadlines', e)
+    failBlocking('old company deadlines', e)
   }
 
   try {
@@ -345,7 +396,7 @@ export async function startNewCompany(p: StartNewCompanyParams): Promise<StartNe
       steps.push({ step: 'old company to-dos', status: 'ok', detail: `Cancelled ${ids.length} open to-do${ids.length === 1 ? '' : 's'}.` })
     }
   } catch (e) {
-    fail('old company to-dos', e)
+    failBlocking('old company to-dos', e)
   }
 
   let closed = false
@@ -356,9 +407,54 @@ export async function startNewCompany(p: StartNewCompanyParams): Promise<StartNe
     closed = true
     steps.push({ step: 'old company', status: 'ok', detail: `${old.companyName} is now Closed.` })
   } catch (e) {
-    fail('old company', e)
+    failBlocking('old company', e)
   }
-  if (closed) {
+
+  // ── 4. the message to the client — only when the wizard and the old company are ready ─────────────────────────────────
+  let messageSent = (newNotes ?? '').includes(MESSAGE_SENT_MARKER)
+  if (messageSent) {
+    steps.push({ step: 'message to the client', status: 'skipped', detail: 'Already sent by an earlier press.' })
+  } else if (blocking > 0) {
+    steps.push({ step: 'message to the client', status: 'warning', detail: 'Not sent yet — a step above failed. Press the button again once it is fixed; the client is told only when everything is ready.' })
+  } else {
+    try {
+      await sendClientMessage({ contactId: p.contactId, message, actorUserId: p.actorUserId, wizardLeadId: leadId, wizardOfferId: offerId })
+      messageSent = true
+      steps.push({ step: 'message to the client', status: 'ok', detail: 'Sent in the portal chat, with a notification.' })
+      try {
+        await appendNote('service_deliveries', newId, `${today()} — ${MESSAGE_SENT_MARKER} (${contact.language ?? 'language not on file'}).`)
+      } catch (e) {
+        fail('note that the message was sent (a second press would send it again)', e)
+      }
+    } catch (e) {
+      failBlocking('message to the client', e)
+    }
+  }
+
+  // ── 5. the commit point: the old formation job is cancelled last ─────────────────────────────────────────────────────
+  let finished = false
+  if (blocking > 0) {
+    steps.push({ step: 'old formation job', status: 'warning', detail: 'Not cancelled yet, so the button stays on this page. Press it again to finish — what is already done is not repeated.' })
+  } else {
+    try {
+      const r = await deactivateSD({
+        delivery_id: old.deliveryId,
+        actor: p.actorLabel,
+        reason: `Replaced by new formation job ${newId} — the state refused the company name.${names}`,
+      })
+      if (r.success || r.outcome === 'already_terminal') {
+        finished = true
+        steps.push({ step: 'old formation job', status: 'ok', detail: 'Cancelled (kept in the history).' })
+      } else {
+        fail('old formation job', r.error ?? r.outcome)
+      }
+    } catch (e) {
+      fail('old formation job', e)
+    }
+  }
+
+  // ── 6. best effort after the commit point ─────────────────────────────────────────────────────────────────────────────
+  if (finished && closed) {
     try {
       await syncContactTiersForAccount(old.accountId, p.actorLabel)
     } catch (e) {
@@ -372,33 +468,25 @@ export async function startNewCompany(p: StartNewCompanyParams): Promise<StartNe
     }
   }
 
-  // ── 4. the record and the message ─────────────────────────────────────────────────────────────────────────────────────
-  const stamp = `${today()} — ${old.companyName}: the state refused the company name. Replaced by a new company on the same paid offer (new formation job ${newId}). By ${p.actorLabel}.${names}`
-  for (const [table, id, what] of [['accounts', old.accountId, 'note on the old company'], ['contacts', p.contactId, 'note on the person'], ['service_deliveries', newId, 'note on the new job']] as const) {
-    if (table === 'service_deliveries' && resumed) continue
-    try {
-      await appendNote(table, id, table === 'service_deliveries' ? `${today()} — Opened because the state refused the name of ${old.companyName}.` : stamp)
-    } catch (e) {
-      fail(what, e)
-    }
-  }
-
-  let messageSent = (newNotes ?? '').includes(MESSAGE_SENT_MARKER)
-  if (messageSent) {
-    steps.push({ step: 'message to the client', status: 'skipped', detail: 'Already sent by an earlier press.' })
-  } else {
-    try {
-      await sendClientMessage({ contactId: p.contactId, message, actorUserId: p.actorUserId, wizardLeadId: leadId, wizardOfferId: offerId })
-      messageSent = true
-      steps.push({ step: 'message to the client', status: 'ok', detail: 'Sent in the portal chat, with a notification.' })
-      try {
-        await appendNote('service_deliveries', newId, `${today()} — ${MESSAGE_SENT_MARKER} (${contact.language ?? 'language not on file'}).`)
-      } catch (e) {
-        fail('note that the message was sent (a second press would send it again)', e)
+  // ── 7. the record ─────────────────────────────────────────────────────────────────────────────────────────────────────
+  const needsPerson = problems.length ? ` Needs a person: ${problems.join(' | ')}.` : ''
+  try {
+    if (finished) {
+      const stamp = `${today()} — ${old.companyName}: the state refused the company name. Replaced by a new company on the same paid offer (new formation job ${newId}). By ${p.actorLabel}.${names}${needsPerson}`
+      const key = `new formation job ${newId}`
+      for (const [table, id, what] of [['accounts', old.accountId, 'note on the old company'], ['contacts', p.contactId, 'note on the person']] as const) {
+        try {
+          await appendNote(table, id, stamp, key)
+        } catch (e) {
+          fail(what, e)
+        }
       }
-    } catch (e) {
-      fail('message to the client', e)
+      await appendNote('service_deliveries', newId, `${today()} — Opened because the state refused the name of ${old.companyName}. Old company closed and its formation job cancelled.${needsPerson}`, 'Old company closed and its formation job cancelled')
+    } else {
+      await appendNote('service_deliveries', newId, `${today()} — NOT FINISHED: the old company ${old.companyName} is still open.${needsPerson} Press "Start a new company" on the contact page again to finish.`)
     }
+  } catch (e) {
+    fail('note on the new job', e)
   }
 
   logAction({
@@ -408,11 +496,11 @@ export async function startNewCompany(p: StartNewCompanyParams): Promise<StartNe
     record_id: newId,
     account_id: old.accountId,
     contact_id: p.contactId,
-    summary: `Start a new company: ${old.companyName} replaced (state refused the name). New formation job ${newId}.${problems.length ? ` ${problems.length} step(s) need a person.` : ''}`,
-    details: { replaced_delivery_id: old.deliveryId, new_delivery_id: newId, resumed, problems, steps },
+    summary: `Start a new company: ${old.companyName} ${finished ? 'replaced' : 'NOT finished'} (state refused the name). New formation job ${newId}.${problems.length ? ` ${problems.length} step(s) need a person.` : ''}`,
+    details: { replaced_delivery_id: old.deliveryId, new_delivery_id: newId, resumed, finished, problems, steps },
   })
 
-  return { success: true, newDeliveryId: newId, resumed, steps, problems }
+  return { success: true, newDeliveryId: newId, resumed, finished, steps, problems }
 }
 
 /** The portal chat message to the person (a personal thread — the old company's own thread goes away with its portal), plus the bell + email. */

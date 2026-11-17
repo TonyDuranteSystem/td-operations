@@ -7,7 +7,12 @@
  * (lib/operations/start-new-company.ts); this file holds the decisions that need no I/O so they can be tested alone.
  */
 
-/** The client-facing words of the first thing the client sees. Italian when the client's language on file is Italian. */
+import { isItalian } from '@/lib/locale'
+
+/**
+ * The client-facing words of the first thing the client sees. Italian when the client's language on file is Italian — read
+ * through the one shared helper (lib/locale.ts), so "Italian - englis" and "it-IT" count the same here as everywhere else.
+ */
 export function buildReplacementMessage(p: {
   language: string | null | undefined
   firstName: string | null | undefined
@@ -15,8 +20,7 @@ export function buildReplacementMessage(p: {
 }): string {
   const first = (p.firstName ?? '').trim()
   const old = p.oldCompanyName.trim()
-  const italian = /^(it|ita|italian|italiano)$/i.test((p.language ?? '').trim())
-  if (italian) {
+  if (isItalian(p.language)) {
     return [
       first ? `Ciao ${first},` : 'Ciao,',
       `lo Stato non ha accettato il nome ${old} perché troppo simile a una società già registrata. Apriamo quindi una nuova società: nel portale trovi il modulo da compilare, dove potrai indicare i tre nomi tra cui scegliere.`,
@@ -122,3 +126,21 @@ export function isReplacementOf(notes: string | null | undefined, oldDeliveryId:
 
 /** The marker written once the client's message has gone out, so a resumed press does not send it twice. */
 export const MESSAGE_SENT_MARKER = 'Client message sent'
+
+/**
+ * The marker written once the client's wizard has been reopened. A resumed press that finds it NEVER touches the wizard again:
+ * by then the client may already have typed (or even re-submitted) the new names, and reopening would wipe them.
+ */
+export const WIZARD_REOPENED_MARKER = 'Wizard reopened'
+
+/** The line that carries the marker, plus the names the client had given (the wizard forgets them when it is reopened). */
+export function wizardReopenedNote(on: string, names: string[]): string {
+  return `${on} — ${WIZARD_REOPENED_MARKER} for the new names.${names.length ? ` Names the client had given: ${names.join(' / ')}.` : ''}`
+}
+
+/** The names recorded by `wizardReopenedNote`, so a resumed press can still write them into the old job's history. */
+export function namesFromReopenedNote(notes: string | null | undefined): string[] {
+  const m = (notes ?? '').match(/Names the client had given: (.*)$/m)
+  if (!m) return []
+  return m[1].replace(/\.$/, '').split(' / ').map((n) => n.trim()).filter(Boolean)
+}

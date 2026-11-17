@@ -12,6 +12,9 @@ import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 import { createClient } from '@/lib/supabase/server'
 import { previewStartNewCompany, startNewCompany } from '@/lib/operations/start-new-company'
 
+/** A long chain of writes (new job, wizard, old company, message, old job): same limit as the other admin actions that do several steps. */
+export const maxDuration = 60
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export async function GET(req: NextRequest) {

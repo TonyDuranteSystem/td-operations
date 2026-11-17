@@ -1,0 +1,18 @@
+{
+  "title": "Start a new company",
+  "tag": "new",
+  "text": "When the state refuses a company's name after the company already exists, the Wizard card on the buyer's Contact page now has a \"Start a new company\" button. A pop-up shows which company is replaced, what will happen and the client's message (in their language, editable). When you confirm, a new formation opens on the same paid offer, with nothing charged again, and the client's wizard reopens with the names cleared. The old company is closed, and the payment part that waits for the EIN follows the new one. A company with unpaid invoices or an office lease is left alone, and the pop-up says why. If a step fails, the pop-up says \"Not finished yet\" and pressing again finishes it.",
+  "points": [
+    "Open the buyer's Contact page and look for \"Start a new company\" in the Wizard card",
+    "Pressing the blue button sends the message you read in the pop-up to the client, once everything else is ready",
+    "If it says \"Not finished yet\", press the button again: what is done is not repeated and the message is never sent twice"
+  ],
+  "stepsTitle": "What happens when you press it",
+  "steps": [
+    { "name": "Press the button", "detail": "In the Wizard card on the Contact page. A pop-up shows the company and what will happen." },
+    { "name": "A new formation opens", "detail": "Same person, same paid offer, nothing charged again. The client's wizard reopens with the names cleared.", "flag": "new" },
+    { "name": "The old company closes", "detail": "Its open services, to-dos and upcoming deadlines are cancelled and the company is marked Closed.", "flag": "auto" },
+    { "name": "The client is told", "detail": "Your message goes into their portal chat, with a notification that opens the wizard.", "flag": "auto" },
+    { "name": "The old formation is cancelled", "detail": "Done last, so a half-done press can be finished. The EIN-triggered payment part follows the new company.", "flag": "auto" }
+  ]
+}

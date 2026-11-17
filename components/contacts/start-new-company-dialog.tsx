@@ -12,6 +12,7 @@ import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { AlertTriangle, CheckCircle2, Loader2, X } from "lucide-react"
+import { isItalian } from "@/lib/locale"
 import type { ReplaceCandidate, StartNewCompanyPreview, StartNewCompanyResult } from "@/lib/operations/start-new-company"
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
@@ -72,7 +73,7 @@ function StartNewCompanyDialog({ open, onClose, contactId, contactName }: { open
 
   const candidate: ReplaceCandidate | null = preview?.candidates.find((c) => c.deliveryId === selectedId) ?? null
   const firstName = (preview?.contact?.firstName ?? contactName).split(" ")[0]
-  const language = /^(it|ita|italian|italiano)$/i.test((preview?.contact?.language ?? "").trim()) ? "Italian" : "English"
+  const language = isItalian(preview?.contact?.language) ? "Italian" : "English"
   const canSubmit = !!candidate && candidate.blockers.length === 0 && message.trim().length > 0 && !busy
 
   const pick = (c: ReplaceCandidate) => {
@@ -93,8 +94,10 @@ function StartNewCompanyDialog({ open, onClose, contactId, contactName }: { open
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || "Something went wrong. Check the contact page before pressing again.")
-      setResult(data as StartNewCompanyResult)
-      toast.success("New company started")
+      const done = data as StartNewCompanyResult
+      setResult(done)
+      if (done.finished) toast.success("New company started")
+      else toast.warning("Started, but not finished — press the button again")
       router.refresh()
     } catch (e) {
       setFormError(e instanceof Error ? e.message : "Something went wrong. Check the contact page before pressing again.")
@@ -243,14 +246,32 @@ function StartNewCompanyDialog({ open, onClose, contactId, contactName }: { open
 function ResultView({ result }: { result: StartNewCompanyResult }) {
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-2 font-semibold text-emerald-700">
-        <CheckCircle2 className="h-5 w-5" />
-        {result.resumed ? "Finished the earlier attempt." : "The new company is started."}
-      </div>
+      {result.finished ? (
+        <div className="flex items-center gap-2 font-semibold text-emerald-700">
+          <CheckCircle2 className="h-5 w-5" />
+          {result.resumed ? "Finished the earlier attempt." : "The new company is started."}
+        </div>
+      ) : (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-amber-900">
+          <div className="flex items-center gap-2 font-semibold">
+            <AlertTriangle className="h-5 w-5" />
+            Not finished yet.
+          </div>
+          <div className="mt-1">
+            The old company is still open and the client has not been told, unless a line below says the message was sent. Close this window and press &ldquo;Start a new company&rdquo; again: what is already done is not repeated.
+          </div>
+        </div>
+      )}
       <ul className="space-y-1.5">
         {result.steps.map((s, i) => (
           <li key={i} className="flex gap-2 items-start">
-            {s.status === "error" ? <AlertTriangle className="h-4 w-4 mt-0.5 text-red-600 shrink-0" /> : <CheckCircle2 className="h-4 w-4 mt-0.5 text-emerald-600 shrink-0" />}
+            {s.status === "error" ? (
+              <AlertTriangle className="h-4 w-4 mt-0.5 text-red-600 shrink-0" />
+            ) : s.status === "warning" ? (
+              <AlertTriangle className="h-4 w-4 mt-0.5 text-amber-600 shrink-0" />
+            ) : (
+              <CheckCircle2 className="h-4 w-4 mt-0.5 text-emerald-600 shrink-0" />
+            )}
             <span className={s.status === "error" ? "text-red-700" : undefined}>{s.detail}</span>
           </li>
         ))}
