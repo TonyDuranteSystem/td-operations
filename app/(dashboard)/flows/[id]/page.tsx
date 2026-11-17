@@ -10,7 +10,8 @@ import { deriveFlowYear } from '@/lib/flows/resolve-flows'
 import { StageStepper, type StepperStage } from '@/components/flows/stage-stepper'
 import { StageRenderer } from '@/components/flows/stage-renderer'
 import { StartNewCompanyPanel } from '@/components/flows/start-new-company-panel'
-import { ARTICLES_RECEIVED_STAGE, showStartNewCompanyPanel } from '@/lib/flows/start-new-company-panel'
+import { ReplacedByCard } from '@/components/flows/replaced-by-card'
+import { ARTICLES_RECEIVED_STAGE, pickReplacementJob, showStartNewCompanyPanel, type ReplacementRow } from '@/lib/flows/start-new-company-panel'
 import { WorkspaceGuide } from '@/components/flows/workspace-guide'
 import { guideHintFor, parseGuideParam, stageDefsFromRows } from '@/lib/flows/workspace-guide'
 import { buildStepHints } from '@/lib/flows/storage-step-rules'
@@ -321,6 +322,19 @@ export default async function FlowWorkspacePage({ params, searchParams }: { para
     articlesReceivedOrder: stages.find((s) => s.stage_name === ARTICLES_RECEIVED_STAGE)?.stage_order,
   })
 
+  // A CANCELLED formation whose company was replaced points to the job that took over (the press wrote "Replaces job <this id>" on it). Read
+  // from the data on every visit, so it is still there after the dashboard refreshes the page by itself or the page is opened later.
+  let replacedBy: ReplacementRow | null = null
+  if (sd.service_type === 'Company Formation' && sd.status === 'cancelled' && sd.contact_id) {
+    const { data: replacementRows } = await supabaseAdmin
+      .from('service_deliveries')
+      .select('id, notes, stage, status, created_at')
+      .eq('contact_id', sd.contact_id)
+      .eq('service_type', 'Company Formation')
+      .ilike('notes', `%Replaces job ${sd.id} %`)
+    replacedBy = pickReplacementJob((replacementRows ?? []) as ReplacementRow[], sd.id)
+  }
+
   return (
     <div className="p-6 lg:p-8 max-w-5xl mx-auto">
       {/* Back link */}
@@ -365,6 +379,8 @@ export default async function FlowWorkspacePage({ params, searchParams }: { para
           />
         )}
       </div>
+
+      {replacedBy && <ReplacedByCard newJobId={replacedBy.id} stage={replacedBy.stage} status={replacedBy.status} />}
 
       {/* Purchase Origin — ITIN only, above the stepper */}
       {itinOrigin && <ItinOriginCard origin={itinOrigin} contractUrl={itinContractUrl} />}

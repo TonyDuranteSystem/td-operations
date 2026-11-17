@@ -327,6 +327,9 @@ describe('a press that stops half-way is finished by pressing again', () => {
     // what needs a person is in the notes, not only on screen
     expect(String(newJob()?.notes)).toContain('NOT FINISHED')
     expect(String(newJob()?.notes)).toContain('chat is down')
+    // the panel is on the OLD job (the new one has no company yet), so the note says where to go and gives its path
+    expect(String(newJob()?.notes)).toContain('OLD formation job')
+    expect(String(newJob()?.notes)).toContain(`/flows/${OLD_JOB}`)
 
     const second = await press()
     expect(second.finished).toBe(true)

@@ -24,8 +24,8 @@
  *      written into those notes too, not only shown in the pop-up.
  *
  * Money and leases are NEVER touched: a company with unpaid invoices or a lease in force is refused up front (the pop-up
- * says why). The button only lists a formation that belongs to THIS person: pressing it from a co-member's page cannot
- * replace the buyer's formation.
+ * says why). The press only works on a formation that belongs to THIS person (the buyer): a request that names another
+ * person cannot replace the buyer's formation.
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -104,8 +104,8 @@ export async function previewStartNewCompany(contactId: string, onlyDeliveryId?:
   ).data as Row | null
   if (!contact) return { contact: null, candidates: [] }
 
-  // The formation job THIS PERSON bought. A job that belongs to another person on the same company is not listed: pressing the
-  // button from a co-member's page must never replace the buyer's formation (the new job and the message would go to the wrong person).
+  // The formation job THIS PERSON bought. A job that belongs to another person on the same company is not listed: a request that
+  // names a co-member must never replace the buyer's formation (the new job and the message would go to the wrong person).
   let jobQuery = supabaseAdmin
     .from('service_deliveries')
     .select('id, stage, status, account_id, contact_id, source_offer_token, notes')
@@ -527,7 +527,7 @@ export async function startNewCompany(p: StartNewCompanyParams): Promise<StartNe
       }
       await appendNote('service_deliveries', newId, `${today()} — Opened because the state refused the name of ${old.companyName}. Old company closed and its formation job cancelled.${needsPerson}`, 'Old company closed and its formation job cancelled')
     } else {
-      await appendNote('service_deliveries', newId, `${today()} — NOT FINISHED: the old company ${old.companyName} is still open.${needsPerson} Open this formation job and press "State refused the name" again to finish.`)
+      await appendNote('service_deliveries', newId, `${today()} — NOT FINISHED: the old company ${old.companyName} is still open.${needsPerson} The panel is on the OLD formation job (${old.companyName}), not on this one: open it at /flows/${old.deliveryId} and press "State refused the name" again to finish.`)
     }
   } catch (e) {
     fail('note on the new job', e)

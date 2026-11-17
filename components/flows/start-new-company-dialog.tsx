@@ -9,8 +9,8 @@
  * Pressing the blue button is the staff member's approval of that message. The work is done by
  * app/api/crm/admin-actions/start-new-company (lib/operations/start-new-company.ts).
  *
- * The page is NOT refreshed after a press: the old job becomes cancelled, the workspace would no longer show the panel, and the
- * result (with the button to the new job) would disappear with it.
+ * This pop-up does not refresh the page after a press (the old job becomes cancelled and the panel would go with the result). The
+ * dashboard may still refresh it on its own; then the cancelled job's page shows a "Replaced by" card with the link to the new job.
  */
 import { useEffect, useState } from "react"
 import Link from "next/link"

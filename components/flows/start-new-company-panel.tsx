@@ -7,8 +7,13 @@
  * the step where the company is created). One button opens the pop-up (start-new-company-dialog.tsx), which lists everything that
  * happens and the client's message; pressing its blue button does the work (lib/operations/start-new-company.ts).
  *
- * After a press that went through, the panel is replaced by a green result card with a button straight to the NEW job, so nobody is
- * left on the cancelled one. A press that did not finish leaves the button here: pressing again finishes it.
+ * After a press that went through, the panel is replaced by a green result card with a button straight to the NEW job. A press that did
+ * not finish leaves the button here: pressing again finishes it.
+ *
+ * The dashboard refreshes pages by itself (a teammate's to-do, coming back to the window), and a refreshed page no longer shows this panel
+ * (the old job is cancelled). So the way to the new job does not live only here: the cancelled job's own page draws a "Replaced by" card
+ * (components/flows/replaced-by-card.tsx) from the new job's note. The wrappers below are plain divs on purpose: the step renderer puts a
+ * vertical gap between its children, and that gap would push the pop-up's full-screen layer down by a strip if it were a direct child.
  */
 
 import { useState } from 'react'
@@ -41,7 +46,7 @@ export function StartNewCompanyPanel({ serviceDeliveryId, contactId, contactName
   if (result?.finished) {
     // the pop-up stays mounted: it is still showing the step-by-step result until the person closes it
     return (
-      <>
+      <div>
       <div className="space-y-2 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800" data-testid="start-new-company-done">
         <div className="flex items-start gap-1.5 font-semibold">
           <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
@@ -73,12 +78,12 @@ export function StartNewCompanyPanel({ serviceDeliveryId, contactId, contactName
         )}
       </div>
       {dialog}
-      </>
+      </div>
     )
   }
 
   return (
-    <>
+    <div>
     <div className="space-y-3 rounded-xl border-2 border-amber-400 bg-white p-4" data-testid="start-new-company-panel">
       <h3 className="text-sm font-semibold text-zinc-900">The state refused the company name?</h3>
       <p className="text-sm text-zinc-600">
@@ -97,6 +102,6 @@ export function StartNewCompanyPanel({ serviceDeliveryId, contactId, contactName
       </div>
     </div>
     {dialog}
-    </>
+    </div>
   )
 }
