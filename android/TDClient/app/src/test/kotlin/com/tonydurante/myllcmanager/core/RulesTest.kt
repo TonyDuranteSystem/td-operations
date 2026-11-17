@@ -149,6 +149,15 @@ class RulesTest {
         assertFalse(PageRules.mayRunRequest(null, "portal.tonydurante.us"))
     }
 
+    // 16 Nov 2026: a phone set to larger text must not blow up the page or cut off the bar
+    @Test fun textSizeIsPinnedForThePageAndTheBar() {
+        assertEquals(100, TextSizeRules.PAGE_ZOOM_PERCENT)
+        assertEquals(1f, TextSizeRules.barFontScale(1f), 0f)
+        assertEquals(1f, TextSizeRules.barFontScale(1.3f), 0f)
+        assertEquals(1f, TextSizeRules.barFontScale(2f), 0f)
+        assertEquals(0.85f, TextSizeRules.barFontScale(0.85f), 0f) // smaller text is respected
+    }
+
     // finding 9: the sign-in page
     @Test fun loginPath() {
         assertTrue(PageRules.isLoginPath("/portal/login"))

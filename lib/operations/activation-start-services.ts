@@ -38,6 +38,7 @@
  */
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
+import { wasCancelledByCompanyReplacement } from "@/lib/operations/start-new-company-rules"
 import { createSD } from "@/lib/operations/service-delivery"
 import { reportSystemError } from "@/lib/system-errors"
 import { getStartAtActivationServiceTypes, getContactEligibleServiceTypes, getRepeatableServiceTypes, getMultiUnitServiceTypes, LLC_MANAGEMENT_BUNDLE_TYPES } from "@/lib/services"
@@ -322,13 +323,16 @@ export async function createStartAtActivationSDs(p: {
 
       // (a) already created from THIS offer — any status (a staff cancellation is respected). A retry that
       // finds some of the units makes only the missing ones.
-      const { data: byOffer, error: byOfferErr } = await supabase
+      // One exception: a job the "Start a new company" button cancelled belonged to the company that was REPLACED — it does
+      // not count, so the new company gets its own copy of what was bought with the formation.
+      const { data: byOfferAll, error: byOfferErr } = await supabase
         .from("service_deliveries")
-        .select("id, status")
+        .select("id, status, notes")
         .eq("service_type", serviceType)
         .eq("source_offer_token", p.offerToken)
         .limit(MAX_UNITS)
       if (byOfferErr) throw new Error(`offer lookup failed: ${byOfferErr.message}`)
+      const byOffer = byOfferAll?.filter((r) => !wasCancelledByCompanyReplacement(r.status as string | null, r.notes as string | null))
       const existingUnits = byOffer?.length ?? 0
       if (byOffer && existingUnits >= wantedUnits) {
         steps.push({ step: "start_at_activation", status: "existing", detail: `${serviceType} already created from this offer (${byOffer[0].status}): ${byOffer[0].id}` })
@@ -406,12 +410,13 @@ export async function createStartAtActivationSDs(p: {
         } catch (createErr) {
           // A concurrent run may have won the unique index — re-check (a): when this unit already exists the
           // other run made it and is making the rest.
-          const { data: winner } = await supabase
+          const { data: winnerAll } = await supabase
             .from("service_deliveries")
-            .select("id")
+            .select("id, status, notes")
             .eq("service_type", serviceType)
             .eq("source_offer_token", p.offerToken)
             .limit(MAX_UNITS)
+          const winner = winnerAll?.filter((r) => !wasCancelledByCompanyReplacement(r.status as string | null, r.notes as string | null))
           if (winner && winner.length >= unit) {
             steps.push({ step: "start_at_activation", status: "existing", detail: `${serviceType} already created (race-deduped): ${winner[0].id}` })
             raceDeduped = true

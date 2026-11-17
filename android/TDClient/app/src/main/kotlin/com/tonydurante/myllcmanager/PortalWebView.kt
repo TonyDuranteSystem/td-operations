@@ -27,6 +27,7 @@ import com.tonydurante.myllcmanager.core.FileRules
 import com.tonydurante.myllcmanager.core.LinkRules
 import com.tonydurante.myllcmanager.core.Msg
 import com.tonydurante.myllcmanager.core.SelectionRules
+import com.tonydurante.myllcmanager.core.TextSizeRules
 import org.json.JSONObject
 
 /**
@@ -50,6 +51,7 @@ object PortalWebView {
         s.setSupportMultipleWindows(true)
         s.javaScriptCanOpenWindowsAutomatically = true
         s.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+        s.textZoom = TextSizeRules.PAGE_ZOOM_PERCENT // the page is drawn for normal text: the phone's "Font size" must not blow it up
         s.userAgentString = s.userAgentString + " " + AppConfig.userAgentSuffix // the one thing that switches the portal into app mode
         vm.userAgent = s.userAgentString
 

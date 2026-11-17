@@ -27,6 +27,23 @@ export function isFormationDoneForAccounts(
 }
 
 /**
+ * Is this client's formation wizard already finished — judged from the companies they have AND from any formation still waiting
+ * for its company?
+ *
+ * A formation job with no company yet (a first formation, or a company reopened by "Start a new company" after the state refused
+ * its name) means the client genuinely still has this form to complete — whatever the companies they already have look like. Without
+ * this, a client whose only company is formed would have the freshly reopened wizard closed as "submitted" by the next daily run,
+ * before they had typed a word (found 2026-11-17 on the Novag case: one Active company with a formation date).
+ */
+export function isFormationWizardDone(p: {
+  accounts: { formation_date?: string | null }[]
+  hasFormationWaitingForItsCompany: boolean
+}): boolean {
+  if (p.hasFormationWaitingForItsCompany) return false
+  return isFormationDoneForAccounts(p.accounts)
+}
+
+/**
  * Should this reminder be suppressed — either because one went out recently, or
  * because we have already sent it enough times?
  *
