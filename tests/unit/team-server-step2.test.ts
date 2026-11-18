@@ -7,6 +7,7 @@ const { state } = vi.hoisted(() => ({
     answers: {} as Record<string, unknown>,
     authUser: null as null | { app_metadata?: Record<string, unknown>; user_metadata?: Record<string, unknown> },
     authUpdates: [] as Array<{ id: string; attrs: Record<string, unknown> }>,
+    authUpdateError: null as null | { message: string },
   },
 }))
 
@@ -36,7 +37,7 @@ vi.mock('@/lib/supabase-admin', () => ({
     auth: {
       admin: {
         getUserById: async () => ({ data: { user: state.authUser }, error: null }),
-        updateUserById: async (id: string, attrs: Record<string, unknown>) => { state.authUpdates.push({ id, attrs }); return { error: null } },
+        updateUserById: async (id: string, attrs: Record<string, unknown>) => { state.authUpdates.push({ id, attrs }); return { error: state.authUpdateError } },
         deleteUser: async () => ({ error: null }),
         createUser: async () => ({ data: { user: { id: 'u-new' } }, error: null }),
       },
@@ -58,6 +59,7 @@ beforeEach(() => {
   state.answers = {}
   state.authUser = teamAuth
   state.authUpdates = []
+  state.authUpdateError = null
 })
 
 describe('resetTeammatePassword', () => {
@@ -102,6 +104,24 @@ describe('updateTeammate', () => {
     await expect(updateTeammate('tm1', 'a1', { capabilities: { chat: true, documents: true } }, owner)).rejects.toThrow(/powers were not changed/)
     const updates = state.ops.filter(o => o.table === 'portal_team_members' && o.op === 'update')
     expect((updates[updates.length - 1].payload as { capabilities: unknown }).capabilities).toEqual({ chat: true })
+  })
+  it('the put-back is conditional on nobody having edited the person since, and says so when it could not happen', async () => {
+    before({ chat: true })
+    const answers = state.answers as Record<string, unknown>
+    let n = 0
+    Object.defineProperty(answers, 'portal_team_members:update', { get: () => (++n === 1 ? { data: [{ id: 'tm1' }], error: null } : { data: [], error: null }), configurable: true })
+    state.answers['portal_team_events:insert'] = { data: null, error: { message: 'down' } }
+    await expect(updateTeammate('tm1', 'a1', { capabilities: { chat: true, documents: true } }, owner)).rejects.toThrow(/could not put the old powers back/)
+    const updates = state.ops.filter(o => o.table === 'portal_team_members' && o.op === 'update')
+    expect(updates[1].filters.some(([c]) => c === 'updated_at')).toBe(true)
+    expect(updates[1].filters.find(([c]) => c === 'updated_at')![1]).toBe((updates[0].payload as { updated_at: string }).updated_at)
+  })
+  it('a put-back that fails with a database error is also reported, never swallowed', async () => {
+    before({ chat: true })
+    let n = 0
+    Object.defineProperty(state.answers as Record<string, unknown>, 'portal_team_members:update', { get: () => (++n === 1 ? { data: [{ id: 'tm1' }], error: null } : { data: null, error: { message: 'db down' } }), configurable: true })
+    state.answers['portal_team_events:insert'] = { data: null, error: { message: 'down' } }
+    await expect(updateTeammate('tm1', 'a1', { capabilities: { chat: true, documents: true } }, owner)).rejects.toThrow(/could not put the old powers back/)
   })
   it('removing a power never fails because of the record', async () => {
     before({ chat: true, documents: true })
@@ -148,7 +168,33 @@ describe('revokeTeammate (remove for good)', () => {
   })
 })
 
+describe('revokeTeammate: a failed sign-in block is reported', () => {
+  it('says so (and records it) instead of claiming everything is fine', async () => {
+    state.answers['portal_team_members:select'] = { data: { auth_user_id: 'u1' }, error: null }
+    state.authUpdateError = { message: 'auth down' }
+    await expect(revokeTeammate('tm1', 'a1', owner)).rejects.toThrow(/could not be fully blocked/)
+    const ev = state.ops.find(o => o.table === 'portal_team_events' && o.op === 'insert')!
+    expect(ev.payload).toMatchObject({ event: 'removed', detail: { ban_failed: true } })
+  })
+})
+
 describe('switch off / on through the real wiring', () => {
+  it('TD can take over an owner\'s switch-off (the real update is limited to rows an owner switched off)', async () => {
+    state.answers['portal_team_members:select'] = { data: { id: 'tm1', account_id: 'a1', auth_user_id: 'u1', status: 'revoked', switched_off_at: '2026-11-17T10:00:00Z', switched_off_by: 'owner', switched_off_reason: null }, error: null }
+    state.answers['portal_team_members:update'] = { data: [{ id: 'tm1' }], error: null }
+    await switchTeammateOff('tm1', 'a1', td, 'client asked us')
+    const upd = state.ops.find(o => o.op === 'update')!
+    expect(upd.payload).toMatchObject({ switched_off_by: 'td', switched_off_reason: 'client asked us' })
+    expect(upd.filters).toContainEqual(['switched_off_by', 'owner'])
+    expect(eventsWritten()).toEqual(['switched_off'])
+  })
+  it('a failing put-back (database error) is reported by the real wiring, not swallowed', async () => {
+    state.answers['portal_team_members:select'] = { data: { id: 'tm1', account_id: 'a1', auth_user_id: 'u1', status: 'revoked', switched_off_at: '2026-11-17T10:00:00Z', switched_off_by: 'owner', switched_off_reason: null }, error: null }
+    let n = 0
+    Object.defineProperty(state.answers as Record<string, unknown>, 'portal_team_members:update', { get: () => (++n === 1 ? { data: [{ id: 'tm1' }], error: null } : { data: null, error: { message: 'db down' } }), configurable: true })
+    state.answers['portal_team_events:insert'] = { data: null, error: { message: 'log down' } }
+    await expect(switchTeammateOn('tm1', 'a1', owner)).rejects.toThrow(/blocked from signing in/)
+  })
   it('an owner switches off: conditional on active, then bans, then records', async () => {
     state.answers['portal_team_members:select'] = { data: { id: 'tm1', account_id: 'a1', auth_user_id: 'u1', status: 'active', switched_off_at: null, switched_off_by: null, switched_off_reason: null }, error: null }
     state.answers['portal_team_members:update'] = { data: [{ id: 'tm1' }], error: null }

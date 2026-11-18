@@ -11,7 +11,7 @@ import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
 import { isAccountAdmin } from '@/lib/portal/team/account-admin'
 import { provisionTeammate, type TeammateInput, type ProvisionDeps } from '@/lib/portal/team/provision'
 import { normalizeCapabilities } from '@/lib/portal/team/capabilities'
-import { generatePassword } from '@/lib/portal/team/credentials'
+import { generatePassword, escapeLikePattern } from '@/lib/portal/team/credentials'
 import { recordTeamEvent, recordTeamEventBestEffort, powersGrew, type TeamActor } from '@/lib/portal/team/events'
 import {
   eventWriter,
@@ -52,7 +52,7 @@ export function provisionDeps(): ProvisionDeps {
       const { data: ci } = await sb()
         .from('portal_team_members')
         .select('id')
-        .ilike('username', usernameLower)
+        .ilike('username', escapeLikePattern(usernameLower))
         .maybeSingle()
       return !!ci
     },
@@ -165,7 +165,8 @@ export async function updateTeammate(
   if (before.status !== 'active') throw new Error('This team member is switched off or removed')
   const beforeCaps = normalizeCapabilities(before.capabilities)
 
-  const update: Record<string, unknown> = { updated_at: new Date().toISOString() }
+  const stamp = new Date().toISOString()
+  const update: Record<string, unknown> = { updated_at: stamp }
   const afterCaps = patch.capabilities !== undefined ? normalizeCapabilities(patch.capabilities) : undefined
   if (afterCaps !== undefined) update.capabilities = afterCaps
   if (patch.display_name !== undefined) update.display_name = patch.display_name
@@ -185,8 +186,18 @@ export async function updateTeammate(
       try {
         await recordTeamEvent(sb(), input)
       } catch {
-        // No record, no grant: put the old powers back.
-        await sb().from('portal_team_members').update({ capabilities: beforeCaps, updated_at: new Date().toISOString() }).eq('id', id).eq('account_id', accountId)
+        // No record, no grant: put the old powers back — but only if nobody edited the person since (our stamp is still on the row),
+        // and check that it worked (supabase reports a failure in its result; it does not throw).
+        const { data: restored, error: restoreErr } = await sb()
+          .from('portal_team_members')
+          .update({ capabilities: beforeCaps, updated_at: new Date().toISOString() })
+          .eq('id', id)
+          .eq('account_id', accountId)
+          .eq('updated_at', stamp)
+          .select('id')
+        if (restoreErr || !restored || restored.length === 0) {
+          throw new Error('We could not save the record of this change and could not put the old powers back. Please refresh the team list and check this person\'s powers.')
+        }
         throw new Error('We could not save the record of this change, so the powers were not changed. Please try again.')
       }
     } else {
@@ -224,9 +235,11 @@ export async function revokeTeammate(id: string, accountId: string, actor: TeamA
       .eq('account_id', accountId)
     if (oldErr) throw new Error(oldErr.message)
   }
-  // Ban the login so any existing session is cut, not just future resolves.
-  await supabaseAdmin.auth.admin.updateUserById(row.auth_user_id, { ban_duration: '876000h' })
-  await recordTeamEventBestEffort(sb(), { teamMemberId: id, accountId, event: 'removed', actor })
+  // Ban the login so any existing session is cut, not just future resolves. The result must be checked: the auth client reports
+  // a failure in its result instead of throwing, and a removed login that is not blocked can still call routes that only check "is a client".
+  const { error: banErr } = await supabaseAdmin.auth.admin.updateUserById(row.auth_user_id, { ban_duration: '876000h' })
+  await recordTeamEventBestEffort(sb(), { teamMemberId: id, accountId, event: 'removed', actor, detail: banErr ? { ban_failed: true } : undefined })
+  if (banErr) throw new Error('The person was removed from the company, but their sign-in could not be fully blocked. Please contact support.')
   return { ok: true }
 }
 
@@ -267,12 +280,26 @@ export function switchDeps(): SwitchDeps {
       if (error) throw new Error(error.message)
       return (data?.length ?? 0) > 0
     },
+    takeOver: async (id, accountId, reason, atIso) => {
+      const { data, error } = await sb()
+        .from('portal_team_members')
+        .update({ switched_off_by: 'td', switched_off_reason: reason || null, switched_off_at: atIso, updated_at: atIso })
+        .eq('id', id)
+        .eq('account_id', accountId)
+        .eq('status', 'revoked')
+        .eq('switched_off_by', 'owner')
+        .not('switched_off_at', 'is', null)
+        .select('id')
+      if (error) throw new Error(error.message)
+      return (data?.length ?? 0) > 0
+    },
     restoreOff: async (row) => {
-      await sb()
+      const { error } = await sb()
         .from('portal_team_members')
         .update({ status: 'revoked', switched_off_at: row.switched_off_at, switched_off_by: row.switched_off_by, switched_off_reason: row.switched_off_reason, updated_at: new Date().toISOString() })
         .eq('id', row.id)
         .eq('account_id', row.account_id)
+      if (error) throw new Error(error.message)
     },
     setBan: async (authUserId, banned) => {
       const { error } = await supabaseAdmin.auth.admin.updateUserById(authUserId, { ban_duration: banned ? '876000h' : 'none' })
@@ -332,7 +359,7 @@ export async function resolveAuthEmailForUsername(username: string): Promise<str
   const { data: row } = await sb()
     .from('portal_team_members')
     .select('auth_user_id, status')
-    .ilike('username', uname)
+    .ilike('username', escapeLikePattern(uname))
     .maybeSingle()
   if (!row || row.status !== 'active') return null
   const { data } = await supabaseAdmin.auth.admin.getUserById(row.auth_user_id)

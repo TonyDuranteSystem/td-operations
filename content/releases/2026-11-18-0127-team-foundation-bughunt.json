@@ -1,0 +1,6 @@
+{
+  "title": "Team members: TD can lock a switch-off, and failed steps now say so",
+  "tag": "behind-the-scenes",
+  "text": "If an owner switches a team member off, Tony Durante LLC can now lock it so the owner cannot switch them back on. Steps that undo a change after a failure now check that they worked and say so when they did not, instead of reporting success. Removing a person tells you if their sign-in could not be blocked. Usernames with an underscore no longer clash with other usernames. Nothing changes on screen yet.",
+  "points": []
+}

@@ -183,3 +183,26 @@ describe('provisionTeammate: adding is all-or-nothing (step 2)', () => {
     expect(isDuplicateError(null)).toBe(false)
   })
 })
+
+describe('usernames (bug-hunt fixes)', () => {
+  it('escapeLikePattern makes _ % and \\ literal, so a_b can never match a.b', async () => {
+    const { escapeLikePattern } = await import('@/lib/portal/team/credentials')
+    expect(escapeLikePattern('a_b')).toBe('a\\_b')
+    expect(escapeLikePattern('100%')).toBe('100\\%')
+    expect(escapeLikePattern('a\\b')).toBe('a\\\\b')
+    expect(escapeLikePattern('marco.rossi')).toBe('marco.rossi')
+  })
+  it('suggestUsername never hands back a random ending nobody checked', async () => {
+    const { suggestUsername } = await import('@/lib/portal/team/credentials')
+    const asked: string[] = []
+    // every plain candidate is taken; the random endings are free
+    const name = await suggestUsername('Marco Rossi', async (u) => { asked.push(u); return !/\d{4}$/.test(u) })
+    expect(/^marco\.rossi\d{4}$/.test(name)).toBe(true)
+    expect(asked).toContain(name)
+    await expect(suggestUsername('Marco Rossi', async () => true)).rejects.toThrow(/free username/)
+  })
+  it('a name with no Latin letters still gets a usable username', async () => {
+    const { suggestUsername } = await import('@/lib/portal/team/credentials')
+    expect(await suggestUsername('张伟', async () => false)).toBe('team')
+  })
+})

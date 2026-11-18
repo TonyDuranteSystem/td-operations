@@ -1,7 +1,7 @@
 -- Team Powers, step 2 — the invisible foundation (dev job e59dd470).
 -- (1) six new columns on portal_team_members: the notice the owner accepted, and who switched the person off.
 -- (2) portal_team_events: a record of every team action that nobody can edit or delete.
--- No status value is added on purpose: a switched-off person is status 'revoked' WITH switched_off_at set, so every
+-- No status value and no new CHECK constraint is added on purpose: a switched-off person is status 'revoked' WITH switched_off_at set, so every
 -- reader that only trusts status = 'active' (login, chat email, phone alerts) keeps refusing them with no code change.
 -- A person removed for good is 'revoked' with switched_off_at NULL and can never be switched back on.
 -- Safe to run twice. Undo: 20261117-2300-team-foundation.UNDO.sql.
@@ -15,13 +15,32 @@ ALTER TABLE portal_team_members
   ADD COLUMN IF NOT EXISTS switched_off_at     timestamptz,
   ADD COLUMN IF NOT EXISTS switched_off_reason text;
 
--- A switch-off is all three fields together or none. A SHAPE check (not a value list), so nothing else has to register it.
+-- A switch-off is all three fields together or none. Kept as a TRIGGER, not a CHECK: a new constraint on production makes the
+-- daily database-rules monitor raise a "production changed" job until its snapshot is regenerated, and on the shared sandbox it
+-- touches every session's checks. A trigger has neither effect. (An earlier draft used a CHECK; drop it if it is there.)
 ALTER TABLE portal_team_members DROP CONSTRAINT IF EXISTS ptm_switched_off_shape;
-ALTER TABLE portal_team_members
-  ADD CONSTRAINT ptm_switched_off_shape CHECK (
-    (switched_off_at IS NULL AND switched_off_by IS NULL AND switched_off_reason IS NULL)
-    OR (switched_off_at IS NOT NULL AND switched_off_by IS NOT NULL AND switched_off_by ~ '^(owner|td)$')
-  );
+
+CREATE OR REPLACE FUNCTION public.trg_portal_team_members_switch_shape() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF NEW.switched_off_at IS NULL THEN
+    IF NEW.switched_off_by IS NOT NULL OR NEW.switched_off_reason IS NOT NULL THEN
+      RAISE EXCEPTION 'portal_team_members: a switch-off reason or owner without a switch-off time';
+    END IF;
+  ELSE
+    IF NEW.switched_off_by IS NULL OR NEW.switched_off_by NOT IN ('owner', 'td') THEN
+      RAISE EXCEPTION 'portal_team_members: a switch-off must say who did it (owner or td), got %', NEW.switched_off_by;
+    END IF;
+  END IF;
+  RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS trg_portal_team_members_switch_shape ON portal_team_members;
+CREATE TRIGGER trg_portal_team_members_switch_shape
+  BEFORE INSERT OR UPDATE ON portal_team_members
+  FOR EACH ROW EXECUTE FUNCTION public.trg_portal_team_members_switch_shape();
+
+REVOKE ALL ON FUNCTION public.trg_portal_team_members_switch_shape() FROM PUBLIC, anon, authenticated;
 
 COMMENT ON COLUMN portal_team_members.switched_off_at IS
   'Set = the person is SWITCHED OFF (status revoked, login banned) and may be switched back on. NULL on a revoked row = removed for good.';

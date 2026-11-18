@@ -68,6 +68,8 @@ export interface SwitchDeps {
    */
   markOn(id: string, accountId: string, actorKind: SwitchedOffBy): Promise<boolean>
   /** Put the exact earlier switch-off back (used when the record of a switch-on cannot be saved). */
+  /** TD locks a person an OWNER switched off (so the owner can no longer switch them on). Returns whether it changed a row. */
+  takeOver(id: string, accountId: string, reason: string, atIso: string): Promise<boolean>
   restoreOff(row: SwitchRow): Promise<void>
   setBan(authUserId: string, banned: boolean): Promise<void>
   record: TeamEventDbWriter
@@ -105,7 +107,24 @@ export async function switchOffTeammate(
 
   const row = await deps.getRow(id, accountId)
   if (!row) throw new TeamSwitchError('not_found', 'Team member not found')
-  if (isSwitchedOff(row)) throw new TeamSwitchError('already_off', 'This person is already switched off')
+  if (isSwitchedOff(row)) {
+    // TD may LOCK a person an owner switched off, so the owner can no longer switch them back on. Anything else is "already off".
+    if (by === 'td' && row.switched_off_by === 'owner') {
+      const at = (deps.now?.() ?? new Date()).toISOString()
+      const taken = await deps.takeOver(id, accountId, reason, at)
+      if (!taken) throw new TeamSwitchError('conflict', 'This person was changed by someone else a moment ago. Refresh and try again.')
+      await deps.setBan(row.auth_user_id, true).catch(() => undefined) // already blocked; make sure
+      await deps.record.bestEffort({
+        teamMemberId: id,
+        accountId,
+        event: 'switched_off',
+        actor,
+        detail: { reason, took_over_from: 'owner', previous_reason: row.switched_off_reason },
+      })
+      return { ok: true }
+    }
+    throw new TeamSwitchError('already_off', 'This person is already switched off')
+  }
   if (row.status !== 'active') throw new TeamSwitchError('removed', 'This person was removed and cannot be switched off')
 
   const at = (deps.now?.() ?? new Date()).toISOString()
@@ -170,10 +189,15 @@ export async function switchOnTeammate(
       detail: { previously_switched_off_by: row.switched_off_by, previous_reason: row.switched_off_reason },
     })
   } catch {
-    // No record, no grant: put them back OFF exactly as they were.
-    await deps.restoreOff(row).catch(() => undefined)
+    // No record, no grant: block the sign-in FIRST (so whatever happens next they stay locked out), then put the status back.
     await deps.setBan(row.auth_user_id, true).catch(() => undefined)
-    throw new TeamSwitchError('log_failed', 'We could not save the record of this change, so the person stays switched off. Please try again.')
+    const restored = await deps.restoreOff(row).then(() => true, () => false)
+    throw new TeamSwitchError(
+      'log_failed',
+      restored
+        ? 'We could not save the record of this change, so the person stays switched off. Please try again.'
+        : 'We could not save the record of this change. The person is blocked from signing in, but their status could not be put back — please contact support.',
+    )
   }
   return { ok: true }
 }

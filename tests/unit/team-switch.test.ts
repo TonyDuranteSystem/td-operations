@@ -18,7 +18,7 @@ const offBy = (by: 'owner' | 'td'): SwitchRow => ({ ...active, status: 'revoked'
 const removed: SwitchRow = { ...active, status: 'revoked' }
 
 /** In-memory fake of the database + login, with switches to make each step fail. */
-function world(initial: SwitchRow | null, opts: { banFails?: boolean; strictLogFails?: boolean; bestLogFails?: boolean; markOffRace?: boolean; markOnRace?: boolean } = {}) {
+function world(initial: SwitchRow | null, opts: { banFails?: boolean; strictLogFails?: boolean; bestLogFails?: boolean; markOffRace?: boolean; markOnRace?: boolean; takeOverRace?: boolean; restoreFails?: boolean } = {}) {
   const state = { row: initial ? { ...initial } : null, banned: initial ? initial.status !== 'active' : false, events: [] as TeamEventInput[], order: [] as string[] }
   const deps: SwitchDeps = {
     getRow: async () => (state.row ? { ...state.row } : null),
@@ -36,7 +36,14 @@ function world(initial: SwitchRow | null, opts: { banFails?: boolean; strictLogF
       state.row = { ...r, status: 'active', switched_off_at: null, switched_off_by: null, switched_off_reason: null }
       return true
     },
-    restoreOff: async (row) => { state.order.push('restoreOff'); state.row = { ...row } },
+    takeOver: async (_i, _a, reason, at) => {
+      state.order.push('takeOver')
+      const r = state.row
+      if (opts.takeOverRace || !r || r.status !== 'revoked' || r.switched_off_by !== 'owner') return false
+      state.row = { ...r, switched_off_by: 'td', switched_off_reason: reason || null, switched_off_at: at }
+      return true
+    },
+    restoreOff: async (row) => { state.order.push('restoreOff'); if (opts.restoreFails) throw new Error('db down'); state.row = { ...row } },
     setBan: async (_u, banned) => {
       state.order.push(banned ? 'ban' : 'unban')
       if (opts.banFails) throw new Error('auth down')
@@ -105,6 +112,30 @@ describe('switchOffTeammate', () => {
   })
 })
 
+describe('TD can lock someone an owner switched off', () => {
+  it('takes over: the stamp now says TD, the reason is recorded, and the owner can no longer switch them on', async () => {
+    const w = world(offBy('owner'))
+    await switchOffTeammate('tm1', 'a1', td, 'investigation', w.deps)
+    expect(w.state.row).toMatchObject({ status: 'revoked', switched_off_by: 'td', switched_off_reason: 'investigation' })
+    expect(w.state.events[0]).toMatchObject({ event: 'switched_off', detail: { reason: 'investigation', took_over_from: 'owner' } })
+    expect(await code(switchOnTeammate('tm1', 'a1', owner, w.deps))).toBe('td_locked')
+    expect(await code(switchOnTeammate('tm1', 'a1', td, w.deps))).toBe('ok')
+  })
+  it('TD still needs a reason to take over', async () => {
+    const w = world(offBy('owner'))
+    expect(await code(switchOffTeammate('tm1', 'a1', td, ' ', w.deps))).toBe('reason_required')
+    expect(w.state.row?.switched_off_by).toBe('owner')
+  })
+  it('an owner cannot "switch off" someone TD already switched off, and TD cannot do it twice', async () => {
+    expect(await code(switchOffTeammate('tm1', 'a1', owner, '', world(offBy('td')).deps))).toBe('already_off')
+    expect(await code(switchOffTeammate('tm1', 'a1', td, 'again', world(offBy('td')).deps))).toBe('already_off')
+    expect(await code(switchOffTeammate('tm1', 'a1', owner, '', world(offBy('owner')).deps))).toBe('already_off')
+  })
+  it('a concurrent change while taking over is reported', async () => {
+    expect(await code(switchOffTeammate('tm1', 'a1', td, 'x', world(offBy('owner'), { takeOverRace: true }).deps))).toBe('conflict')
+  })
+})
+
 describe('switchOnTeammate', () => {
   it('an owner switches back on someone THEY switched off: unban, status, strict record', async () => {
     const w = world(offBy('owner'))
@@ -151,6 +182,15 @@ describe('switchOnTeammate', () => {
     expect(await code(switchOnTeammate('tm1', 'a1', owner, w.deps))).toBe('log_failed')
     expect(w.state.row).toEqual(before)
     expect(w.state.banned).toBe(true)
-    expect(w.state.order).toEqual(['unban', 'markOn', 'log-strict', 'restoreOff', 'ban'])
+    // blocks the sign-in FIRST, then puts the status back
+    expect(w.state.order).toEqual(['unban', 'markOn', 'log-strict', 'ban', 'restoreOff'])
+  })
+  it('if even the put-back fails, the person is still BLOCKED and the message says so (never "all fine")', async () => {
+    const w = world(offBy('owner'), { strictLogFails: true, restoreFails: true })
+    let msg = ''
+    try { await switchOnTeammate('tm1', 'a1', owner, w.deps) } catch (e) { msg = (e as Error).message }
+    expect(msg).toMatch(/blocked from signing in/)
+    expect(msg).toMatch(/contact support/)
+    expect(w.state.banned).toBe(true)
   })
 })

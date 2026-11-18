@@ -104,11 +104,16 @@ describe('the migration and this code agree', () => {
     const table = sql.slice(sql.indexOf('CREATE TABLE IF NOT EXISTS portal_team_events'), sql.indexOf(');', sql.indexOf('CREATE TABLE IF NOT EXISTS portal_team_events')))
     expect(table).not.toMatch(/REFERENCES/i)
   })
-  it('adds no value-list CHECK and no new status value (keeps the shared sandbox checks untouched)', () => {
+  it('adds NO new CHECK constraint (it would trip the daily database-rules monitor) and no new status value', () => {
     expect(sql).not.toMatch(/=\s*ANY\s*\(\s*ARRAY/i)
     expect(sql).not.toMatch(/chk_ptm_status/)
-    expect(sql).toMatch(/switched_off_by ~ '\^\(owner\|td\)\$'/)
-    // a NULL slips past a regex test, so the stamp must also demand "who" explicitly
-    expect(sql).toMatch(/switched_off_at IS NOT NULL AND switched_off_by IS NOT NULL AND switched_off_by ~/)
+    expect(sql).not.toMatch(/ADD CONSTRAINT/i)
+    // an earlier draft's CHECK is dropped if it is there
+    expect(sql).toMatch(/DROP CONSTRAINT IF EXISTS ptm_switched_off_shape/)
+  })
+  it('keeps the switch-off fields together with a trigger: a stamp needs a "who" (owner or td), and no "who" or reason without a stamp', () => {
+    expect(sql).toMatch(/BEFORE INSERT OR UPDATE ON portal_team_members/)
+    expect(sql).toMatch(/NEW\.switched_off_by IS NULL OR NEW\.switched_off_by NOT IN \('owner', 'td'\)/)
+    expect(sql).toMatch(/NEW\.switched_off_by IS NOT NULL OR NEW\.switched_off_reason IS NOT NULL/)
   })
 })

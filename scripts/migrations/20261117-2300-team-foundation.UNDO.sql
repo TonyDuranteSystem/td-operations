@@ -3,6 +3,8 @@
 DROP TABLE IF EXISTS portal_team_events;
 DROP FUNCTION IF EXISTS public.trg_portal_team_events_guard();
 DROP FUNCTION IF EXISTS public.trg_portal_team_events_no_truncate();
+DROP TRIGGER IF EXISTS trg_portal_team_members_switch_shape ON portal_team_members;
+DROP FUNCTION IF EXISTS public.trg_portal_team_members_switch_shape();
 ALTER TABLE portal_team_members DROP CONSTRAINT IF EXISTS ptm_switched_off_shape;
 ALTER TABLE portal_team_members
   DROP COLUMN IF EXISTS notice_version,
