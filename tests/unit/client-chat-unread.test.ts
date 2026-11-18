@@ -27,6 +27,19 @@ describe('summarizeClientUnread', () => {
     expect(s.byEntity.C).toBeUndefined()
   })
 
+  // dev job 58cb7a82: the HL owner who is also in Redstone has a separate personal chat, so the solo company no longer hosts private messages.
+  it('with a separate personal chat the private message is listed under Personal only, and counts once', () => {
+    const hl: PortalChatEntity = { id: 'HL', kind: 'company', label: 'HL', accountId: 'HL', isShared: false, includePersonalNull: false }
+    const s = summarizeClientUnread([
+      { account_id: null, contact_id: ME, topic: null },
+      { account_id: 'HL', contact_id: ME, topic: null },
+    ], [hl, company('RS', false), personal], ME)
+    expect(s.total).toBe(2)
+    expect(s.byEntity.personal).toEqual({ '': 1 })
+    expect(s.byEntity.HL).toEqual({ '': 1 })
+    expect(s.byEntity.RS).toBeUndefined()
+  })
+
   it('ignores rows no view can show (never a stuck, un-clearable badge)', () => {
     const s = summarizeClientUnread([
       { account_id: 'NOT-MINE', contact_id: ME, topic: null },
