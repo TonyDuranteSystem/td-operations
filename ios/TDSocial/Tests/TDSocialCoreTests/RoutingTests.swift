@@ -41,6 +41,32 @@ final class RoutingTests: XCTestCase {
         XCTAssertEqual(AlertRouting.tab(url: "/talk", thread: "whatsapp:1"), "talk")
     }
 
+    // A TD Talk alert is sent as the CRM's Team Chat address; it must open the TD Talk tab (Antonio, 2026-11-17: the tap opened the app but nothing else).
+    func testATeamChatLinkOpensTheTalkTab() {
+        XCTAssertEqual(AlertRouting.tab(url: "/team-chat?thread=abc&message=m1", thread: "team-dm-abc"), "talk")
+        XCTAssertEqual(AlertRouting.tab(url: "/team-chat", thread: nil), "talk")
+        XCTAssertEqual(AlertRouting.tab(url: "/TEAM-CHAT?thread=abc", thread: nil), "talk")
+        XCTAssertEqual(AlertRouting.tab(url: "/team-chat/x?thread=abc", thread: nil), "talk")
+        // a longer word is not the Team Chat page
+        XCTAssertNil(AlertRouting.tab(url: "/team-chatter?thread=abc", thread: nil))
+    }
+
+    // ...and the page that loads is TD Talk's, with the whole query kept (the message id included), never the CRM's Team Chat page inside the Talk tab.
+    func testATeamChatLinkLoadsTheTalkPage() {
+        XCTAssertEqual(AlertRouting.pagePath(url: "/team-chat?thread=abc&root=r1&message=m1"), "/talk?thread=abc&root=r1&message=m1")
+        XCTAssertEqual(AlertRouting.pagePath(url: "/team-chat"), "/talk")
+        XCTAssertEqual(AlertRouting.pagePath(url: "/team-chat#top"), "/talk#top")
+        XCTAssertEqual(AlertRouting.pagePath(url: "/team-chat/old/path?thread=abc"), "/talk?thread=abc")
+        // every other safe link is loaded as it is
+        XCTAssertEqual(AlertRouting.pagePath(url: "/talk?thread=abc&message=m1"), "/talk?thread=abc&message=m1")
+        XCTAssertEqual(AlertRouting.pagePath(url: "/portal-chats?account=1"), "/portal-chats?account=1")
+        XCTAssertEqual(AlertRouting.pagePath(url: "/team-chatter?x=1"), "/team-chatter?x=1")
+        // an unsafe link is never loaded
+        XCTAssertNil(AlertRouting.pagePath(url: "https://evil.example/team-chat"))
+        XCTAssertNil(AlertRouting.pagePath(url: "//evil.example/team-chat"))
+        XCTAssertNil(AlertRouting.pagePath(url: nil))
+    }
+
     func testAnUnsafeLinkIsNeverFollowed() {
         for bad in ["https://evil.example/x", "//evil.example", "javascript:alert(1)", "/a b", "/a\\b", "talk", "", "/x\u{0007}y"] {
             XCTAssertNil(AlertRouting.safeRelativePath(bad), bad)

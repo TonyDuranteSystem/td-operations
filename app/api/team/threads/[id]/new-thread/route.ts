@@ -6,6 +6,7 @@ import { sendPushToAdminUsers } from '@/lib/portal/web-push'
 import { sendPushToStaffExcept } from '@/lib/team/notify'
 import { channelNotifiesStaff } from '@/lib/team/channel-notify'
 import { NextRequest, NextResponse } from 'next/server'
+import { teamChatMessageUrl } from '@/lib/talk/links'
 
 /**
  * POST /api/team/threads/[id]/new-thread
@@ -109,7 +110,7 @@ export async function POST(
       await sendPushToStaffExcept(user.id, {
         title: `${displayName} opened · #${channelLabel}`,
         body: title.slice(0, 120),
-        url: `/team-chat?thread=${threadId}&root=${msg.id}`,
+        url: teamChatMessageUrl({ threadId, rootId: msg.id as string, messageId: msg.id as string }),
         tag: `team-thread-${msg.id}`,
         alertKind: 'talk_room_message', // new threads are only made in channels (checked above)
       })
@@ -117,7 +118,7 @@ export async function POST(
       await sendPushToAdminUsers(mentions.userIds, {
         title: `${displayName} started a thread`,
         body: title.slice(0, 120),
-        url: `/team-chat?thread=${threadId}&root=${msg.id}`,
+        url: teamChatMessageUrl({ threadId, rootId: msg.id as string, messageId: msg.id as string }),
         tag: `team-thread-${msg.id}`,
         alertKind: 'talk_room_message', // new threads are only made in channels (checked above)
       })

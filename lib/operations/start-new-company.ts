@@ -1,5 +1,5 @@
 /**
- * "Start a new company" (dev job bf9886a3) — the Contact-page button for a company whose NAME the state refused after the
+ * "Start a new company" (dev job bf9886a3) — the button, in the Company Formation workspace, for a company whose NAME the state refused after the
  * company already exists. Antonio's design (16 Nov 2026, Novag LLC / Wyoming): no name amendment; the client opens a NEW
  * company on the SAME paid offer.
  *
@@ -15,7 +15,9 @@
  *   3. closes the old company's loose ends: its other open services, pending deadlines and open to-dos are cancelled and the
  *      company is set to Closed with its portal off, exactly as the closure clean-up does it;
  *   4. sends the client the message the staff member saw (and could edit) in the pop-up — only when steps 2 and 3 worked, so a
- *      client is never told about a company that is not ready. Marked ("Client message sent") so it goes out once;
+ *      client is never told about a company that is not ready. The message is CLAIMED on the new job before it is sent
+ *      ("Client message sending", a guarded write — only one press can hold it) and marked ("Client message sent") after, so it
+ *      goes out once even when two presses overlap; a press that finds another one sending is refused in plain words;
  *   5. cancels the old formation job — the commit point. From here the client's wizard submit finds the NEW job, because a
  *      cancelled formation is ignored (lib/portal/formation-resubmit-gate.ts);
  *   6. best effort, after the commit point: the people's portal level is recomputed (a person with no other company keeps the
@@ -24,8 +26,8 @@
  *      written into those notes too, not only shown in the pop-up.
  *
  * Money and leases are NEVER touched: a company with unpaid invoices or a lease in force is refused up front (the pop-up
- * says why). The button only lists a formation that belongs to THIS person: pressing it from a co-member's page cannot
- * replace the buyer's formation.
+ * says why). The press only works on a formation that belongs to THIS person (the buyer): a request that names another
+ * person cannot replace the buyer's formation.
  */
 
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -38,11 +40,15 @@ import { buildPortalChatLink } from '@/lib/portal/chat-link'
 import { classifyOpenPayments, type OpenPaymentRow } from '@/lib/closure/closing-payments'
 import {
   COMPANY_REPLACED_REASON,
+  MESSAGE_BEING_SENT_TEXT,
   MESSAGE_SENT_MARKER,
   WIZARD_REOPENED_MARKER,
   buildReplacementMessage,
+  clientMessageState,
   describeWaitingPart,
   isReplacementOf,
+  messageClaimNote,
+  messageFailedNote,
   namesFromReopenedNote,
   newJobFailureText,
   replaceBlockers,
@@ -92,26 +98,29 @@ function must<T>(res: { data: T | null; error: { message: string } | null; count
   return { data: res.data, count: res.count ?? null }
 }
 
-/** Everything the pop-up shows. THROWS on a read error (the caller answers 500): never guess about a company that is about to be closed. */
-export async function previewStartNewCompany(contactId: string): Promise<StartNewCompanyPreview> {
+/**
+ * Everything the pop-up shows. THROWS on a read error (the caller answers 500): never guess about a company that is about to be closed.
+ * `onlyDeliveryId` (the formation workspace's panel) narrows the answer to that ONE job, so the pop-up opened from a job's own page is
+ * always about that job; the press itself re-reads without it and finds the job by id, so the two can never disagree.
+ */
+export async function previewStartNewCompany(contactId: string, onlyDeliveryId?: string): Promise<StartNewCompanyPreview> {
   const contact = must(
     await supabaseAdmin.from('contacts').select('id, full_name, first_name, language').eq('id', contactId).maybeSingle(),
     'the person',
   ).data as Row | null
   if (!contact) return { contact: null, candidates: [] }
 
-  // The formation job THIS PERSON bought. A job that belongs to another person on the same company is not listed: pressing the
-  // button from a co-member's page must never replace the buyer's formation (the new job and the message would go to the wrong person).
-  const jobs = (must(
-    await supabaseAdmin
-      .from('service_deliveries')
-      .select('id, stage, status, account_id, contact_id, source_offer_token, notes')
-      .eq('contact_id', contactId)
-      .eq('service_type', 'Company Formation')
-      .eq('status', 'active')
-      .not('account_id', 'is', null),
-    'the formation jobs',
-  ).data ?? []) as Row[]
+  // The formation job THIS PERSON bought. A job that belongs to another person on the same company is not listed: a request that
+  // names a co-member must never replace the buyer's formation (the new job and the message would go to the wrong person).
+  let jobQuery = supabaseAdmin
+    .from('service_deliveries')
+    .select('id, stage, status, account_id, contact_id, source_offer_token, notes')
+    .eq('contact_id', contactId)
+    .eq('service_type', 'Company Formation')
+    .eq('status', 'active')
+    .not('account_id', 'is', null)
+  if (onlyDeliveryId) jobQuery = jobQuery.eq('id', onlyDeliveryId)
+  const jobs = (must(await jobQuery, 'the formation jobs').data ?? []) as Row[]
 
   const candidates: ReplaceCandidate[] = []
   for (const job of jobs) {
@@ -225,11 +234,35 @@ async function appendNote(table: 'accounts' | 'contacts' | 'service_deliveries',
   if (error) throw new Error(error.message)
   const before = ((data as Row | null)?.notes as string | null) ?? null
   if (onlyIfMissing && (before ?? '').includes(onlyIfMissing)) return
+  if (!(await writeNoteIfUnchanged(table, id, before, line))) throw new Error('the notes changed at the same moment — try again')
+}
+
+/** Appends `line` to the notes ONLY if they are still exactly what was read (`before`). False when they changed in between — nothing was written. */
+async function writeNoteIfUnchanged(table: 'accounts' | 'contacts' | 'service_deliveries', id: string, before: string | null, line: string): Promise<boolean> {
   const next = before ? `${before}\n${line}` : line
   const q = supabaseAdmin.from(table).update({ notes: next, updated_at: new Date().toISOString() }).eq('id', id)
-  const { data: written, error: uErr } = await (before === null ? q.is('notes', null) : q.eq('notes', before)).select('id')
-  if (uErr) throw new Error(uErr.message)
-  if (!written?.length) throw new Error('the notes changed at the same moment — try again')
+  const { data: written, error } = await (before === null ? q.is('notes', null) : q.eq('notes', before)).select('id')
+  if (error) throw new Error(error.message)
+  return Boolean(written?.length)
+}
+
+/**
+ * Takes the right to send the client's message. Reads the new job's notes FRESH (never the copy read when the press started — a
+ * second press may have claimed or sent since) and writes the claim line guarded on what it read, so of two presses that look at
+ * the same moment only one write lands; the other looks again and finds the first one's claim. 'claimed' = this press may send,
+ * 'sent' = it already went out, 'sending' = another press holds the claim right now.
+ */
+async function claimClientMessage(newId: string): Promise<'claimed' | 'sent' | 'sending'> {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const { data, error } = await supabaseAdmin.from('service_deliveries').select('notes').eq('id', newId).maybeSingle()
+    if (error) throw new Error(error.message)
+    const before = ((data as Row | null)?.notes as string | null) ?? null
+    const state = clientMessageState(before, new Date())
+    if (state !== 'open') return state
+    if (await writeNoteIfUnchanged('service_deliveries', newId, before, messageClaimNote(today(), new Date().toISOString()))) return 'claimed'
+    // The notes changed between the read and the write — look again: it may be the other press's claim.
+  }
+  throw new Error('the notes kept changing at the same moment — wait a few seconds and press again')
 }
 
 type WizardRow = { id: string; data: Record<string, unknown> | null; status: string; updated_at: string | null }
@@ -456,19 +489,40 @@ export async function startNewCompany(p: StartNewCompanyParams): Promise<StartNe
   } else if (blocking > 0) {
     steps.push({ step: 'message to the client', status: 'warning', detail: 'Not sent yet — a step above failed. Press the button again once it is fixed; the client is told only when everything is ready.' })
   } else {
+    // Take the right to send FIRST (found on production, 2026-11-17: two presses 2-3 s apart each sent it, because the "sent" mark
+    // is written only after the send). A press that finds another one sending stops here: it does not send, and it does not cancel
+    // the old job — if the other press fails, the old job must still be there for the next press to finish.
+    let claim: 'claimed' | 'sent' | 'sending' | null = null
     try {
-      const notices = await sendClientMessage({ contactId: p.contactId, message, actorUserId: p.actorUserId, wizardLeadId: leadId, wizardOfferId: offerId })
-      messageSent = true
-      steps.push({ step: 'message to the client', status: 'ok', detail: 'Sent in the portal chat, with a notification.' })
-      // The message and the way into the wizard are in; only the extra alerts failed — say so, do not hold the press back.
-      for (const notice of notices) warn('client notification', `${notice}. The message is in the portal chat and the wizard notification was saved.`)
-      try {
-        await appendNote('service_deliveries', newId, `${today()} — ${MESSAGE_SENT_MARKER} (${contact.language ?? 'language not on file'}).`)
-      } catch (e) {
-        fail('note that the message was sent (a second press would send it again)', e)
-      }
+      claim = await claimClientMessage(newId)
     } catch (e) {
       failBlocking('message to the client', e)
+    }
+    if (claim === 'sending') return refuse(MESSAGE_BEING_SENT_TEXT)
+    if (claim === 'sent') {
+      messageSent = true
+      steps.push({ step: 'message to the client', status: 'skipped', detail: 'Already sent by an earlier press.' })
+    } else if (claim === 'claimed') {
+      try {
+        const notices = await sendClientMessage({ contactId: p.contactId, message, actorUserId: p.actorUserId, wizardLeadId: leadId, wizardOfferId: offerId })
+        messageSent = true
+        steps.push({ step: 'message to the client', status: 'ok', detail: 'Sent in the portal chat, with a notification.' })
+        // The message and the way into the wizard are in; only the extra alerts failed — say so, do not hold the press back.
+        for (const notice of notices) warn('client notification', `${notice}. The message is in the portal chat and the wizard notification was saved.`)
+        try {
+          await appendNote('service_deliveries', newId, `${today()} — ${MESSAGE_SENT_MARKER} (${contact.language ?? 'language not on file'}).`)
+        } catch (e) {
+          fail('note that the message was sent (a second press would send it again)', e)
+        }
+      } catch (e) {
+        failBlocking('message to the client', e)
+        // Let the claim go, so the next press can send at once instead of waiting for the claim to run out.
+        try {
+          await appendNote('service_deliveries', newId, messageFailedNote(today(), new Date().toISOString(), e instanceof Error ? e.message : String(e)))
+        } catch {
+          /* the claim stops counting by itself after two minutes */
+        }
+      }
     }
   }
 
@@ -524,7 +578,7 @@ export async function startNewCompany(p: StartNewCompanyParams): Promise<StartNe
       }
       await appendNote('service_deliveries', newId, `${today()} — Opened because the state refused the name of ${old.companyName}. Old company closed and its formation job cancelled.${needsPerson}`, 'Old company closed and its formation job cancelled')
     } else {
-      await appendNote('service_deliveries', newId, `${today()} — NOT FINISHED: the old company ${old.companyName} is still open.${needsPerson} Press "Start a new company" on the contact page again to finish.`)
+      await appendNote('service_deliveries', newId, `${today()} — NOT FINISHED: the old company ${old.companyName} is still open.${needsPerson} The panel is on the OLD formation job (${old.companyName}), not on this one: open it at /flows/${old.deliveryId} and press "State refused the name" again to finish.`)
     }
   } catch (e) {
     fail('note on the new job', e)

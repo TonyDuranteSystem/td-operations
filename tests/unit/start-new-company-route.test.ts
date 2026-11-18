@@ -84,7 +84,19 @@ describe('start-new-company route', () => {
     h.start.mockRejectedValue(new Error('boom'))
     const res = await post({ contact_id: CONTACT, replace_delivery_id: JOB, message: 'x' })
     expect(res.status).toBe(500)
-    expect((await res.json()).error).toContain('Check the contact page before pressing again')
+    expect((await res.json()).error).toContain('Check the formation page before pressing again')
+  })
+
+  it('passes the formation workspace\'s own job to the preview, and refuses a job id that is not an id', async () => {
+    h.preview.mockResolvedValue({ contact: null, candidates: [] })
+    expect((await get(`?contact_id=${CONTACT}&delivery_id=${JOB}`)).status).toBe(200)
+    expect(h.preview).toHaveBeenLastCalledWith(CONTACT, JOB)
+    expect((await get(`?contact_id=${CONTACT}`)).status).toBe(200)
+    expect(h.preview).toHaveBeenLastCalledWith(CONTACT, undefined)
+    h.preview.mockClear()
+    expect((await get(`?contact_id=${CONTACT}&delivery_id=nope`)).status).toBe(400)
+    expect((await get(`?contact_id=${CONTACT}&delivery_id=`)).status).toBe(400)
+    expect(h.preview).not.toHaveBeenCalled()
   })
 
   it('answers the preview, and 500 when it cannot be read', async () => {

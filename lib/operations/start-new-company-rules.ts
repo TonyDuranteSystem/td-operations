@@ -3,7 +3,7 @@
  *
  * The case: the state accepted a new company's filing, the company already exists (Articles, EIN request), and then the
  * state refused the NAME (Novag LLC, Wyoming, 13 Nov 2026 — "not distinguishable from LLC Novag LLC"). Antonio does not
- * amend the name; the client opens a NEW company on the SAME paid offer. One button on the Contact page does it
+ * amend the name; the client opens a NEW company on the SAME paid offer. One panel in the formation job's workspace does it
  * (lib/operations/start-new-company.ts); this file holds the decisions that need no I/O so they can be tested alone.
  */
 
@@ -185,3 +185,46 @@ export function namesFromReopenedNote(notes: string | null | undefined): string[
   if (!m) return []
   return m[1].replace(/\.$/, '').split(' / ').map((n) => n.trim()).filter(Boolean)
 }
+
+/**
+ * The client's message is CLAIMED before it is sent (found on production, 2026-11-17: a second press 2-3 seconds after the first
+ * sent the client the message twice — the "sent" marker is written only after the send, so the second press saw no marker).
+ * The claim line goes onto the new job's notes with a guarded write (a compare-and-set on the notes that were read), so of two
+ * presses only one can hold it. Three lines say where the message stands, the LAST one wins:
+ *   "Client message sending (started <time>)"  — a press holds the claim and is sending;
+ *   "Client message sent"                      — it went out (never sent again);
+ *   "Client message not sent at <time>: …"     — the send failed, the claim is let go, the next press may send.
+ * A claim nobody finished (a crash) stops counting after `MESSAGE_CLAIM_LIVE_MS`, so it never blocks the message for good.
+ */
+export const MESSAGE_SENDING_MARKER = 'Client message sending'
+export const MESSAGE_FAILED_MARKER = 'Client message not sent'
+/** A press is cut off after 60 seconds (the route's limit), so a claim older than this was left by a press that is gone. */
+export const MESSAGE_CLAIM_LIVE_MS = 2 * 60 * 1000
+
+export function messageClaimNote(on: string, nowIso: string): string {
+  return `${on} — ${MESSAGE_SENDING_MARKER} (started ${nowIso}).`
+}
+
+export function messageFailedNote(on: string, nowIso: string, why: string): string {
+  const reason = why.replace(/\s+/g, ' ').trim().slice(0, 200)
+  return `${on} — ${MESSAGE_FAILED_MARKER} at ${nowIso}: ${reason || 'unknown error'}. A new press may send it.`
+}
+
+export type ClientMessageState = 'sent' | 'sending' | 'open'
+
+/** Where the client's message stands according to the new job's notes: gone out, being sent right now by another press, or free to send. */
+export function clientMessageState(notes: string | null | undefined, now: Date): ClientMessageState {
+  const text = notes ?? ''
+  if (text.includes(MESSAGE_SENT_MARKER)) return 'sent'
+  const claimAt = text.lastIndexOf(MESSAGE_SENDING_MARKER)
+  if (claimAt < 0) return 'open'
+  if (text.lastIndexOf(MESSAGE_FAILED_MARKER) > claimAt) return 'open'
+  const started = text.slice(claimAt).match(/^Client message sending \(started ([^)\s]+)\)/)
+  const at = started ? Date.parse(started[1]) : NaN
+  if (!Number.isFinite(at)) return 'open'
+  return now.getTime() - at < MESSAGE_CLAIM_LIVE_MS ? 'sending' : 'open'
+}
+
+/** Shown to the person whose press arrived while another press was sending the message. */
+export const MESSAGE_BEING_SENT_TEXT =
+  'Another press of this button is sending the client\'s message right now. This press did not send the message or cancel the old formation — wait a few seconds and refresh the page.'
