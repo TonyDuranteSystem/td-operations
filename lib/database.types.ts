@@ -15366,6 +15366,72 @@ export type Database = {
           },
         ]
       }
+      portal_login_email_changes: {
+        Row: {
+          auth_user_id: string
+          code_attempts: number
+          code_expires_at: string | null
+          code_hash: string | null
+          code_sends: number
+          code_sent_at: string | null
+          confirmed_at: string | null
+          contact_id: string
+          created_at: string
+          id: string
+          locked_until: string | null
+          new_email: string
+          old_email: string
+          requested_by: string
+          status: string
+          undo_expires_at: string | null
+          undo_token_hash: string | null
+          undone_at: string | null
+          updated_at: string
+        }
+        Insert: {
+          auth_user_id: string
+          code_attempts?: number
+          code_expires_at?: string | null
+          code_hash?: string | null
+          code_sends?: number
+          code_sent_at?: string | null
+          confirmed_at?: string | null
+          contact_id: string
+          created_at?: string
+          id?: string
+          locked_until?: string | null
+          new_email: string
+          old_email: string
+          requested_by?: string
+          status?: string
+          undo_expires_at?: string | null
+          undo_token_hash?: string | null
+          undone_at?: string | null
+          updated_at?: string
+        }
+        Update: {
+          auth_user_id?: string
+          code_attempts?: number
+          code_expires_at?: string | null
+          code_hash?: string | null
+          code_sends?: number
+          code_sent_at?: string | null
+          confirmed_at?: string | null
+          contact_id?: string
+          created_at?: string
+          id?: string
+          locked_until?: string | null
+          new_email?: string
+          old_email?: string
+          requested_by?: string
+          status?: string
+          undo_expires_at?: string | null
+          undo_token_hash?: string | null
+          undone_at?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       portal_messages: {
         Row: {
           account_id: string | null
@@ -23645,6 +23711,20 @@ export type Database = {
           p_existing_contact_id?: string
         }
         Returns: Json
+      }
+      portal_login_email_take_attempt: {
+        Args: { p_id: string; p_lock_ms: number; p_max: number; p_user: string }
+        Returns: {
+          code_attempts: number
+          code_expires_at: string
+          code_hash: string
+          contact_id: string
+          locked_until: string
+          new_email: string
+          old_email: string
+          status: string
+          taken: boolean
+        }[]
       }
       release_company_suite_if_free: {
         Args: { p_account: string; p_actor?: string; p_reason?: string }
