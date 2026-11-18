@@ -5,5 +5,21 @@
   "points": [
     "Right: Read / Unread and Pin / Unpin",
     "Left: Note and Copy link"
+  ],
+  "stepsTitle": "Swiping the top bar inside the app",
+  "steps": [
+    {
+      "name": "Open a conversation",
+      "detail": "Tap it in the list as usual."
+    },
+    {
+      "name": "Swipe the top bar",
+      "detail": "Right for Read / Unread and Pin; left for Note and Copy link.",
+      "flag": "new"
+    },
+    {
+      "name": "Press a button",
+      "detail": "It does the action and the bar closes."
+    }
   ]
 }
