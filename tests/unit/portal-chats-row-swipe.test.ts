@@ -33,4 +33,10 @@ describe('Portal Chats list wiring', () => {
     expect(page).toContain('<SwipeRow')
     for (const k of ["key: 'read'", "key: 'unread'", "key: 'pin'", "key: 'note'", "key: 'link'"]) expect(page).toContain(k)
   })
+  it('also wraps the open conversation header, with the same four tools', () => {
+    expect(page).toContain('rowKey="open-header"')
+    expect(page).toContain('openThreadSwipe.left')
+    expect(page).toContain('openThreadSwipe.right')
+    expect(page).toContain("className=\"app-hide shrink-0\"") // stays hidden in the phone-app shell like the header it wraps
+  })
 })
