@@ -1,7 +1,7 @@
 /**
  * Portal Team Access — server-side glue (DB + auth-admin backed).
  * Thin, real implementations used by the /api/portal/team routes. Authorization
- * (account-admin check) is enforced in the routes via assertAccountAdmin.
+ * (the who-may-manage check) is enforced in the routes via assertAccountAdmin.
  *
  * Design: sysdoc 'portal-team-access-design'.
  */
@@ -18,14 +18,16 @@ import { randomUUID } from 'crypto'
 const sb = () => supabaseAdmin as any
 
 /**
- * Authorize that `user` is the account admin of `accountId`.
- * Returns the admin contact id, or null if not authorized.
+ * Authorize that `user` may manage the team of `accountId` — a current owner or member of that company (see may-manage.ts).
+ * Returns the person's contact id, or null if not authorized.
  */
 export async function assertAccountAdmin(user: User, accountId: string): Promise<string | null> {
   if (!accountId) return null
   const identity = await resolvePortalIdentity(user)
-  // Only a real client-contact can be an admin; teammates can NEVER manage the team.
+  // Only a real client-contact can manage; teammates can NEVER manage the team.
   if (identity.kind !== 'contact') return null
+  // The company must also be one of the person's own portal companies (a second, independent check).
+  if (!identity.accountIds.includes(accountId)) return null
   const ok = await isAccountAdmin(identity.contactId, accountId)
   return ok ? identity.contactId : null
 }

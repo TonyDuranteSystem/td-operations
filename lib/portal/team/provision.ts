@@ -1,7 +1,7 @@
 /**
  * Portal Team Access — teammate provisioning.
  *
- * Creates a teammate login the account-admin invites: an auth user with
+ * Creates a teammate login an owner or member adds: an auth user with
  * role='client' + team_member markers, plus a portal_team_members grant row.
  * Teammates are NOT contacts and NOT in account_contacts.
  *
@@ -114,7 +114,7 @@ export interface ProvisionResult {
 
 /**
  * Orchestrates teammate creation. Caller MUST have already authorized that the
- * requester is the account admin (see isAccountAdmin) — this function does not
+ * requester may manage the team (see mayManageTeam) — this function does not
  * re-check authorization.
  */
 export async function provisionTeammate(input: TeammateInput, deps: ProvisionDeps): Promise<ProvisionResult> {

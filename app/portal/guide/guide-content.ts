@@ -483,7 +483,7 @@ export const ARTICLES_EN: Article[] = [
     desc: 'Give your colleagues their own portal login and choose what each can see',
     keywords: ['team', 'teammate', 'invite', 'colleague', 'staff', 'employee', 'finance team', 'access', 'permissions', 'team access', 'add member', 'invita', 'collaboratore', 'accesso', 'permessi', 'dipendente'],
     steps: [
-      { text: 'Click "Team" in the left menu.', sub: 'Only the account owner / main contact sees this section.' },
+      { text: 'Click "Team" in the left menu.', sub: 'Only the company\'s owners and members see this section.' },
       { text: 'Click "Add team member".' },
       { text: 'Enter a Display name (shown on their chat messages), a Username, and a Password.', sub: 'You hand these login details to your teammate yourself.' },
       { text: 'Email is optional — add it only if you want this teammate to receive an email notification for new messages (and be able to reset their own password). Leave it blank for in-portal access only.' },
