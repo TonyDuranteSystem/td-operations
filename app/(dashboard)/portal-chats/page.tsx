@@ -1315,6 +1315,9 @@ export default function PortalChatsPage() {
   // so the sidebar sees new last-message previews and unread badges immediately.
   useEffect(() => {
     const supabase = createSupabaseBrowserClient()
+    // A client message READ in another window (or by a colleague) is an UPDATE: the list's dots must follow within a second or two, not at the
+    // next 60 s refresh (Antonio, 2026-11-17: a page left open kept the red dot of a message already read). Coalesced: a burst is one reload.
+    let readDebounce: ReturnType<typeof setTimeout> | null = null
     const channel = supabase
       .channel('admin-portal-chat-thread-list')
       .on(
@@ -1328,8 +1331,22 @@ export default function PortalChatsPage() {
           queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
         }
       )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'portal_messages',
+          filter: 'sender_type=eq.client',
+        },
+        () => {
+          if (readDebounce) clearTimeout(readDebounce)
+          readDebounce = setTimeout(() => { queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] }) }, 1000)
+        }
+      )
       .subscribe()
     return () => {
+      if (readDebounce) clearTimeout(readDebounce)
       supabase.removeChannel(channel)
     }
   }, [queryClient])

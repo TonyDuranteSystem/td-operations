@@ -725,3 +725,41 @@ describe('resolveOfferToken — lead first, then offer id', () => {
     expect(await resolveOfferToken(null, 'missing')).toBeNull()
   })
 })
+
+// ── The portal wizard's Email box is the locked LOGIN email (dev job beb43385) ──
+describe('the formation form never rewrites the contact email', () => {
+  const jobWith = (source: string | undefined, email: string) =>
+    ({
+      id: 'JOB-EMAIL',
+      payload: {
+        token: SUBMISSION_TOKEN,
+        submission_id: SUBMISSION_ID,
+        contact_id: CONTACT_ID,
+        lead_id: LEAD_ID,
+        ...(source ? { source } : {}),
+        submitted_data: {
+          owner_first_name: 'Dionisie',
+          owner_last_name: 'Turcanu',
+          owner_email: email,
+          owner_phone: '+39 333 000 0000',
+          llc_name_1: 'Automatiko LLC',
+        },
+      },
+    }) as never
+
+  it('a portal wizard submission leaves the contact email alone but still writes the other answers', async () => {
+    const rec = install({ formations: [FINISHED_FORMATION], offer: { token: OFFER_TOKEN } })
+    await handleFormationSetup(jobWith('portal_wizard', 'login@example.com'))
+    const written = rec.contactUpdates.find((u) => 'first_name' in u)
+    expect(written).toBeDefined()
+    expect(written).not.toHaveProperty('email')
+    expect(written).toMatchObject({ first_name: 'Dionisie', phone: '+39 333 000 0000' })
+  })
+
+  it('an old emailed-form submission (no portal source) still carries its typed email onto the contact', async () => {
+    const rec = install({ formations: [FINISHED_FORMATION], offer: { token: OFFER_TOKEN } })
+    await handleFormationSetup(jobWith(undefined, 'typed@example.com'))
+    const written = rec.contactUpdates.find((u) => 'first_name' in u)
+    expect(written).toMatchObject({ email: 'typed@example.com' })
+  })
+})

@@ -163,7 +163,9 @@ export async function applyOnboardingReview(
     if (submitted.owner_first_name) contactFields.first_name = submitted.owner_first_name
     if (submitted.owner_last_name) contactFields.last_name = submitted.owner_last_name
     if (ownerFullName) contactFields.full_name = ownerFullName
-    if (submitted.owner_email) contactFields.email = submitted.owner_email
+    // A submission tied to a contact (the portal wizard) never rewrites that contact's email: the wizard's Email box is the
+    // locked portal login email (dev job beb43385), and the CRM contact email is changed only by the email-change rule.
+    if (submitted.owner_email && !sub.contact_id) contactFields.email = submitted.owner_email
     if (submitted.owner_phone) contactFields.phone = submitted.owner_phone
     if (submitted.owner_nationality) contactFields.citizenship = submitted.owner_nationality
     // Dual-write address: structured fields (primary) + residency
