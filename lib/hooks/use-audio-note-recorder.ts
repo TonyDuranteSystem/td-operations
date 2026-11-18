@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { fragmentedMp4ToFlat } from '@/lib/media/fmp4-to-flat'
 import { stopPlayingAudio } from '@/lib/media/stop-playing-audio'
 import { isSound, rmsOf } from '@/lib/media/sound-level'
+import { isDamagedAudioHead } from '@/lib/media/audio-header'
 import { acquireMic, holdScreenAwake, micErrorMessage, releaseMicSoon, releaseScreen, setRecordingInProgress } from '@/lib/media/mic-session'
 
 /** Starts listening to a microphone stream; `stop()` releases it. Returns null when the browser cannot measure (the recording then goes out as before). */
@@ -78,7 +79,6 @@ export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}):
   const [isSupported, setIsSupported] = useState(false)
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
-  const chunksRef = useRef<Blob[]>([])
   const streamRef = useRef<MediaStream | null>(null)
   const onRecordedRef = useRef(onRecorded)
   const onErrorRef = useRef(onError)
@@ -116,7 +116,9 @@ export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}):
         return
       }
       streamRef.current = stream
-      chunksRef.current = []
+      // THIS recording's own pieces: a second recorder starting must never empty or mix into another recording's pieces
+      // (TD Talk, 18 Nov 2026: a voice note arrived with only its tail, no header).
+      const chunks: Blob[] = []
 
       const mp4Wanted = preferMp4Ref.current
         && (MediaRecorder.isTypeSupported('audio/mp4;codecs=mp4a.40.2') || MediaRecorder.isTypeSupported('audio/mp4'))
@@ -129,7 +131,7 @@ export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}):
             : 'audio/mp4'
 
       const recorder = new MediaRecorder(stream, mp4Wanted ? { mimeType, audioBitsPerSecond: VOICE_BITS_PER_SECOND } : { mimeType })
-      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data) }
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data) }
 
       // listening (TD Marketing): the loudest moment of the recording decides whether the microphone heard anything at all
       peakRef.current = 0
@@ -159,8 +161,7 @@ export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}):
         listenerRef.current = null
         setLevel(0)
         const silent = meter !== null && !isSound(peakRef.current)
-        const audioBlob = new Blob(chunksRef.current, { type: mimeType })
-        chunksRef.current = []
+        const audioBlob = new Blob(chunks, { type: mimeType })
         setIsRecording(false)
 
         if (cancelledRef.current) {
@@ -182,7 +183,19 @@ export function useAudioNoteRecorder(options: UseAudioNoteRecorderOptions = {}):
         // buildOutboundPath (lib/messaging/wabridge-attachment.ts) picks the real extension from the
         // mime type the browser reports — the file NAME here is cosmetic, never used for that decision.
         const ext = mimeType.includes('webm') ? 'webm' : 'm4a'
-        const finish = (blob: Blob) => onRecordedRef.current?.(new File([blob], `voice-note.${ext}`, { type: mimeType.split(';')[0] }))
+        const deliver = (blob: Blob) => onRecordedRef.current?.(new File([blob], `voice-note.${ext}`, { type: mimeType.split(';')[0] }))
+        // A recording without its audio header cannot be opened by anyone: say so and send nothing (TD Talk, 18 Nov 2026).
+        const finish = (blob: Blob) => {
+          void blob.slice(0, 16).arrayBuffer()
+            .then(b => {
+              if (isDamagedAudioHead(new Uint8Array(b), mimeType)) {
+                onErrorRef.current?.('That recording is damaged, so nothing was sent. Please record it again.')
+                return
+              }
+              deliver(blob)
+            })
+            .catch(() => deliver(blob)) // could not look: send as before
+        }
         if (!mp4Wanted) { finish(audioBlob); return }
         // TD Talk: turn the fragmented MP4 into an ordinary one before it uploads (lib/media/fmp4-to-flat.ts). Safari plays the
         // fragmented kind badly — a note could be cut short, and our earlier "fill in the length" patch made Safari report DOUBLE

@@ -12,7 +12,24 @@ import { WIZARD_DOCUMENT_ACCEPT } from '@/lib/portal/wizard-file-rules'
 const OWNER_FIELDS: FieldConfig[] = [
   { name: 'owner_first_name', label: 'First Name', labelIt: 'Nome', type: 'text', required: true },
   { name: 'owner_last_name', label: 'Last Name', labelIt: 'Cognome', type: 'text', required: true },
-  { name: 'owner_email', label: 'Email', type: 'email', required: true },
+  // The client's portal LOGIN email (dev job beb43385). For a normal client the wizard locks this box to the real login
+  // email and shows the big red must-read block (see lib/portal/login-email-field.ts); for a team login, which has no
+  // contact, the box stays as it was and `mustRead` is ignored. The "already has a company" paragraph is shown only to a
+  // client who already has one.
+  {
+    name: 'owner_email', label: 'Email', type: 'email', required: true,
+    lockedLabel: 'Email (your portal login)', lockedLabelIt: 'Email (il tuo accesso al portale)',
+    mustRead: {
+      lead: 'This is the email you use to log in to the client portal.',
+      leadIt: "Questa è l'email che usi per accedere al portale cliente.",
+      text: 'It is the official email for your account.',
+      textIt: "È l'email ufficiale del tuo account.",
+      extraLead: 'You already have a portal. Keep using this same email for your new company.',
+      extraLeadIt: 'Hai già un portale. Continua a usare questa stessa email per la tua nuova società.',
+      extraText: 'One login lets you switch between your companies from the top bar.',
+      extraTextIt: "Un solo accesso ti permette di passare da una società all'altra dalla barra in alto.",
+    },
+  },
   { name: 'owner_phone', label: 'Phone', labelIt: 'Telefono', type: 'tel', required: true },
   { name: 'owner_dob', label: 'Date of Birth', labelIt: 'Data di Nascita', type: 'date', required: true },
   { name: 'owner_nationality', label: 'Nationality', labelIt: 'Nazionalità', type: 'country', required: true },
