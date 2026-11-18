@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
+import { findDamagedVoiceAttachment } from '@/lib/team/voice-guard'
 import { listGroupMemberIds } from '@/lib/team/groups'
 import { isDmParticipant, isGroupMember, otherMembers } from '@/lib/team/groups-rules'
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -81,6 +82,9 @@ export async function POST(
         return NextResponse.json({ error: 'Invalid attachment URL' }, { status: 400 })
       }
     }
+    // a voice note with no audio header cannot be played by anyone: refuse it instead of posting it (18 Nov 2026)
+    const damaged = await findDamagedVoiceAttachment(attachments)
+    if (damaged) return NextResponse.json({ error: damaged }, { status: 400 })
   }
 
   // Thread must exist. (as-any: generated types predate thread_type — same

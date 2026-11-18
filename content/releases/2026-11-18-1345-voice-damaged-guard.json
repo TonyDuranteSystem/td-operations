@@ -1,0 +1,10 @@
+{
+  "title": "TD Talk: a damaged or silent voice recording is no longer sent",
+  "tag": "fixed",
+  "text": "A voice note that was only the last second of a longer recording could be sent and could not be played by anyone. Now TD Talk checks the recording first: if it is damaged or the microphone heard nothing, nothing is sent and you are told to record again. The server also refuses a damaged voice file, and while you record you see a sound bar and a warning if no sound is coming in.",
+  "points": [
+    "Record a voice note in TD Talk: a sound bar moves while you speak",
+    "Record with the microphone muted: after 3 seconds a red \"No sound yet\" warning shows, and sending says nothing was sent",
+    "Record and send a normal note: it plays as before"
+  ]
+}
