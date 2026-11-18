@@ -974,6 +974,21 @@ export default function PortalChatsPage() {
       .catch(() => toast.error('Could not copy the link on this device.'))
   }, [threadDeepLink])
 
+  // Swipe tools on the open conversation's header (phone): same four tools as the list rows. Pin/Read state comes from the list entry of this thread.
+  const openThreadRow = threads?.find(t => selectedAccountId ? t.account_id === selectedAccountId : t.contact_id === selectedContactId)
+  const openThreadSwipe = {
+    left: (selectedAccountId || selectedContactId) ? [
+      ...((openThreadRow?.unread_count ?? 0) > 0
+        ? [{ key: 'read', label: 'Read', icon: <MailCheck className="h-4 w-4" />, className: 'bg-blue-600', onPress: () => { void markAsRead({ account_id: selectedAccountId, contact_id: selectedContactId }) } }]
+        : [{ key: 'unread', label: 'Unread', icon: <MailOpen className="h-4 w-4" />, className: 'bg-blue-600', onPress: () => { void markAsUnread({ account_id: selectedAccountId, contact_id: selectedContactId }) } }]),
+      { key: 'pin', label: openThreadRow?.is_pinned ? 'Unpin' : 'Pin', icon: <Pin className="h-4 w-4" />, className: 'bg-amber-500', onPress: () => pinThreadMutation.mutate({ account_id: selectedAccountId, contact_id: selectedContactId, pinned: !openThreadRow?.is_pinned }) },
+    ] : [],
+    right: (selectedAccountId || selectedContactId) ? [
+      { key: 'note', label: 'Note', icon: <StickyNote className="h-4 w-4" />, className: 'bg-yellow-500', onPress: () => setNoteSeed({ accountId: selectedAccountId, contactId: selectedAccountId ? null : selectedContactId, prefill: '', originUrl: threadDeepLink() ?? undefined }) },
+      { key: 'link', label: 'Copy link', icon: <Link2 className="h-4 w-4" />, className: 'bg-zinc-600', onPress: () => copyDeepLink() },
+    ] : [],
+  }
+
   const { data: messages, isLoading: messagesLoading } = useQuery<ChatMessage[]>({
     queryKey: ['portal-chat-messages', selectedAccountId || selectedContactId],
     queryFn: () => fetch(`/api/portal/chat?${chatQueryParam}&limit=50`).then(r => r.json()).then(d => d.messages),
@@ -3500,6 +3515,14 @@ export default function PortalChatsPage() {
                 />
               )
             })()}
+            <SwipeRow
+              rowKey="open-header"
+              className="app-hide shrink-0"
+              openKey={openSwipeKey}
+              onOpenChange={setOpenSwipeKey}
+              leftActions={openThreadSwipe.left}
+              rightActions={openThreadSwipe.right}
+            >
             <div className="app-conv-header app-hide px-4 py-3 border-b bg-white shrink-0">
               <button
                 onClick={leaveConversation}
@@ -3610,6 +3633,7 @@ export default function PortalChatsPage() {
                 )
               })()}
             </div>
+            </SwipeRow>
 
             {/* Sub-tabs: Messages | Tasks (shown when a client thread is selected) */}
             {(selectedAccountId || selectedContactId) && (

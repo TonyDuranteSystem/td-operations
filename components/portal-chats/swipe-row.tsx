@@ -17,12 +17,13 @@ export interface SwipeAction {
  * Touch only — a mouse never swipes, so the computer list is unchanged. While a row is open, a tap on it closes it instead of opening
  * the chat. Only one row is open at a time (`openKey` / `onOpenChange` live in the list).
  */
-export function SwipeRow({ rowKey, openKey, onOpenChange, leftActions, rightActions, children }: {
+export function SwipeRow({ rowKey, openKey, onOpenChange, leftActions, rightActions, className, children }: {
   rowKey: string
   openKey: string | null
   onOpenChange: (key: string | null) => void
   leftActions: SwipeAction[]
   rightActions: SwipeAction[]
+  className?: string
   children: ReactNode
 }) {
   const state: SwipeState = openKey?.startsWith(`${rowKey}|`) ? (openKey.endsWith('|left') ? 'left' : 'right') : 'closed'
@@ -68,7 +69,7 @@ export function SwipeRow({ rowKey, openKey, onOpenChange, leftActions, rightActi
 
   const actions = side === 'left' ? leftActions : side === 'right' ? rightActions : []
   return (
-    <div className="relative overflow-hidden" data-testid="swipe-row" data-swipe-state={state}>
+    <div className={cn('relative overflow-hidden', className)} data-testid="swipe-row" data-swipe-state={state}>
       {side && (
         <div className={cn('absolute inset-y-0 flex', side === 'left' ? 'left-0' : 'right-0')} style={{ width: SWIPE_BUTTON_PX * actions.length }}>
           {actions.map(a => (
