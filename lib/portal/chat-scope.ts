@@ -42,8 +42,33 @@ export type ChatQueryPlan =
 export function mayIncludePersonalNull(opts: {
   linkedContactCount: number
   viewerIsSoleLinkedContact: boolean
+  /**
+   * True when the viewer has a SEPARATE personal chat (see hasSeparatePersonalChat). Their private messages then live
+   * only there, never inside a company chat, so the same message cannot show in two places (dev job 58cb7a82).
+   */
+  viewerHasSeparatePersonalChat?: boolean
 }): boolean {
+  if (opts.viewerHasSeparatePersonalChat === true) return false
   return opts.linkedContactCount === 1 && opts.viewerIsSoleLinkedContact === true
+}
+
+/**
+ * Does this client get a SEPARATE personal chat (company-less messages between them and the team)? (2026-11-18, dev
+ * job 58cb7a82 — Antonio: "even Hamza, who owns a company, could want to write personally in Redstone".)
+ *
+ *  - A company being set up (formation) already hosts the private messages: no separate chat.
+ *  - A client who belongs to a SHARED company gets one, so they can write privately from it. That includes a client who
+ *    also owns another company alone: their private messages leave the solo company's chat for the personal chat.
+ *  - A client who owns NOTHING alone gets one too (there is no company chat that may show private messages).
+ *  - A client whose companies are all owned alone has none: their private messages show inside the company chat.
+ */
+export function hasSeparatePersonalChat(opts: {
+  hasSoleOwned: boolean
+  hasShared: boolean
+  hasFormation: boolean
+}): boolean {
+  if (opts.hasFormation) return false
+  return opts.hasShared || !opts.hasSoleOwned
 }
 
 /**

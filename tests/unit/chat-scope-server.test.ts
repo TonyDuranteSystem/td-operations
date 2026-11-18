@@ -13,11 +13,21 @@ vi.mock('@/lib/supabase-admin', () => ({
   },
 }))
 
+// The viewer's own companies and company-being-set-up come from lib/portal/queries (the SAME inputs the chat entity list uses).
+let membership = { accounts: [], membersByAccount: new Map<string, string[]>(), hasSoleOwned: true, hasShared: false }
+let formations: unknown[] = []
+vi.mock('@/lib/portal/queries', () => ({
+  getChatMembership: vi.fn(async () => membership),
+  getInProgressFormations: vi.fn(async () => formations),
+}))
+
 import { resolvePersonalNullInclusion } from '@/lib/portal/chat-scope-server'
 
 describe('resolvePersonalNullInclusion (privacy choke point)', () => {
   beforeEach(() => {
     rows = []
+    membership = { accounts: [], membersByAccount: new Map(), hasSoleOwned: true, hasShared: false }
+    formations = []
   })
 
   it('true when the account has exactly one linked contact == the viewer (sole-owned SMLLC)', async () => {
@@ -38,5 +48,26 @@ describe('resolvePersonalNullInclusion (privacy choke point)', () => {
   it('false when the account has no linked contacts', async () => {
     rows = []
     expect(await resolvePersonalNullInclusion('acct', 'me')).toBe(false)
+  })
+
+  // dev job 58cb7a82: a client who owns a company alone AND belongs to a shared one has a separate personal chat, so their
+  // private messages leave the solo company's chat (a message never shows in two places).
+  it('false for a company owned alone when the viewer ALSO belongs to a shared company', async () => {
+    rows = [{ contact_id: 'me' }]
+    membership = { ...membership, hasSoleOwned: true, hasShared: true }
+    expect(await resolvePersonalNullInclusion('acct', 'me')).toBe(false)
+  })
+
+  it('true again when a company being set up already hosts the private messages', async () => {
+    rows = [{ contact_id: 'me' }]
+    membership = { ...membership, hasSoleOwned: true, hasShared: true }
+    formations = [{ id: 'f1' }]
+    expect(await resolvePersonalNullInclusion('acct', 'me')).toBe(true)
+  })
+
+  it('a viewer with only companies owned alone keeps seeing private messages inside them', async () => {
+    rows = [{ contact_id: 'me' }]
+    membership = { ...membership, hasSoleOwned: true, hasShared: false }
+    expect(await resolvePersonalNullInclusion('acct', 'me')).toBe(true)
   })
 })

@@ -191,7 +191,7 @@ _Regenerated 2026-11-18. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [bofa-intake.md](bofa-intake.md) — Bank Application Intake (Bank of America, one-time link) _(verified 2026-11-06)_
 - [booking.md](booking.md) — Booking page — Calendly links per audience (Stage 1a engine + Stage 1b screens + Stage 3 paid links) _(verified 2026-11-16)_
 - [captures.md](captures.md) — Capture / Share (screenshot tool) _(verified 2026-11-05)_
-- [client-app.md](client-app.md) — Client iPhone App (MyLLC Manager 2.0) _(verified 2026-11-16)_
+- [client-app.md](client-app.md) — Client iPhone App (MyLLC Manager 2.0) _(verified 2026-11-18)_
 - [client-decision-requests.md](client-decision-requests.md) — Client Decision Requests _(verified 2026-10-20)_
 - [client-threads.md](client-threads.md) — Client Threads _(verified 2026-09-03)_
 - [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-11-10)_
@@ -220,7 +220,7 @@ _Regenerated 2026-11-18. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [payment-plans.md](payment-plans.md) — Payment plans (a setup fee paid in parts) and the Calendar's "Invoices to raise" _(verified 2026-11-11)_
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_
 - [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-10-18)_
-- [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-11-17)_
+- [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-11-18)_
 - [portal-translation.md](portal-translation.md) — Portal Translation (any-language AI translation) _(verified 2026-09-23)_
 - [portal.md](portal.md) — Client Portal _(verified 2026-11-18)_
 - [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-11-12)_
