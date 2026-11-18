@@ -13,6 +13,7 @@ import { talkAlertKind } from '@/lib/push/alert-kinds'
 import { channelNotifiesStaff, conversationNotifiesParticipants } from '@/lib/team/channel-notify'
 import type { ChatAttachment } from '@/lib/types'
 import { NextRequest, NextResponse } from 'next/server'
+import { teamChatMessageUrl } from '@/lib/talk/links'
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/$/, '') ?? ''
 
@@ -221,7 +222,8 @@ export async function POST(
     const preview = message.slice(0, 120) || (attachments?.length ? `📎 ${attachments[0].name}` : card ? '📇 Shared a card' : 'New message')
     // Deep-link: a reply opens the thread pane on its root; a top-level message
     // opens the channel.
-    const threadUrl = `/team-chat?thread=${threadId}${rootId ? `&root=${rootId}` : ''}`
+    // the link names the message too: a tap on the alert opens the chat AND scrolls to it (lib/talk/links.ts)
+    const threadUrl = teamChatMessageUrl({ threadId, rootId, messageId: msg.id as string })
     // ── WORK CHANNELS NOTIFY EVERY STAFF MEMBER ───────────────────────────
     // Antonio 2026-07-24: "There is only Luca and me... I have to know
     // everything because I work on the bugs." The old rule pushed a channel

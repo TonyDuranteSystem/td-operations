@@ -33,6 +33,7 @@ import {
   cancelPreparedFrozenThisTurn,
 } from '@/lib/inbox/worker-email-send'
 import type { SendableFile } from '@/lib/inbox/sendable-attachment'
+import { teamChatMessageUrl } from '@/lib/talk/links'
 
 const THINKING_PLACEHOLDER = '…'
 
@@ -687,7 +688,7 @@ export async function processClaudeReply(params: {
     const payload = {
       title: 'Claude replied',
       body: reply.slice(0, 120),
-      url: `/team-chat?thread=${threadId}`,
+      url: teamChatMessageUrl({ threadId, messageId: placeholderId }),
       tag: `team-claude-${threadId}`,
       alertKind: 'claude_reply' as const,
     }

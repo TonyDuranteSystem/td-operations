@@ -1,0 +1,9 @@
+{
+  "title": "Start a new company: the client is told only once",
+  "tag": "behind-the-scenes",
+  "text": "When two people pressed \"Start a new company\" for the same company within a few seconds of each other, the client received the same message twice (two chat messages, two emails, two notifications). Now the first press takes the message and the second one stops with a plain sentence: it did not send the message and did not cancel the old formation. If the first press fails, the next press can send straight away.",
+  "points": [
+    "If you see \"Another press of this button is sending the client's message right now\", wait a few seconds and refresh the contact page",
+    "Nothing else changes: one press still opens the new formation, reopens the wizard and closes the old company as before"
+  ]
+}
