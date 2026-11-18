@@ -28,9 +28,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   // Ownership — clients only respond to their own requests.
   const contactId = getClientContactId(user)
   const ownsContact = !!request.contact_id && !!contactId && request.contact_id === contactId
-  // Answering a decision (approve / choose) acts for the company, like signing: owners and members only. A team login with
-  // the Documents tick may SEE the company's documents but never answers for the owner.
-  const ownsAccount = request.account_id && contactId ? await canAccessAccount(user, request.account_id, 'documents') : false
+  // Owners and members of the company answer. A team login answers only when the owner ticked "Can answer client decisions"
+  // (canAccessAccount checks the tick for a team login and the company link for an owner or member).
+  const ownsAccount = request.account_id ? await canAccessAccount(user, request.account_id, 'answer_decisions') : false
   if (!ownsContact && !ownsAccount) {
     return NextResponse.json({ success: false, error: 'Access denied' }, { status: 403 })
   }

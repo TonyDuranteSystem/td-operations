@@ -51,6 +51,7 @@ const everyTick = {
   documents: true, invoices_billing: true, chat: true, company_services: true,
   bank_applications: true, sales_customers: true, company_data_form: true,
   announcements: true, payment_links: true, invoice_history: true,
+  company_forms: true, request_services: true, answer_decisions: true,
 }
 
 describe('canSubmitWizard — teammate (only the wizards a tick covers)', () => {
@@ -74,11 +75,24 @@ describe('canSubmitWizard — teammate (only the wizards a tick covers)', () => 
     expect(canSubmitWizard(id, 'ACC-X', null, 'banking_payset')).toBe(false)
   })
 
-  it('NO tick — not even all of them — ever opens tax, tax confirmation, ITIN, closure, formation or the TD Communication audit', () => {
+  it('the Company forms tick opens the company\'s tax questionnaire for its own company, and nothing else', () => {
+    const id = teamWith('ACC-X', { company_forms: true })
+    for (const type of ['tax', 'tax_return', 'company_info']) expect(canSubmitWizard(id, 'ACC-X', null, type)).toBe(true)
+    expect(canSubmitWizard(id, 'ACC-X', null, 'banking_payset')).toBe(false)
+    expect(canSubmitWizard(id, 'ACC-X', null, 'onboarding')).toBe(false)
+    expect(canSubmitWizard(id, 'ACC-Y', null, 'tax')).toBe(false)
+  })
+
+  it('NO tick — not even all of them — opens what belongs to a PERSON (closing, ITIN, a new company) or the TD Communication audit', () => {
     const id = teamWith('ACC-X', everyTick)
-    for (const type of ['tax', 'tax_return', 'company_info', 'itin', 'closure', 'formation', 'td_communication', 'nonsense', undefined]) {
+    for (const type of ['itin', 'closure', 'formation', 'td_communication', 'nonsense', undefined]) {
       expect(canSubmitWizard(id, 'ACC-X', null, type)).toBe(false)
     }
+  })
+
+  it('the tax questionnaire stays closed without its tick, even with every OTHER tick', () => {
+    const { company_forms: _omit, ...others } = everyTick
+    expect(canSubmitWizard(teamWith('ACC-X', others), 'ACC-X', null, 'tax')).toBe(false)
   })
 
   it('BLOCKS a submit for a different company even with the right tick', () => {

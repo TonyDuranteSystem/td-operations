@@ -5,9 +5,10 @@ import { hasCapability, type CapabilityFlags } from '@/lib/portal/team/capabilit
  * Which wizards a TEAM login may use, and under which tick (team rules, 2026-11-17).
  *   - the bank application (Payset / Relay)  -> the "Bank applications" tick
  *   - the company data form (onboarding)     -> the "Company data form" tick
- *   - everything else is refused, whatever ticks the login holds: tax and tax confirmations, ITIN, closing
- *     the company, formation (a new company belongs to the buyer, a person), the TD Communication audit, and
- *     any wizard type not named here (default-deny).
+ *   - the company's tax questionnaire         -> the "Company forms" tick (signing the return itself is never a tick)
+ *   - everything else is refused: closing the company, the ITIN form and a new company (formation) belong to a PERSON
+ *     (the owner or buyer), not to the company, and a team login has no person; the TD Communication audit; and any
+ *     wizard type not named here (default-deny).
  * Before this, the server refused only the ITIN wizard and checked the company, so a team login with NO ticks
  * could post the tax, closure, banking, onboarding or formation forms straight to the server.
  * PURE — shared by the wizard-submit / wizard-progress routes, the upload routes and the wizard page.
@@ -20,6 +21,10 @@ export function teammateMayUseWizard(capabilities: CapabilityFlags | null | unde
       return hasCapability(capabilities, 'bank_applications')
     case 'onboarding':
       return hasCapability(capabilities, 'company_data_form')
+    case 'tax':
+    case 'tax_return':
+    case 'company_info':
+      return hasCapability(capabilities, 'company_forms')
     default:
       return false
   }
@@ -60,7 +65,7 @@ export function canSubmitWizard(
     return true
   }
   if (identity.kind === 'teammate') {
-    // Only the wizards a tick covers (see teammateMayUseWizard) — ITIN, tax, closure, formation and the rest are refused.
+    // Only the wizards a tick covers (see teammateMayUseWizard) — closing, ITIN, formation and the rest are refused.
     if (!teammateMayUseWizard(identity.capabilities, wizardType)) return false
     // A team login is always tied to ITS company: a missing company is refused too (it used to pass, which let it
     // reach contact-scoped drafts that carry no company, e.g. an owner's ITIN draft), and so is any other company.

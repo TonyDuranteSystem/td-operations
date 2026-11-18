@@ -104,11 +104,27 @@ describe('service-request', () => {
     state.answers['contacts:select'] = { data: { full_name: 'Own Person', email: 'own@example.com' }, error: null }
     state.answers['tasks:insert'] = { data: { id: 't1' }, error: null }
   })
-  it('a team login can NOT create a staff task, with or without ticks', async () => {
+  it('a team login WITHOUT the "Can ask for new services" tick can NOT ask, however many other ticks it holds', async () => {
     getUser.mockResolvedValue({ data: { user: teamLogin } })
+    resolveIdentity.mockResolvedValue(team({ documents: true, chat: true, invoices_billing: true, company_forms: true, answer_decisions: true }))
     const res = await serviceRequest(req(ok))
     expect(res.status).toBe(403)
     expect(state.ops.some(o => o.table === 'tasks')).toBe(false)
+  })
+  it('a team login WITH the tick can: filed under ITS company, by name, never under any contact', async () => {
+    getUser.mockResolvedValue({ data: { user: teamLogin } })
+    resolveIdentity.mockResolvedValue({ ...team({ chat: true, request_services: true }), displayName: 'Anna Rossi' })
+    state.answers['accounts:select'] = { data: { company_name: 'Acme LLC' }, error: null }
+    const res = await serviceRequest(req({ ...ok, contact_id: 'C-SOMEONE-ELSE' }))
+    expect(res.status).toBe(200)
+    const task = state.ops.find(o => o.table === 'tasks' && o.op === 'insert')!
+    expect(task.payload).toMatchObject({ account_id: 'ACC-X', contact_id: null })
+    const text = JSON.stringify(task.payload)
+    expect(text).toContain('Anna Rossi (team member)')
+    expect(text).toContain('Acme LLC')
+    expect(text).not.toContain('teammate.portal.tonydurante.us')
+    expect(text).not.toContain('C-SOMEONE-ELSE')
+    expect(state.ops.some(o => o.table === 'account_contacts')).toBe(false)
   })
   it('a client files under THEIR OWN contact, whatever contact_id the request names', async () => {
     getUser.mockResolvedValue({ data: { user: clientLogin } })
@@ -128,11 +144,19 @@ describe('decisions: answering', () => {
     canAccess.mockResolvedValue(true)
     respond.mockResolvedValue({ ok: true, status: 'answered', auto_advanced: false })
   })
-  it('a team login with the Documents tick can NOT answer a client decision', async () => {
+  it('a team login with only the Documents tick can see decisions but NOT answer them', async () => {
     getUser.mockResolvedValue({ data: { user: teamLogin } })
+    canAccess.mockImplementation(async (_u: unknown, _a: string, cap: string) => cap === 'documents')
     const res = await decisionRespond(req({ response: { choice: 'a' } }), params)
     expect(res.status).toBe(403)
     expect(respond).not.toHaveBeenCalled()
+  })
+  it('a team login WITH the "Can answer client decisions" tick can', async () => {
+    getUser.mockResolvedValue({ data: { user: teamLogin } })
+    canAccess.mockImplementation(async (_u: unknown, _a: string, cap: string) => cap === 'answer_decisions')
+    const res = await decisionRespond(req({ response: { choice: 'a' } }), params)
+    expect(res.status).toBe(200)
+    expect(respond).toHaveBeenCalledTimes(1)
   })
   it('an owner or member of the company still can', async () => {
     getUser.mockResolvedValue({ data: { user: clientLogin } })

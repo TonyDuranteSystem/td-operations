@@ -74,8 +74,11 @@ describe('teammateNavCapability', () => {
     expect(teammateNavCapability('nav.guide')).toBe('always')
   })
   it('owner-only / non-delegable items are hidden (null)', () => {
-    for (const k of ['nav.team', 'nav.signDocuments', 'nav.requestService', 'nav.referrals', 'nav.profile', 'nav.offer', 'nav.partnerClients']) {
+    for (const k of ['nav.team', 'nav.signDocuments', 'nav.referrals', 'nav.profile', 'nav.offer', 'nav.partnerClients']) {
       expect(teammateNavCapability(k)).toBeNull()
     }
+  })
+  it('asking for a new service is a tick the owner can give', () => {
+    expect(teammateNavCapability('nav.requestService')).toBe('request_services')
   })
 })
