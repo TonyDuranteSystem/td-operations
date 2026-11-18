@@ -26,6 +26,7 @@ import { isClient } from '@/lib/auth'
 import { enqueueJob, completeJob, failJob, type Job } from '@/lib/jobs/queue'
 import { getSubmissionTable, getJobType, isBankingInlineType } from '@/lib/portal/wizard-map'
 import { buildSubmissionRecord, preserveReviewedStatus } from '@/lib/portal/submission-record'
+import { forceLoginEmail } from '@/lib/portal/login-email-field'
 import { buildSubmissionToken } from '@/lib/portal/submission-token'
 import { resolveClosureSubmissionToken } from '@/lib/portal/closure-submission-token'
 import { accountIdForWizardSubmission } from '@/lib/portal/wizard-scope'
@@ -303,6 +304,19 @@ export async function POST(req: NextRequest) {
         { status: 400 },
       )
     }
+  }
+
+  // Formation and onboarding: the owner Email box is the client's portal LOGIN email (dev job beb43385). Whatever the browser
+  // sent for it is replaced by the real login email here, so a hand-made request cannot slip a different address onto the
+  // submission. A team login (no contact) and every other wizard are left exactly as they were.
+  if (typeof data === 'object' && data !== null && !Array.isArray(data)) {
+    const forced = forceLoginEmail({
+      wizardType: wizard_type,
+      contactId: identity.kind === 'contact' ? identity.contactId : null,
+      authEmail: user.email,
+      data: data as Record<string, unknown>,
+    })
+    if (forced !== data) Object.assign(data, forced)
   }
 
   const validation = validateWizardData(wizard_type, data as Record<string, unknown>, entity_type)
