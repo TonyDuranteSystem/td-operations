@@ -1,0 +1,9 @@
+{
+  "title": "Portal Chats in the phone app: swipe the top bar of an open chat",
+  "tag": "fix",
+  "text": "The swipe on an open conversation did nothing inside the TD Social app. It now works there: swipe the top bar right for Read / Unread and Pin, left for Note and Copy link.",
+  "points": [
+    "Right: Read / Unread and Pin / Unpin",
+    "Left: Note and Copy link"
+  ]
+}
