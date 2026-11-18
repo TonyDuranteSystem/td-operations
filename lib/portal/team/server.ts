@@ -13,6 +13,8 @@ import { provisionTeammate, type TeammateInput, type ProvisionDeps } from '@/lib
 import { normalizeCapabilities } from '@/lib/portal/team/capabilities'
 import { generatePassword, escapeLikePattern } from '@/lib/portal/team/credentials'
 import { recordTeamEvent, recordTeamEventBestEffort, powersGrew, type TeamActor } from '@/lib/portal/team/events'
+import { enqueueTeamNotices } from '@/lib/portal/team/notify'
+import type { Confirmation } from '@/lib/portal/team/confirm'
 import {
   eventWriter,
   switchOffTeammate,
@@ -110,8 +112,10 @@ export function provisionDeps(): ProvisionDeps {
         accountId: info.accountId,
         event: 'added',
         actor: { kind: 'owner', contactId: info.createdByContactId, ip: info.ip },
-        detail: { username: info.username, display_name: info.displayName, capabilities: info.capabilities, notice_version: info.noticeVersion },
+        detail: { username: info.username, display_name: info.displayName, capabilities: info.capabilities, notice_version: info.noticeVersion, notice_text: info.noticeText },
       })
+      // Every owner and member is told (that email is the safety net). If nobody can be told, the add is undone with the rest.
+      await enqueueTeamNotices({ accountId: info.accountId, teamMemberId: info.teamMemberId, kind: 'added', actorContactId: info.createdByContactId })
     },
     newToken: () => randomUUID().slice(0, 12),
     // A Member / Owner of this company with the same name: they get their own full login, never a team login.
@@ -134,17 +138,44 @@ export async function createTeammate(input: TeammateInput) {
   return provisionTeammate(input, provisionDeps())
 }
 
-/** List teammates for an account (admin view). */
+/** Thrown when powers would grow but the owner has not confirmed (notice + password). The route turns it into a 409 so the screen asks. */
+export class ConfirmationRequiredError extends Error {
+  code = 'confirmation_required' as const
+  constructor() {
+    super('Giving more powers needs your confirmation: read the notice and enter your password.')
+    this.name = 'ConfirmationRequiredError'
+  }
+}
+
+export type TeammateState = 'active' | 'off_owner' | 'off_td' | 'removed'
+
+/** active / switched off by the owner / switched off by TD / removed for good — from a row's status and switch-off stamp. */
+export function teammateState(r: { status?: unknown; switched_off_at?: unknown; switched_off_by?: unknown }): TeammateState {
+  if (r.status === 'active') return 'active'
+  if (r.switched_off_at) return r.switched_off_by === 'td' ? 'off_td' : 'off_owner'
+  return 'removed'
+}
+
+/** List teammates for an account (owner view): active and switched-off people; people removed for good are not listed. */
 export async function listTeammates(accountId: string) {
-  const { data } = await sb()
+  const full = await sb()
     .from('portal_team_members')
-    .select('id, username, display_name, email, capabilities, status, created_at')
+    .select('id, username, display_name, email, capabilities, status, created_at, switched_off_by, switched_off_at')
     .eq('account_id', accountId)
     .order('created_at', { ascending: true })
-  return (data ?? []).map((r: Record<string, unknown>) => ({
-    ...r,
-    capabilities: normalizeCapabilities(r.capabilities),
-  }))
+  let rows = full.data as Array<Record<string, unknown>> | null
+  if (full.error) {
+    // Code deployed before the database change (the switch-off fields do not exist yet): list the way it always was.
+    const old = await sb()
+      .from('portal_team_members')
+      .select('id, username, display_name, email, capabilities, status, created_at')
+      .eq('account_id', accountId)
+      .order('created_at', { ascending: true })
+    rows = old.data as Array<Record<string, unknown>> | null
+  }
+  return (rows ?? [])
+    .map((r) => ({ ...r, state: teammateState(r), capabilities: normalizeCapabilities(r.capabilities) }))
+    .filter((r) => r.state !== 'removed')
 }
 
 /**
@@ -156,10 +187,11 @@ export async function updateTeammate(
   accountId: string,
   patch: { capabilities?: unknown; display_name?: string },
   actor: TeamActor,
+  confirmation: Confirmation | null = null,
 ) {
   const { data: before } = await sb()
     .from('portal_team_members')
-    .select('capabilities, status')
+    .select('capabilities, status, notice_version, notice_accepted_at, notice_accepted_ip')
     .eq('id', id)
     .eq('account_id', accountId)
     .maybeSingle()
@@ -170,7 +202,16 @@ export async function updateTeammate(
   const stamp = new Date().toISOString()
   const update: Record<string, unknown> = { updated_at: stamp }
   const afterCaps = patch.capabilities !== undefined ? normalizeCapabilities(patch.capabilities) : undefined
+  const grows = afterCaps !== undefined && powersGrew(beforeCaps, afterCaps)
+  // Giving MORE power needs the owner's confirmation (the notice + their password), checked by the caller and passed here.
+  // The server refuses the grant without it, whatever the screen did.
+  if (grows && !confirmation) throw new ConfirmationRequiredError()
   if (afterCaps !== undefined) update.capabilities = afterCaps
+  if (grows && confirmation) {
+    update.notice_version = confirmation.version
+    update.notice_accepted_at = stamp
+    update.notice_accepted_ip = confirmation.ip
+  }
   if (patch.display_name !== undefined) update.display_name = patch.display_name
   const { data: changed, error } = await sb()
     .from('portal_team_members')
@@ -183,16 +224,28 @@ export async function updateTeammate(
   if (!changed || changed.length === 0) throw new Error('This team member was changed by someone else. Refresh and try again.')
 
   if (afterCaps !== undefined && JSON.stringify(afterCaps) !== JSON.stringify(beforeCaps)) {
-    const input = { teamMemberId: id, accountId, event: 'powers_changed' as const, actor, detail: { before: beforeCaps, after: afterCaps } }
-    if (powersGrew(beforeCaps, afterCaps)) {
+    const addedKeys = Object.keys(afterCaps).filter((k) => (afterCaps as Record<string, boolean>)[k] === true && (beforeCaps as Record<string, boolean | undefined>)[k] !== true)
+    const input = {
+      teamMemberId: id, accountId, event: 'powers_changed' as const, actor,
+      detail: { before: beforeCaps, after: afterCaps, ...(grows && confirmation ? { notice_version: confirmation.version, notice_text: confirmation.text } : {}) },
+    }
+    if (grows) {
       try {
         await recordTeamEvent(sb(), input)
+        // Every owner and member is told. If nobody can be told, the grant is undone below.
+        await enqueueTeamNotices({ accountId, teamMemberId: id, kind: 'more', actorContactId: actor.contactId ?? '', addedKeys })
       } catch {
         // No record, no grant: put the old powers back — but only if nobody edited the person since (our stamp is still on the row),
         // and check that it worked (supabase reports a failure in its result; it does not throw).
         const { data: restored, error: restoreErr } = await sb()
           .from('portal_team_members')
-          .update({ capabilities: beforeCaps, updated_at: new Date().toISOString() })
+          .update({
+            capabilities: beforeCaps,
+            notice_version: before.notice_version ?? null,
+            notice_accepted_at: before.notice_accepted_at ?? null,
+            notice_accepted_ip: before.notice_accepted_ip ?? null,
+            updated_at: new Date().toISOString(),
+          })
           .eq('id', id)
           .eq('account_id', accountId)
           .eq('updated_at', stamp)
@@ -214,13 +267,23 @@ export async function updateTeammate(
  * (the person is added again instead). Any earlier switch-off stamp is cleared so a removed person can never be "switched on".
  */
 export async function revokeTeammate(id: string, accountId: string, actor: TeamActor) {
-  const { data: row } = await sb()
+  const first = await sb()
     .from('portal_team_members')
-    .select('auth_user_id')
+    .select('auth_user_id, switched_off_by')
     .eq('id', id)
     .eq('account_id', accountId)
     .maybeSingle()
+  let row = first.data
+  if (first.error) {
+    // Code deployed before the database change: the switch-off fields do not exist yet, so nobody can be switched off by TD either.
+    const old = await sb().from('portal_team_members').select('auth_user_id').eq('id', id).eq('account_id', accountId).maybeSingle()
+    row = old.data
+  }
   if (!row) throw new Error('Team member not found')
+  // If Tony Durante LLC switched this person off, the owner may not make that permanent (it would end TD's ability to switch them on).
+  if (actor.kind === 'owner' && row.switched_off_by === 'td') {
+    throw new Error('Tony Durante LLC switched this person off. Please contact us before removing them.')
+  }
   const { error: updErr } = await sb()
     .from('portal_team_members')
     .update({ status: 'revoked', switched_off_at: null, switched_off_by: null, switched_off_reason: null, updated_at: new Date().toISOString() })

@@ -86,10 +86,12 @@ describe('wiring', () => {
   })
   it('screen shows links read-only without the option; invite form lists both options under Invoices & Billing', () => {
     expect(read('app/portal/invoices/page.tsx')).toContain('readOnly={!canEditLinks}')
-    const tm = read('components/portal/team-manager.tsx')
-    expect(tm).toContain("key: 'payment_links'")
-    expect(tm).toContain("key: 'invoice_history'")
-    expect(tm).toContain("parent: 'invoices_billing'")
+    // The tick list lives in ONE shared file now (the screen, the notice and the emails read it).
+    const labels = read('lib/portal/team/capability-labels.ts')
+    expect(labels).toContain("key: 'payment_links'")
+    expect(labels).toContain("key: 'invoice_history'")
+    expect(labels).toContain("parent: 'invoices_billing'")
+    expect(read('components/portal/team-manager.tsx')).toContain('CAPABILITY_LABELS')
   })
   it('invoice page, invoice API and PDF all use the team member start date', () => {
     expect(read('app/portal/invoices/page.tsx')).toContain('actor.historyStart')

@@ -26,6 +26,8 @@ export interface TeammateInput {
   disclaimerAccepted: boolean
   /** The responsibility notice the owner accepted (its version) — stored on the row and in the record. Optional until the owner screens send it. */
   noticeVersion?: string | null
+  /** The exact words the owner read and accepted (saved in the record). */
+  noticeText?: string | null
   /** Where the owner's request came from, for the record. */
   ip?: string | null
 }
@@ -103,7 +105,7 @@ export interface ProvisionDeps {
   /** Undo for an add whose record could not be saved: delete the team entry just made. */
   deleteTeamMember?: (teamMemberId: string) => Promise<void>
   /** STRICT write of the "added" line of the team record. If it throws, the whole add is undone. */
-  recordAdded?: (info: { teamMemberId: string; accountId: string; createdByContactId: string; username: string; displayName: string; capabilities: CapabilityFlags; noticeVersion: string | null; ip: string | null }) => Promise<void>
+  recordAdded?: (info: { teamMemberId: string; accountId: string; createdByContactId: string; username: string; displayName: string; capabilities: CapabilityFlags; noticeVersion: string | null; noticeText: string | null; ip: string | null }) => Promise<void>
   newToken: () => string
   /**
    * A Member / Owner of this company with the same name (a contact linked to it). They get their own full login with the
@@ -204,6 +206,7 @@ export async function provisionTeammate(input: TeammateInput, deps: ProvisionDep
         displayName: value.displayName,
         capabilities: value.capabilities,
         noticeVersion: input.noticeVersion ?? null,
+        noticeText: input.noticeText ?? null,
         ip: input.ip ?? null,
       })
     } catch {

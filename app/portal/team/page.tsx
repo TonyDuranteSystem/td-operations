@@ -38,7 +38,7 @@ export default async function PortalTeamPage() {
   if (!admin) return <NotAvailable />
 
   const companyName = accounts.find(a => a.id === accountId)?.company_name ?? 'Your company'
-  const teammates = (await listTeammates(accountId)) as Teammate[]
+  const teammates = (await listTeammates(accountId)) as unknown as Teammate[]
 
   // The handover message defaults to the owner's language (an Italian owner writes to Italian colleagues).
   const defaultLang = getLocale(user) === 'it' ? 'it' : 'en'
