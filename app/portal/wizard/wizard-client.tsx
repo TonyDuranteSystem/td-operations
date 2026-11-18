@@ -8,7 +8,8 @@ import { ReviewNote, FLAGGED_FIELD_CLASS } from '@/components/portal/wizard/revi
 import { resolveClientLabel } from '@/lib/tax/review-labels'
 import { getWizardConfig, wizardCollectsOwnerMembers, wizardRequiresSs4Signer, OWNER_ITIN_FIELD, MEMBER_ITIN_FIELD, TAX_MEMBER_FIELDS } from '@/components/portal/wizard/wizard-configs'
 import { useLocale } from '@/lib/portal/use-locale'
-import { mustReadAckKey } from '@/lib/portal/login-email-field'
+import { LOGIN_EMAIL_FIELD, mustReadAckKey } from '@/lib/portal/login-email-field'
+import { ChangeLoginEmailDialog } from '@/components/portal/change-login-email-dialog'
 import { createClient } from '@/lib/supabase/client'
 import { resolveInstitution } from '@/lib/tax/bank-identity'
 import { interpolateString } from '@/lib/template-interpolation'
@@ -399,6 +400,9 @@ export function WizardClient({
 
   const [currentStep, setCurrentStep] = useState(Math.min(savedStep, steps.length - 1))
   const [formData, setFormData] = useState<Record<string, string | string[] | boolean | number>>(initialData)
+  // The locked answers (the portal login email) can change while the form is open: the client changes their login email from the form itself.
+  const [lockedNow, setLockedNow] = useState<Record<string, string> | undefined>(lockedValues)
+  const [changeLoginEmailOpen, setChangeLoginEmailOpen] = useState(false)
   const [memberCount, setMemberCount] = useState(Number(initialData.member_count) || 1)
 
   // signerIndex: -1 = owner, 0+ = additional member index, null = none chosen.
@@ -456,7 +460,7 @@ export function WizardClient({
 
   const handleFieldChange = useCallback((name: string, value: string | string[] | boolean | number) => {
     // A locked answer (the portal login email) cannot be edited, whatever calls this.
-    if (lockedValues && name in lockedValues) return
+    if (lockedNow && name in lockedNow) return
     setFormData(prev => ({ ...prev, [name]: value }))
     dirtyRef.current = true
     // Clear any server-side validation error for this field when the user edits it
@@ -466,7 +470,7 @@ export function WizardClient({
       const owner = name.slice(0, -'_read'.length)
       setFieldErrors(prev => prev.length > 0 ? prev.filter(e => e.field !== owner) : prev)
     }
-  }, [lockedValues])
+  }, [lockedNow])
 
   // File upload handler — uploads the file DIRECTLY to Supabase Storage with a
   // RESUMABLE (TUS) upload: 6MB chunks, auto-retry on network blips, progress
@@ -621,7 +625,7 @@ export function WizardClient({
   const minMsg = pickText('Value is not valid', 'Il valore non è valido')!
   const einMsg = pickText('EIN must be 9 digits (e.g. 30-1482516)', "L'EIN deve avere 9 cifre (es. 30-1482516)")!
   // The big red "I read it" block (dev job beb43385) is on only for a field whose value the system locked (the portal login email).
-  const mustReadActive = useCallback((f: FieldConfig): boolean => !!f.mustRead && !!lockedValues && f.name in lockedValues, [lockedValues])
+  const mustReadActive = useCallback((f: FieldConfig): boolean => !!f.mustRead && !!lockedNow && f.name in lockedNow, [lockedNow])
   const readMsg = pickText('Tick "I read it" to continue.', 'Spunta "Ho letto" per continuare.')!
 
   // Localized text for a money problem (dev job 89195c68) — the same wording
@@ -1830,7 +1834,7 @@ export function WizardClient({
               return (
                 <div key={field.name} data-field-key={field.name} className={`${field.type === 'textarea' || field.type === 'checkbox' || field.type === 'signature' || mustReadActive(field) ? 'md:col-span-2' : ''} ${noteFor(field.name) ? FLAGGED_FIELD_CLASS : ''}`}>
                   <WizardField
-                    field={{ ...field, prefilled: !!prefillData[field.name] && !(lockedValues && field.name in lockedValues), mustRead: mustReadActive(field) ? field.mustRead : undefined }}
+                    field={{ ...field, prefilled: !!prefillData[field.name] && !(lockedNow && field.name in lockedNow), mustRead: mustReadActive(field) ? field.mustRead : undefined }}
                     value={formData[field.name] ?? ''}
                     onChange={handleFieldChange}
                     onFileUpload={handleFileUpload}
@@ -1838,8 +1842,9 @@ export function WizardClient({
                     locale={locale}
                     error={errorFor(field.name)}
                     context={formData}
-                    locked={!!lockedValues && field.name in lockedValues}
+                    locked={!!lockedNow && field.name in lockedNow}
                     showExtraNote={sameEmailNote}
+                    onChangeLocked={field.name === LOGIN_EMAIL_FIELD ? () => setChangeLoginEmailOpen(true) : undefined}
                   />
                   {noteFor(field.name) && <ReviewNote note={noteFor(field.name)!} heading={noteHeading} />}
                   {/* High-stakes confirmation: show an amber warning when the
@@ -1856,6 +1861,17 @@ export function WizardClient({
             })}
         </div>
         </>
+      )}
+      {changeLoginEmailOpen && lockedNow && (
+        <ChangeLoginEmailDialog
+          currentEmail={lockedNow[LOGIN_EMAIL_FIELD] ?? ''}
+          onClose={() => setChangeLoginEmailOpen(false)}
+          onChanged={(newEmail) => {
+            // the login moved: the locked box and the answer follow it, and the next submit forces the same value on the server
+            setLockedNow(prev => (prev ? { ...prev, [LOGIN_EMAIL_FIELD]: newEmail } : prev))
+            setFormData(prev => ({ ...prev, [LOGIN_EMAIL_FIELD]: newEmail }))
+          }}
+        />
       )}
     </WizardShell>
   )

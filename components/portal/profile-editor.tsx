@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
 import { useLocale } from '@/lib/portal/use-locale'
 import { AppProfileView } from '@/components/portal/app-overview/profile-view'
+import { LoginEmailRow } from '@/components/portal/login-email-row'
 
 interface ProfileEditorProps {
   contactId: string
@@ -24,9 +25,11 @@ interface ProfileEditorProps {
   }
   /** Client iPhone app only: draw the reading view as a profile header + short list. The website leaves this off. */
   appView?: boolean
+  /** The email this client LOGS IN with (not always the CRM email). Given = the Email box becomes a "Login email" row with a Change button; absent (a team login, no contact) = the old read-only Email. */
+  loginEmail?: string | null
 }
 
-export function ProfileEditor({ contactId, initialData, appView = false }: ProfileEditorProps) {
+export function ProfileEditor({ contactId, initialData, appView = false, loginEmail = null }: ProfileEditorProps) {
   const router = useRouter()
   const { t } = useLocale()
   const [editing, setEditing] = useState(false)
@@ -61,7 +64,7 @@ export function ProfileEditor({ contactId, initialData, appView = false }: Profi
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
           <Field label={t('profile.firstName')} value={data.first_name} />
           <Field label={t('profile.lastName')} value={data.last_name} />
-          <Field label={t('profile.email')} value={data.email} />
+          {loginEmail ? <LoginEmailRow loginEmail={loginEmail} /> : <Field label={t('profile.email')} value={data.email} />}
           <Field label={t('profile.phone')} value={data.phone} />
           <Field label={t('profile.language')} value={data.language} />
           <Field label={t('profile.citizenship')} value={data.citizenship} />
@@ -89,7 +92,7 @@ export function ProfileEditor({ contactId, initialData, appView = false }: Profi
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <EditField label={t('profile.firstName')} value={data.first_name} onChange={v => setData(d => ({ ...d, first_name: v }))} />
         <EditField label={t('profile.lastName')} value={data.last_name} onChange={v => setData(d => ({ ...d, last_name: v }))} />
-        <EditField label={t('profile.email')} value={data.email} onChange={v => setData(d => ({ ...d, email: v }))} disabled />
+        <EditField label={loginEmail ? t('loginEmail.title') : t('profile.email')} value={loginEmail || data.email} onChange={v => setData(d => ({ ...d, email: v }))} disabled />
         <EditField label={t('profile.phone')} value={data.phone} onChange={v => setData(d => ({ ...d, phone: v }))} placeholder="+1 555 123 4567" />
         <EditField label={t('profile.language')} value={data.language} onChange={v => setData(d => ({ ...d, language: v }))} placeholder="English, Italian" />
         <EditField label={t('profile.citizenship')} value={data.citizenship} onChange={v => setData(d => ({ ...d, citizenship: v }))} />
