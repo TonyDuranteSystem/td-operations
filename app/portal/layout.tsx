@@ -42,6 +42,7 @@ import { AppModeProvider } from '@/components/app-mode/app-mode-provider'
 import { getClientAppModeActive } from '@/lib/app-mode/server'
 import { ClientAppFrame } from '@/components/portal/client-app-frame'
 import { CompanySwitcher } from '@/components/portal/company-switcher'
+import { CompanySync } from '@/components/portal/company-sync'
 import { isPartnerPortal } from '@/lib/portal/tier-config'
 import { selectionQuery } from '@/lib/portal-app/selection-query'
 
@@ -343,6 +344,9 @@ export default async function PortalLayout({
       userName={userName || user.email?.split('@')[0]}
     />
   ) : null
+  // What every open tab compares against, so a change of company in one tab reaches the others at once (components/portal/company-sync.tsx).
+  const companySyncKey = selected.kind === 'account' ? `a:${selected.accountId}` : selected.kind === 'formation' ? `f:${selected.formationId}` : selected.kind === 'onboarding' ? `o:${selected.onboardingId}` : 'none'
+  const companySyncLabel = selected.kind === 'account' ? selected.account.company_name : selected.kind === 'none' ? '' : selected.label
   const appSelection = selectionQuery({
     kind: selected.kind,
     id: selected.kind === 'account' ? selected.accountId : selected.kind === 'formation' ? selected.formationId : selected.kind === 'onboarding' ? selected.onboardingId : undefined,
@@ -387,6 +391,7 @@ export default async function PortalLayout({
           />}
         <main className="flex-1 overflow-y-auto overscroll-y-contain">
           <PullToRefresh />
+          {contactId && <CompanySync selectedKey={companySyncKey} selectedLabel={companySyncLabel} />}
           {clientApp ? (
             <Suspense fallback={null}><ClientAppFrame selectionQuery={appSelection} switcher={appSwitcher} /></Suspense>
           ) : (
