@@ -54,6 +54,8 @@ import { StoreDocumentsPanel } from '@/components/accounts/store-documents-panel
 import { StoreBusyScope, useStoreBusy, STORE_BUSY_HINT } from '@/components/accounts/store-busy'
 import { ClosureNotifyCheckbox, isClosureServiceType, showClosurePromptToast } from '@/components/services/closure-notify'
 import { updateContactField, updateContactName, addContactNote } from '@/app/(dashboard)/contacts/[id]/actions'
+import { ChangeLoginEmailStaffDialog } from '@/components/contacts/change-login-email-staff-dialog'
+import { LOGIN_LINKED_ERROR } from '@/lib/portal/login-email-change-staff-shared'
 import { updateAccountContactRole, toggleDocumentPortalVisibility } from '@/app/(dashboard)/accounts/actions'
 import { useShareMessagePrompt, suppressesAutoChat, isSilentShow, type ShareDecision } from '@/components/storage/use-share-message-prompt'
 import { useWorkspaceStepPrompt } from '@/components/storage/use-workspace-step-prompt'
@@ -193,6 +195,8 @@ interface PortalAuth {
   lastLogin: string | null
   createdAt: string | null
   suspended: boolean
+  /** The email the client really signs in with (found by the contact id), or null when no client login is linked. */
+  loginEmail?: string | null
 }
 
 interface ContactDocumentRecord {
@@ -340,8 +344,16 @@ export function ContactDetail({
   const [showWhatsApp, setShowWhatsApp] = useState(false)
   const [chatUnread, setChatUnread] = useState(0)
 
+  // "Change login email" (staff): opened from the Portal tab, or from the Email box when the contact HAS a portal login
+  const [loginEmailDialog, setLoginEmailDialog] = useState<{ initial?: string } | null>(null)
+
   const makeContactSaver = (field: string) => async (value: string) => {
     const result = await updateContactField(contact.id, field, value, contact.updated_at)
+    // The contact has a portal login: the Email box must not change the contact alone, so open the real change instead
+    if (field === 'email' && !result.success && result.error === LOGIN_LINKED_ERROR) {
+      setLoginEmailDialog({ initial: value })
+      return { success: true }
+    }
     if (result.success) toast.success('Saved')
     else toast.error(result.error ?? 'Failed')
     return result
@@ -581,7 +593,7 @@ export function ContactDetail({
         <ChatTab contactId={contact.id} onUnreadChange={setChatUnread} />
       )}
       {activeTab === 'portal' && (
-        <PortalTab contact={contact} portalAuth={portalAuth} accounts={accounts} />
+        <PortalTab contact={contact} portalAuth={portalAuth} accounts={accounts} onChangeLoginEmail={() => setLoginEmailDialog({})} />
       )}
       {activeTab === 'health' && (
         <ContactHealthPanel contactId={contact.id} contactName={contact.full_name} />
@@ -613,6 +625,15 @@ export function ContactDetail({
           contactId={contact.id}
           name={contact.full_name || contact.email || 'this contact'}
           phone={(contact.phone || contact.phone_2 || contact.phone_3 || contact.phone_4) as string}
+        />
+      )}
+
+      {loginEmailDialog && (
+        <ChangeLoginEmailStaffDialog
+          contactId={contact.id}
+          initialEmail={loginEmailDialog.initial}
+          onClose={() => setLoginEmailDialog(null)}
+          onChanged={() => { setLoginEmailDialog(null); router.refresh() }}
         />
       )}
 
@@ -2597,10 +2618,12 @@ function PortalTab({
   contact,
   portalAuth,
   accounts,
+  onChangeLoginEmail,
 }: {
   contact: ContactRecord
   portalAuth: PortalAuth
   accounts: LinkedAccount[]
+  onChangeLoginEmail: () => void
 }) {
   const [loading, setLoading] = useState<string | null>(null)
   const [tier, setTier] = useState(contact.portal_tier ?? '')
@@ -2790,8 +2813,18 @@ function PortalTab({
           )}
 
           <div className="flex items-center justify-between">
-            <span className="text-sm text-muted-foreground">Email</span>
-            <span className="text-sm">{contact.email ?? '—'}</span>
+            <span className="text-sm text-muted-foreground">Login email</span>
+            <span data-testid="portal-login-email" className="text-sm">{portalAuth.loginEmail ?? '—'}</span>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-muted-foreground">Contact email</span>
+            <span
+              data-testid="portal-contact-email"
+              className={cn('text-sm', portalAuth.loginEmail && contact.email && portalAuth.loginEmail.trim().toLowerCase() !== contact.email.trim().toLowerCase() && 'text-amber-700 font-medium')}
+            >
+              {contact.email ?? '—'}
+            </span>
           </div>
         </div>
       </div>
@@ -2882,6 +2915,18 @@ function PortalTab({
               )}
             </div>
           )}
+
+          {/* Change the email the client signs in with — right away, no code, login + contact together, both addresses told
+              (dev job beb43385, step 3). Visible even when the Account row above says "Not created": a login whose email
+              drifted from the contact's is found by the contact id, and the dialog says plainly when there is none. */}
+          <button
+            onClick={onChangeLoginEmail}
+            data-testid="change-login-email-button"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-red-200 bg-red-50 text-red-700 text-sm font-medium hover:bg-red-100 transition-colors mt-3"
+          >
+            <KeyRound className="h-4 w-4" />
+            Change login email
+          </button>
 
           {/* Reconcile Portal Tier — P3.4 #2. Visible regardless of portalExists
               because tier drift (contact vs linked accounts vs auth user) can

@@ -112,6 +112,77 @@ ${button("This wasn't me")}
 }
 
 /**
+ * STAFF change (dev job beb43385, step 3): our team moved the login email, no code, so BOTH addresses are told.
+ * The old-address note has NO "This wasn't me" button on purpose: staff usually make this change because the old mailbox
+ * is lost or no longer trusted, and a button there would let whoever holds that mailbox take the login back.
+ * Whoever did not expect it writes to support, and staff change it back.
+ */
+export function buildStaffChangedNewEmail(params: {
+  fullName: string | null
+  locale: Locale
+  oldEmail: string
+  newEmail: string
+  loginUrl: string
+}): BuiltEmail {
+  const { fullName, locale, oldEmail, newEmail, loginUrl } = params
+  const button = (label: string) =>
+    `<p><a href="${esc(loginUrl)}" style="display:inline-block;padding:12px 24px;background:#2563eb;color:#fff;text-decoration:none;border-radius:8px;font-weight:600">${label}</a></p>`
+  if (locale === "it") {
+    return {
+      subject: "L'email di accesso al tuo portale è stata aggiornata",
+      html: `<div style="${WRAP}">
+<p>${greeting(fullName, locale)}</p>
+<p>Il nostro team ha aggiornato l'email che usi per accedere al tuo portale clienti Tony Durante: da <strong>${esc(oldEmail)}</strong> a <strong>${esc(newEmail)}</strong>.</p>
+<p>Da ora accedi con <strong>${esc(newEmail)}</strong>. <strong>La password non è cambiata.</strong> Se non la ricordi, usa "Password dimenticata" nella pagina di accesso.</p>
+${button("Accedi al portale")}
+<p style="${MUTED}">Se non ti aspettavi questa modifica, scrivi a support@tonydurante.us.</p>
+<p style="${FOOT}">Tony Durante LLC</p></div>`,
+    }
+  }
+  return {
+    subject: "Your portal login email was updated",
+    html: `<div style="${WRAP}">
+<p>${greeting(fullName, locale)}</p>
+<p>Our team updated the email you use to sign in to your Tony Durante client portal, from <strong>${esc(oldEmail)}</strong> to <strong>${esc(newEmail)}</strong>.</p>
+<p>From now on, sign in with <strong>${esc(newEmail)}</strong>. <strong>Your password has not changed.</strong> If you do not remember it, use "Forgot password" on the login page.</p>
+${button("Log in to the portal")}
+<p style="${MUTED}">If you did not expect this change, write to support@tonydurante.us.</p>
+<p style="${FOOT}">Tony Durante LLC</p></div>`,
+  }
+}
+
+export function buildStaffChangedOldEmail(params: {
+  fullName: string | null
+  locale: Locale
+  oldEmail: string
+  newEmail: string
+  changedAt: Date
+}): BuiltEmail {
+  const { fullName, locale, oldEmail, newEmail, changedAt } = params
+  const when = formatChangeDate(changedAt, locale)
+  if (locale === "it") {
+    return {
+      subject: "L'email di accesso al tuo portale è stata cambiata dal nostro team",
+      html: `<div style="${WRAP}">
+<p>${greeting(fullName, locale)}</p>
+<p>Il ${esc(when)} il nostro team ha cambiato l'email di accesso al tuo portale clienti Tony Durante da <strong>${esc(oldEmail)}</strong> a <strong>${esc(newEmail)}</strong>. La password non è cambiata.</p>
+<p>Se l'hai chiesto tu, non devi fare nulla.</p>
+<p><strong>Se non l'hai chiesto tu</strong>, scrivi subito a support@tonydurante.us e lo sistemiamo.</p>
+<p style="${FOOT}">Tony Durante LLC</p></div>`,
+    }
+  }
+  return {
+    subject: "Your portal login email was changed by our team",
+    html: `<div style="${WRAP}">
+<p>${greeting(fullName, locale)}</p>
+<p>On ${esc(when)} our team changed the login email for your Tony Durante client portal from <strong>${esc(oldEmail)}</strong> to <strong>${esc(newEmail)}</strong>. Your password has not changed.</p>
+<p>If you asked for this, there is nothing to do.</p>
+<p><strong>If you did not ask for this</strong>, write to support@tonydurante.us right away and we will fix it.</p>
+<p style="${FOOT}">Tony Durante LLC</p></div>`,
+  }
+}
+
+/**
  * Send through OUR Gmail, like every other client email. Returns "sandbox_blocked" (not "sent")
  * when SANDBOX_MODE turns the send into a no-op, so an audit row never claims a mail left the
  * building when it did not. Never throws.
