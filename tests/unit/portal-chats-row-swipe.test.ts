@@ -39,4 +39,12 @@ describe('Portal Chats list wiring', () => {
     expect(page).toContain('openThreadSwipe.right')
     expect(page).toContain("className=\"app-hide shrink-0\"") // stays hidden in the phone-app shell like the header it wraps
   })
+  it('the TD Social phone-app slim bar (PhoneConvNav) is swipeable too, not only the web header the app hides', () => {
+    const i = page.indexOf('<PhoneConvNav')
+    expect(i).toBeGreaterThan(0)
+    const before = page.slice(Math.max(0, i - 400), i)
+    expect(before).toContain('<SwipeRow')
+    expect(before).toContain('rowKey="open-header"')
+    expect(before).not.toContain('app-hide') // the app hides `app-hide`; this wrapper must stay visible there
+  })
 })
