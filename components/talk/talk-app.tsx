@@ -942,6 +942,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
         <TalkComposer
           key={selected.id} onSend={send} onEdit={edit} mode={mode} onCancelMode={() => setMode(null)} onTyping={announceTyping}
           draftKey={draftKey(meId, selected.id)}
+          soundCheck
           // the recording ended by itself (the 5-minute limit) while the question is open: the note was sent from this chat, so the question no longer applies
           onRecordingChange={on => { recordingRef.current = on; if (!on) setLeaveAsk(cur => (cur && !leaveBusyRef.current ? null : cur)) }}
           recordingControl={recordingControl}
