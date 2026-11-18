@@ -1,5 +1,34 @@
 import type { PortalIdentity } from '@/lib/portal/resolve-portal-identity'
-import { isPersonOwnedWizard } from '@/lib/portal/wizard-map'
+import { hasCapability, type CapabilityFlags } from '@/lib/portal/team/capabilities'
+
+/**
+ * Which wizards a TEAM login may use, and under which tick (team rules, 2026-11-17).
+ *   - the bank application (Payset / Relay)  -> the "Bank applications" tick
+ *   - the company data form (onboarding)     -> the "Company data form" tick
+ *   - the company's tax questionnaire         -> the "Company forms" tick (signing the return itself is never a tick)
+ *   - everything else is refused: closing the company, the ITIN form and a new company (formation) belong to a PERSON
+ *     (the owner or buyer), not to the company, and a team login has no person; the TD Communication audit; and any
+ *     wizard type not named here (default-deny).
+ * Before this, the server refused only the ITIN wizard and checked the company, so a team login with NO ticks
+ * could post the tax, closure, banking, onboarding or formation forms straight to the server.
+ * PURE — shared by the wizard-submit / wizard-progress routes, the upload routes and the wizard page.
+ */
+export function teammateMayUseWizard(capabilities: CapabilityFlags | null | undefined, wizardType: string | undefined): boolean {
+  switch (wizardType) {
+    case 'banking': // the bank picker (it never posts; it leads to Payset / Relay)
+    case 'banking_payset':
+    case 'banking_relay':
+      return hasCapability(capabilities, 'bank_applications')
+    case 'onboarding':
+      return hasCapability(capabilities, 'company_data_form')
+    case 'tax':
+    case 'tax_return':
+    case 'company_info':
+      return hasCapability(capabilities, 'company_forms')
+    default:
+      return false
+  }
+}
 
 /**
  * Whether the logged-in portal identity may submit a wizard for this subject.
@@ -36,18 +65,23 @@ export function canSubmitWizard(
     return true
   }
   if (identity.kind === 'teammate') {
-    // A person-owned wizard (ITIN) files a federal application in a named
-    // INDIVIDUAL's name and writes that person's identity fields onto their
-    // contact record. A teammate is scoped to a company and has no contact
-    // identity of their own, so there is no person they could legitimately
-    // submit one for. The company scope check below cannot help here either:
-    // these submissions deliberately carry no account_id, so it would pass
-    // unconditionally. Deny outright.
-    if (isPersonOwnedWizard(wizardType)) return false
-    // Teammates are scoped to exactly one company.
-    if (accountId && accountId !== identity.accountId) return false
+    // Only the wizards a tick covers (see teammateMayUseWizard) — closing, ITIN, formation and the rest are refused.
+    if (!teammateMayUseWizard(identity.capabilities, wizardType)) return false
+    // A team login is always tied to ITS company: a missing company is refused too (it used to pass, which let it
+    // reach contact-scoped drafts that carry no company, e.g. an owner's ITIN draft), and so is any other company.
+    if (!accountId || accountId !== identity.accountId) return false
     return true
   }
   // kind === 'none' (no resolvable portal identity) → deny.
   return false
+}
+
+/**
+ * When a draft (wizard_progress row) is UPDATED by id: the form type the caller names must be the type the draft really is.
+ * A team login holds a tick for ONE kind of form, so naming a different type than the saved one would let it write into
+ * another form's draft in its own company. Other logins are unaffected (they own every form of their own).
+ */
+export function savedDraftTypeAllowed(identity: PortalIdentity, savedType: string | null | undefined, namedType: string | undefined): boolean {
+  if (identity.kind !== 'teammate') return true
+  return !!savedType && savedType === namedType
 }

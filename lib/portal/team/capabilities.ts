@@ -6,9 +6,10 @@
  * are DEFAULT-DENY: a capability the owner did not explicitly grant (true) is
  * treated as denied.
  *
- * Two things are NEVER capabilities (non-delegable, owner/admin only):
- *   - signing legal documents (teammates may VIEW under `documents`, never sign)
- *   - managing the team itself (invite/edit/revoke)
+ * The owner decides what the team may do — that is the whole point, and each power is a tick. Only a short list is NEVER a tick
+ * (TD keeps it hard-locked):
+ *   - signing anything (the tax return, the operating agreement, leases, agreements — teammates may VIEW under `documents`)
+ *   - generating documents, changing owners / members, managing the team itself, changing the owner's own login
  *
  * Adding a new grantable section later = add its key here + map it to routes.
  * No schema change required (the column is JSONB).
@@ -27,6 +28,9 @@ export const TEAM_CAPABILITIES = [
   'announcements',      // portal announcements/notifications (owner-grantable extra)
   'payment_links',      // add / change / remove the company's invoice payment links (extra, needs invoices_billing)
   'invoice_history',    // see invoices and expenses saved BEFORE the person joined (extra, needs invoices_billing)
+  'company_forms',      // fill in and send the company's tax questionnaire (the owner still signs the return)
+  'request_services',   // ask for a new service (a request message in the company chat; needs chat)
+  'answer_decisions',   // approve / choose when TD asks the company a question (needs documents, where the questions are shown)
 ] as const
 
 export type TeamCapability = (typeof TEAM_CAPABILITIES)[number]
@@ -53,6 +57,9 @@ export function normalizeCapabilities(input: unknown): CapabilityFlags {
     delete out.payment_links
     delete out.invoice_history
   }
+  // A service request is a message in the company chat; a decision is shown on the documents / services page.
+  if (!out.chat) delete out.request_services
+  if (!out.documents) delete out.answer_decisions
   return out
 }
 
@@ -90,7 +97,9 @@ export function teammateNavCapability(navKey: string): TeamCapability | 'always'
       return 'chat'
     case 'nav.myClients':
       return 'sales_customers'
-    // Owner-only / non-delegable: nav.team, nav.signDocuments, nav.requestService,
+    case 'nav.requestService':
+      return 'request_services'
+    // Owner-only / non-delegable: nav.team, nav.signDocuments,
     // nav.referrals, nav.profile, nav.offer, nav.wizard, partner items → hidden.
     default:
       return null
