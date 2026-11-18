@@ -35,6 +35,7 @@ import { channelNotifiesStaff, conversationNotifiesParticipants } from '@/lib/te
 import { validateTeamPostTarget, validateTeamPostMessage, validateTeamPostAttachments } from '@/lib/team/post-message-validate'
 import { resolveActingUser } from '@/lib/team/acting-user'
 import type { ChatAttachment } from '@/lib/types'
+import { teamChatMessageUrl } from '@/lib/talk/links'
 
 export { validateTeamPostTarget, validateTeamPostMessage, validateTeamPostAttachments, TEAM_MESSAGE_MAX } from '@/lib/team/post-message-validate'
 
@@ -326,7 +327,7 @@ export async function postTeamMessage(input: PostTeamMessageInput): Promise<Post
   try {
     const preview = message.slice(0, 120)
       || (attachments?.length ? `📎 ${attachments[0].name}` : input.card ? '📇 Shared a card' : 'New message')
-    const url = `/team-chat?thread=${target.thread_id}${rootId ? `&root=${rootId}` : ''}`
+    const url = teamChatMessageUrl({ threadId: target.thread_id, rootId, messageId: msg.id as string })
     // Per-thread tag so two bugs don't replace each other on the lock screen.
     const tag = rootId ? `team-thread-${rootId}` : `team-thread-${target.thread_id}`
     // mentions already exclude the acting user (resolveMentions sender param).

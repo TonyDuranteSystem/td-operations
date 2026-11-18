@@ -20,6 +20,7 @@ import { WizardClient } from './wizard-client'
 import { isValidWizardType, isContactScopedWizard, isFlexibleWizardType, isPersonOwnedWizard, getContactScopedDiscoveryServiceTypes, type WizardType } from '@/lib/portal/wizard-map'
 import { wizardLabelFor } from '@/lib/portal/wizard-labels'
 import { getInProgressFormations, getInProgressOnboardings, getPortalAccounts } from '@/lib/portal/queries'
+import { LOGIN_EMAIL_FIELD, loginEmailLock } from '@/lib/portal/login-email-field'
 import { resolveWizardProgressScope } from '@/lib/portal/wizard-scope'
 import { getStartAtWizardServiceTypes } from '@/lib/services'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
@@ -1036,6 +1037,18 @@ export default async function WizardPage({
   if (account.formation_date) { prefillData.formation_date = account.formation_date; prefillData.date_of_incorporation = account.formation_date }
   if (account.filing_id) prefillData.filing_id = account.filing_id
 
+  // The Email box of the formation and onboarding wizards IS the client's portal login email (dev job beb43385). For a normal
+  // client it is locked to the real login email (not the CRM contact email, which can differ), with the big red must-read
+  // block; a client who already has a company also sees the "keep using this same email" paragraph. A team login has no
+  // contact, so its box stays as it was. The submit route forces the same value on the server.
+  const loginEmail = loginEmailLock({ wizardType, contactId, authEmail: user.email })
+  const lockedValues: Record<string, string> | undefined = loginEmail ? { [LOGIN_EMAIL_FIELD]: loginEmail } : undefined
+  let sameEmailNote = false
+  if (loginEmail && contactId) {
+    prefillData[LOGIN_EMAIL_FIELD] = loginEmail
+    sameEmailNote = (await getPortalAccounts(contactId)).length > 0
+  }
+
   // ITIN Renewal: pre-fill previous ITIN from contact
   if (isItinRenewal && contact.itin_number) {
     prefillData.has_previous_itin = 'Yes'
@@ -1431,6 +1444,8 @@ export default async function WizardPage({
           entityType={entityType}
           entityUnresolved={entityUnresolved}
           prefillData={prefillData}
+          lockedValues={lockedValues}
+          sameEmailNote={sameEmailNote}
           savedData={savedData as Record<string, string>}
           savedStep={savedStep}
           progressId={progressId}

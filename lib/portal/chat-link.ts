@@ -77,10 +77,16 @@ export function buildPortalChatLink(opts: { accountId?: string | null; topic?: s
   return `/portal/chat/open?${params.toString().replace(/\+/g, '%20')}`
 }
 
-/** Where /portal/chat/open sends the client after saving the company. */
-export function chatPathForTopic(topic: string | null | undefined): string {
+/**
+ * Where /portal/chat/open sends the client after saving the company. `personal` opens the client's personal chat, which is
+ * a chat-only view (?personal=1) and never changes the portal's company (dev job 58cb7a82).
+ */
+export function chatPathForTopic(topic: string | null | undefined, opts?: { personal?: boolean }): string {
   const t = safeTopic(topic)
-  return t ? `/portal/chat?topic=${encodeURIComponent(t)}` : '/portal/chat'
+  const params: string[] = []
+  if (opts?.personal) params.push('personal=1')
+  if (t) params.push(`topic=${encodeURIComponent(t)}`)
+  return params.length ? `/portal/chat?${params.join('&')}` : '/portal/chat'
 }
 
 export interface EntityCookieWrite {
@@ -94,10 +100,12 @@ const ONE_YEAR = 31536000
 
 /**
  * The cookie writes that select `e` — identical to the sidebar CompanySwitcher
- * (selectAccount / selectFormation) and the chat's own switch, so a link
- * leaves the portal in exactly the state a manual switch would.
+ * (selectAccount / selectFormation), so a link leaves the portal in exactly
+ * the state a manual switch would.
  */
 export function entityCookieWrites(e: PortalChatEntity): EntityCookieWrite[] {
+  // The personal chat is not a company: opening it changes no company setting (it is the ?personal=1 view of the chat).
+  if (e.kind === 'personal') return []
   if (e.kind === 'formation') {
     return [
       { name: 'portal_formation', value: e.id, maxAge: ONE_YEAR },
@@ -105,7 +113,7 @@ export function entityCookieWrites(e: PortalChatEntity): EntityCookieWrite[] {
     ]
   }
   return [
-    { name: 'portal_account_id', value: e.kind === 'personal' ? PERSONAL_CHAT_LINK : (e.accountId as string), maxAge: ONE_YEAR },
+    { name: 'portal_account_id', value: e.accountId as string, maxAge: ONE_YEAR },
     { name: 'portal_formation', value: '', maxAge: 0 },
     { name: 'portal_onboarding', value: '', maxAge: 0 },
   ]

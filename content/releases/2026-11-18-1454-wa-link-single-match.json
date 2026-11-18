@@ -1,0 +1,26 @@
+{
+  "title": "WhatsApp Inbox: one click links a chat to the matching lead or contact",
+  "tag": "improved",
+  "text": "When a WhatsApp number matches exactly one lead or contact, the green bar now has a \"Link this chat to …\" button. One click links the chat, and the chat then shows the CRM name instead of the name saved on the phone. Before, the bar only said \"Matches an existing lead\" and there was nothing to click, and the automatic linker could refuse when the phone name and the CRM name differ (for example Andrew and Andrea).",
+  "points": [
+    "Open a WhatsApp chat whose number is on one lead or contact",
+    "Press the Link button in the green bar",
+    "The chat header shows the lead's or contact's CRM name"
+  ],
+  "stepsTitle": "What happens in a WhatsApp chat with one match",
+  "steps": [
+    {
+      "name": "Open the chat",
+      "detail": "The green bar says which lead or contact has this number."
+    },
+    {
+      "name": "Press Link this chat",
+      "detail": "The chat is linked to that person.",
+      "flag": "new"
+    },
+    {
+      "name": "The chat updates",
+      "detail": "The header shows the CRM name; the bar disappears."
+    }
+  ]
+}

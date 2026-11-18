@@ -1,0 +1,12 @@
+{
+  "title": "Formation and onboarding forms: the Email box is now the locked portal login email",
+  "tag": "new",
+  "text": "In the formation form, and in the form for a client who already has a company, the Email box used to be editable, so a different email typed there changed only the CRM email, not the email the client logs in with. Now the box shows the real login email and cannot be typed over. A big red block, \"Read well before proceeding.\", says this is the email used to log in to the client portal, with an \"I read it\" tick: Next stays grey until it is ticked. A client who already has a company is told to keep the same email for the new one, so one login switches between companies. Submitting the form no longer changes the contact's email.",
+  "points": [
+    "Open the formation form as a client: the Email box shows their login email, locked, with the red block under it",
+    "Press Next without ticking \"I read it\": the block lights up and Next stays grey; tick it and Next turns blue",
+    "Open the form as a client who already has a company: the red block also has the paragraph about keeping the same email",
+    "Check the CRM contact after a submit: its email has not changed"
+  ],
+  "screenshot": "login-email-locked-with-warning.png"
+}

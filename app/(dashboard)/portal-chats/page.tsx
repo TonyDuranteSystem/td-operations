@@ -8,6 +8,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, Pencil, FileSignature, Landmark, Calculator, Home, XCircle, MessageCircle, ChevronDown, Pin, Mail, StickyNote, Link2, Languages, Lightbulb, FolderInput } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { cn } from '@/lib/utils'
+import { SwipeRow } from '@/components/portal-chats/swipe-row'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { useAudioNoteRecorder } from '@/lib/hooks/use-audio-note-recorder'
 import { clock } from '@/lib/talk/chat-model'
@@ -476,6 +477,8 @@ export default function PortalChatsPage() {
   const [selectedMsgIds, setSelectedMsgIds] = useState<Set<string>>(new Set())
   // Chat-list filter chip: All / Unread / What's New / Chats / Pinned (lib/portal-chats/list-filter.ts). Opens on Chats.
   const [listFilter, setListFilter] = useState<ListFilter>(DEFAULT_LIST_FILTER)
+  // The conversation row currently swiped open on a phone ('<threadKey>|left' or '|right'); only one at a time.
+  const [openSwipeKey, setOpenSwipeKey] = useState<string | null>(null)
   // "Open card" from a What's New note → opens the same dashboard card editor, preset to this client.
   const [cardPreset, setCardPreset] = useState<{
     accountId?: string | null
@@ -1315,6 +1318,9 @@ export default function PortalChatsPage() {
   // so the sidebar sees new last-message previews and unread badges immediately.
   useEffect(() => {
     const supabase = createSupabaseBrowserClient()
+    // A client message READ in another window (or by a colleague) is an UPDATE: the list's dots must follow within a second or two, not at the
+    // next 60 s refresh (Antonio, 2026-11-17: a page left open kept the red dot of a message already read). Coalesced: a burst is one reload.
+    let readDebounce: ReturnType<typeof setTimeout> | null = null
     const channel = supabase
       .channel('admin-portal-chat-thread-list')
       .on(
@@ -1328,8 +1334,22 @@ export default function PortalChatsPage() {
           queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
         }
       )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'portal_messages',
+          filter: 'sender_type=eq.client',
+        },
+        () => {
+          if (readDebounce) clearTimeout(readDebounce)
+          readDebounce = setTimeout(() => { queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] }) }, 1000)
+        }
+      )
       .subscribe()
     return () => {
+      if (readDebounce) clearTimeout(readDebounce)
       supabase.removeChannel(channel)
     }
   }, [queryClient])
@@ -2796,6 +2816,29 @@ export default function PortalChatsPage() {
                 : selectedContactId === thread.contact_id
               return (
               <FastTooltip key={threadKey} label={thread.contact_name ? `${thread.company_name} — ${thread.contact_name}` : thread.company_name} className="w-full">
+                <SwipeRow
+                  rowKey={threadKey}
+                  openKey={openSwipeKey}
+                  onOpenChange={setOpenSwipeKey}
+                  leftActions={[
+                    ...((thread.account_id || thread.contact_id) ? [thread.unread_count > 0
+                      ? { key: 'read', label: 'Read', icon: <MailCheck className="h-4 w-4" />, className: 'bg-blue-600', onPress: () => { void markAsRead(thread) } }
+                      : { key: 'unread', label: 'Unread', icon: <MailOpen className="h-4 w-4" />, className: 'bg-blue-600', onPress: () => { void markAsUnread(thread) } }] : []),
+                    { key: 'pin', label: thread.is_pinned ? 'Unpin' : 'Pin', icon: <Pin className="h-4 w-4" />, className: 'bg-amber-500', onPress: () => pinThreadMutation.mutate({ account_id: thread.account_id, contact_id: thread.contact_id, pinned: !thread.is_pinned }) },
+                  ]}
+                  rightActions={(() => {
+                    // Same scope the thread opens with: a multi-member company by account, every other thread by contact.
+                    const byAccount = !!thread.account_id && (thread.members ?? []).length > 0
+                    const rel = byAccount ? `/portal-chats?account=${thread.account_id}` : thread.contact_id ? `/portal-chats?contact=${thread.contact_id}` : null
+                    return [
+                      { key: 'note', label: 'Note', icon: <StickyNote className="h-4 w-4" />, className: 'bg-yellow-500', onPress: () => setNoteSeed({ accountId: byAccount ? thread.account_id : null, contactId: byAccount ? null : thread.contact_id, prefill: '', originUrl: rel ?? undefined }) },
+                      { key: 'link', label: 'Copy link', icon: <Link2 className="h-4 w-4" />, className: 'bg-zinc-600', onPress: () => {
+                        if (!rel) return
+                        navigator.clipboard.writeText(`${window.location.origin}${rel}`).then(() => toast.success('Link copied.')).catch(() => toast.error('Could not copy the link on this device.'))
+                      } },
+                    ]
+                  })()}
+                >
                 <button
                   onClick={() => {
                     const members = thread.members ?? []
@@ -2982,6 +3025,7 @@ export default function PortalChatsPage() {
                     {thread.last_message_at ? format(parseISO(thread.last_message_at), 'MMM d, h:mm a') : ''}
                   </p>
                 </button>
+                </SwipeRow>
               </FastTooltip>
               )
             })

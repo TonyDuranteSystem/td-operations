@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
+import { findDamagedVoiceAttachment } from '@/lib/team/voice-guard'
 import { listGroupMemberIds } from '@/lib/team/groups'
 import { isDmParticipant, isGroupMember, otherMembers } from '@/lib/team/groups-rules'
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -13,6 +14,7 @@ import { talkAlertKind } from '@/lib/push/alert-kinds'
 import { channelNotifiesStaff, conversationNotifiesParticipants } from '@/lib/team/channel-notify'
 import type { ChatAttachment } from '@/lib/types'
 import { NextRequest, NextResponse } from 'next/server'
+import { teamChatMessageUrl } from '@/lib/talk/links'
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/$/, '') ?? ''
 
@@ -80,6 +82,9 @@ export async function POST(
         return NextResponse.json({ error: 'Invalid attachment URL' }, { status: 400 })
       }
     }
+    // a voice note with no audio header cannot be played by anyone: refuse it instead of posting it (18 Nov 2026)
+    const damaged = await findDamagedVoiceAttachment(attachments)
+    if (damaged) return NextResponse.json({ error: damaged }, { status: 400 })
   }
 
   // Thread must exist. (as-any: generated types predate thread_type — same
@@ -221,7 +226,8 @@ export async function POST(
     const preview = message.slice(0, 120) || (attachments?.length ? `📎 ${attachments[0].name}` : card ? '📇 Shared a card' : 'New message')
     // Deep-link: a reply opens the thread pane on its root; a top-level message
     // opens the channel.
-    const threadUrl = `/team-chat?thread=${threadId}${rootId ? `&root=${rootId}` : ''}`
+    // the link names the message too: a tap on the alert opens the chat AND scrolls to it (lib/talk/links.ts)
+    const threadUrl = teamChatMessageUrl({ threadId, rootId, messageId: msg.id as string })
     // ── WORK CHANNELS NOTIFY EVERY STAFF MEMBER ───────────────────────────
     // Antonio 2026-07-24: "There is only Luca and me... I have to know
     // everything because I work on the bugs." The old rule pushed a channel

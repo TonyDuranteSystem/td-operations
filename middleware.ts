@@ -26,6 +26,11 @@ const PUBLIC_PREFIXES = [
   // Self-serve password reset request — by definition called by a logged-OUT
   // client. Without this prefix the route 401s before its handler ever runs.
   '/api/portal/password-reset',
+  // "This wasn't me" in the note sent to the OLD address after a login-email change (dev job beb43385): opened by someone who
+  // is not logged in; the single-use link itself is the proof. Both the page and the action it calls. Neither name starts with
+  // another public prefix, and no other route starts with these.
+  '/portal/undo-email-change',
+  '/api/portal/undo-email-change',
   // Client error-capture beacon — self-auths internally (route.ts checks the
   // session itself and only skips it for one allowlisted diagnostic route,
   // rate-limited). Without this prefix the middleware's own session gate
