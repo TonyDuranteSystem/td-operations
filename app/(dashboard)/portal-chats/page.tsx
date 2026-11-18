@@ -3504,6 +3504,14 @@ export default function PortalChatsPage() {
               const companies = selectedThreadCompanies.length > 0 ? selectedThreadCompanies : (currentThread?.companies ?? [])
               const subtitle = companies.length > 0 ? companies.map(c => (c.closed ? `${c.name} (closed)` : c.name)).join(' · ') : 'Portal chat'
               return (
+                <SwipeRow
+                  rowKey="open-header"
+                  className="shrink-0"
+                  openKey={openSwipeKey}
+                  onOpenChange={setOpenSwipeKey}
+                  leftActions={openThreadSwipe.left}
+                  rightActions={openThreadSwipe.right}
+                >
                 <PhoneConvNav
                   title={displayName}
                   titleHref={selectedContactId ? `/contacts/${selectedContactId}` : selectedAccountId ? `/accounts/${selectedAccountId}` : undefined}
@@ -3513,6 +3521,7 @@ export default function PortalChatsPage() {
                   onBack={leaveConversation}
                   onMore={() => setAppSheet('more')}
                 />
+                </SwipeRow>
               )
             })()}
             <SwipeRow
