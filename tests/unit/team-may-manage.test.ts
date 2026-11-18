@@ -47,10 +47,17 @@ describe('several-owner company (the members list decides who the owners are)', 
     expect(ok(input({ members: [member('C1', { end_date: '2026-11-17' }), member('C2')] })).ok).toBe(false)
     expect(ok(input({ members: [member('C1', { end_date: '2026-12-31' }), member('C2')] })).ok).toBe(true)
   })
-  it('a member who has not started yet is not current (and does not make the list "current")', () => {
+  it('a member who has not started yet is not current', () => {
     expect(ok(input({ members: [member('C1', { start_date: '2027-01-01' }), member('C2')] })).ok).toBe(false)
-    // only future / ended rows: no current list, so the link role decides
-    expect(ok(input({ members: [member('C1', { start_date: '2027-01-01' })] })).ok).toBe(true)
+  })
+  it('a members list with NO current row at all lets NOBODY manage (ownership is in flux) — never "everyone with a link"', () => {
+    expect(ok(input({ members: [member('C1', { start_date: '2027-01-01' })] }))).toEqual({ ok: false, reason: 'not_on_members_list' })
+    expect(ok(input({ members: [member('C1', { end_date: '2026-10-01' }), member('C2', { end_date: '2026-09-01' })] })).reason).toBe('not_on_members_list')
+    // the old owner left and the new owner has no members row yet: the old link must not manage
+    expect(ok(input({ contactId: 'OLD', members: [member('OLD', { end_date: '2026-11-01' })] })).ok).toBe(false)
+  })
+  it('a company with NO members rows at all is still decided by the link role', () => {
+    expect(ok(input({ members: [] })).ok).toBe(true)
   })
   it('a members row with no contact and no matching name never matches anyone', () => {
     expect(ok(input({ contactId: 'C9', contactName: 'Zed Nobody', link: link({ role: 'Member' }), members: [member(null, { full_name: 'Someone Else' }), member('C2')] })).ok).toBe(false)
@@ -80,6 +87,24 @@ describe('an owner on the members list whose row was never linked to their conta
     expect(ok(input({ contactName: 'Arturo Paturzo', members: [member(null, { full_name: 'Arturo Paturzo', end_date: '2026-01-01' }), member('C2')] })).reason).toBe('not_on_members_list')
     expect(ok(input({ contactName: 'Arturo Paturzo', link: link({ role: 'authorized_representative' }), members: unlinked })).reason).toBe('not_owner_or_member')
     expect(ok(input({ contactName: 'Arturo Paturzo', link: null, members: unlinked })).reason).toBe('no_link')
+  })
+})
+
+describe('"today" is the New York day, not the UTC day', () => {
+  // 02:00 UTC on 18 Nov is 9 pm on 17 Nov in New York
+  const lateNy = new Date('2026-11-18T02:00:00.000Z')
+  it('a row that ends today (New York) is already gone, even though UTC says yesterday', () => {
+    expect(decideMayManageTeam(input({ members: [member('C1', { end_date: '2026-11-17' }), member('C2')] }), lateNy).ok).toBe(false)
+    expect(decideMayManageTeam(input({ members: [member('C1', { end_date: '2026-11-18' }), member('C2')] }), lateNy).ok).toBe(true)
+  })
+  it('a row that starts tomorrow (New York) has not started, even though UTC says it has', () => {
+    expect(decideMayManageTeam(input({ members: [member('C1', { start_date: '2026-11-18' }), member('C2')] }), lateNy).ok).toBe(false)
+    expect(decideMayManageTeam(input({ members: [member('C1', { start_date: '2026-11-17' }), member('C2')] }), lateNy).ok).toBe(true)
+  })
+  it('in the morning New York time nothing changes', () => {
+    const morning = new Date('2026-11-18T14:00:00.000Z')
+    expect(decideMayManageTeam(input({ members: [member('C1', { end_date: '2026-11-18' }), member('C2')] }), morning).ok).toBe(false)
+    expect(decideMayManageTeam(input({ members: [member('C1', { end_date: '2026-11-19' }), member('C2')] }), morning).ok).toBe(true)
   })
 })
 

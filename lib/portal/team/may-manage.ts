@@ -15,7 +15,8 @@
  *      "On the list" = a current row whose contact is this person, OR — only for a row that was never linked to a contact
  *      (4 real companies today: the owner is on the list by name but the row has no contact) — a row whose full name is
  *      exactly this person's name (case and spaces ignored). A row that IS linked to someone else never matches by name.
- *      A company with no current members rows (a single-owner company) is decided by step 2 alone.
+ *      A company with NO members rows at all (a single-owner company) is decided by step 2 alone. A company whose list exists
+ *      but has no CURRENT row (everyone ended, or none started) lets nobody manage until TD records the owners.
  *
  * It replaces the old "one main person" rule (override → SS-4 signer → owner role → sole contact). The override column
  * `accounts.portal_admin_contact_id` is no longer read here (no company uses it).
@@ -67,9 +68,10 @@ export function normalizeName(name: string | null | undefined): string {
   return (name ?? '').trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
-/** The day as YYYY-MM-DD (dates in the members list have no time). */
+/** The business runs on New York time: a members date has no time, so "today" is the New York day (YYYY-MM-DD). */
+const NEW_YORK_DAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' })
 function dayOf(now: Date): string {
-  return now.toISOString().slice(0, 10)
+  return NEW_YORK_DAY.format(now)
 }
 
 /** A members row counts today when it has started and has not ended. */
@@ -96,7 +98,12 @@ export function decideMayManageTeam(input: ManageInputs, now: Date = new Date())
   if (!(OWNER_MEMBER_ROLES as readonly string[]).includes(role)) return { ok: false, reason: 'not_owner_or_member' }
 
   const current = input.members.filter((m) => isCurrentMemberRow(m, now))
-  if (current.length === 0) return { ok: true, reason: 'ok', matchedBy: 'no_list' }
+  if (current.length === 0) {
+    // A list that EXISTS but has no current row (everyone ended, or none started yet) means ownership is in flux: nobody
+    // manages until TD records who the owners are. Only a company with NO members rows at all is decided by the link role.
+    if (input.members.length > 0) return { ok: false, reason: 'not_on_members_list' }
+    return { ok: true, reason: 'ok', matchedBy: 'no_list' }
+  }
   if (current.some((m) => m.contact_id === input.contactId)) return { ok: true, reason: 'ok', matchedBy: 'contact' }
   const me = normalizeName(input.contactName)
   if (me && current.some((m) => !m.contact_id && normalizeName(m.full_name) === me)) return { ok: true, reason: 'ok', matchedBy: 'name' }
