@@ -1,0 +1,12 @@
+{
+  "title": "TD Talk: tapping a message alert opens the chat and goes straight to that message",
+  "tag": "fixed",
+  "text": "Tapping a TD Talk alert on the lock screen used to open the app but not the message. Alerts about one message now carry that message, so the chat opens and scrolls to it, even when it is far back in the history and even when another chat was open. Tapping the same alert again takes you back to it. This applies at once to the TD Talk web app and to the home-screen version. The TD Social iPhone app also needed a change to recognise these alerts, and that change reaches phones with the next app update.",
+  "points": [
+    "Receive a message in TD Talk, tap its alert on the lock screen: the chat opens at that message, highlighted",
+    "Tap an alert while a different chat is open: you land in the right chat, not the open one",
+    "Tap the alert for a message from long ago: older messages load until it is found",
+    "In the iPhone app this works after the next app update"
+  ],
+  "screenshot": "talk-alert-opens-message.png"
+}
