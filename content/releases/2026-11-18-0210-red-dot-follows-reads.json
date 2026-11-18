@@ -1,0 +1,33 @@
+{
+  "title": "Portal Chats: the red numbers clear in every open window once a message is read",
+  "tag": "fixed",
+  "text": "A page left open used to keep the red dot of a client message that someone had already read in another window. On the Portal Chats page the number in the left menu never changed at all, and the conversation list took about a minute. Now when a message is read, every other open window updates within a few seconds. A window that was left in the background also refreshes the moment you come back to it.",
+  "points": [
+    "Open Portal Chats in two windows, read a client message in one: the red number in the other drops within seconds",
+    "The conversation list dot also clears within seconds",
+    "Switch back to a window you left for a while: its numbers refresh at once"
+  ],
+  "stepsTitle": "How a red number now stays true",
+  "steps": [
+    {
+      "name": "You read a client message",
+      "detail": "In any window: opening the conversation marks it read.",
+      "flag": "auto"
+    },
+    {
+      "name": "The system hears the read",
+      "detail": "Every other open window is told that a message was read.",
+      "flag": "new"
+    },
+    {
+      "name": "The red numbers update",
+      "detail": "The left menu and the conversation list clear their dot within seconds, also on the Portal Chats page.",
+      "flag": "new"
+    },
+    {
+      "name": "A window you left asks again",
+      "detail": "When you come back to a window that was in the background, it checks at once.",
+      "flag": "new"
+    }
+  ]
+}

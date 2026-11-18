@@ -6,6 +6,7 @@ import { checkRateLimit } from '@/lib/portal/rate-limit'
 import { VOICE_MAX_BYTES, pickVoiceAttachment } from '@/lib/team/voice-text'
 import { backupPathFor, teamChatAudioPath } from '@/lib/team/voice-flatten'
 import { fragmentedMp4ToFlat, looksFragmented } from '@/lib/media/fmp4-to-flat'
+import { isDamagedAudioHead } from '@/lib/media/audio-header'
 import { NextRequest, NextResponse } from 'next/server'
 
 export const maxDuration = 60
@@ -61,6 +62,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (!headRes.ok) return NextResponse.json({ error: 'Could not load the audio.' }, { status: 502 })
     const head = new Uint8Array(await headRes.arrayBuffer())
     if (!looksFragmented(head)) {
+      // a file with no audio header is not "already fine": say so (it was marked fine before, 18 Nov 2026)
+      if (isDamagedAudioHead(head, att.mime_type || att.name)) {
+        await mark({ flat: true, damaged: true })
+        return NextResponse.json({ ok: false, reason: 'damaged' })
+      }
       await mark({ flat: true })
       return NextResponse.json({ ok: true, already: true, flattened_at: null })
     }
