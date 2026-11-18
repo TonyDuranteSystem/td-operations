@@ -79,9 +79,9 @@ describe('screenTitleFor', () => {
 describe('portal layout wiring', () => {
   const layout = readFileSync(join(process.cwd(), 'app/portal/layout.tsx'), 'utf8')
 
-  it('reads the client app marker once and hands it to the app-mode wrapper (signed out, access removed, team member, client)', () => {
+  it('reads the client app marker once and hands it to the app-mode wrapper (signed out, team login on its temporary password, access removed, team member, client)', () => {
     expect(layout).toContain("getClientAppModeActive()")
-    expect((layout.match(/<AppModeProvider initial=\{clientApp\}>/g) ?? []).length).toBe(4)
+    expect((layout.match(/<AppModeProvider initial=\{clientApp\}>/g) ?? []).length).toBe(5)
   })
 
   it('leaves out the website chrome only when in the app', () => {

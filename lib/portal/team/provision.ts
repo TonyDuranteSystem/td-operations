@@ -165,6 +165,8 @@ export async function provisionTeammate(input: TeammateInput, deps: ProvisionDep
       role: 'client',
       kind: 'team_member',
       account_id: value.accountId,
+      // Server-enforced "choose your own password" (see password-flag.ts): cleared only by /api/portal/change-password.
+      must_change_password: true,
     },
     userMetadata: {
       display_name: value.displayName,

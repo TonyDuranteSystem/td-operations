@@ -90,6 +90,13 @@ describe('wizard file uploads — a team login uploads only for a wizard its tic
     expect(res.status).toBe(403)
   })
 
+  it('a login that is nobody (e.g. a team login still on its temporary password) can not mint an upload path or upload', async () => {
+    getUser.mockResolvedValue({ data: { user: teamLogin } })
+    resolveIdentity.mockResolvedValue({ kind: 'none' })
+    expect((await wizardUploadUrl(jsonReq(uploadBody()))).status).toBe(403)
+    expect((await wizardUpload(formReq({ wizard_type: 'banking_payset' }))).status).toBe(403)
+  })
+
   it('wizard-upload-url still serves a normal client, unchanged', async () => {
     getUser.mockResolvedValue({ data: { user: clientLogin } })
     resolveIdentity.mockResolvedValue(contactIdentity)

@@ -8,6 +8,7 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts, getPortalActiveServices, getPortalNavVisibility, getPortalTierByContact, getPortalRoleByContact, getContactOnlyNavVisibility, getUnreadChatCount, getInProgressFormations, getInProgressOnboardings, getPortalAccountById, getUnpaidInvoiceCount, getUnseenReactionState } from '@/lib/portal/queries'
 import { resolveSelectedEntity } from '@/lib/portal/select-entity'
 import { isAccountAdmin } from '@/lib/portal/team/account-admin'
+import { teamMustChangePassword } from '@/lib/portal/team/password-flag'
 import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
 import { computeHasWizardPending } from '@/lib/portal/wizard-visibility'
 import { getLocale } from '@/lib/portal/i18n'
@@ -84,6 +85,15 @@ export default async function PortalLayout({
 
   // ── Teammate (Portal Team Access) — scoped to ONE company; nav filtered by capability ──
   if ((user.app_metadata as Record<string, unknown>)?.kind === 'team_member') {
+    // Still on the temporary password: no shell, no menu, no data — just the page where they choose their own password.
+    if (teamMustChangePassword(user)) {
+      return (
+        <AppModeProvider initial={clientApp}><SandboxBanner />
+          <PasswordGate mustChangePassword />
+          {children}
+        </AppModeProvider>
+      )
+    }
     const identity = await resolvePortalIdentity(user)
     const tmLocale = getLocale(user)
     if (identity.kind !== 'teammate') {

@@ -407,6 +407,8 @@ export async function resetTeammatePassword(id: string, accountId: string, actor
   const { error } = await supabaseAdmin.auth.admin.updateUserById(row.auth_user_id, {
     password,
     user_metadata: { ...(existing?.user?.user_metadata ?? {}), must_change_password: true },
+    // Server-enforced: until they choose their own password again the login has no access (see password-flag.ts).
+    app_metadata: { ...meta, must_change_password: true },
   })
   if (error) throw new Error(error.message)
   // The new password is already set, so the owner must get it even if the log line fails (best effort).

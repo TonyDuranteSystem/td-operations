@@ -74,6 +74,8 @@ describe('resetTeammatePassword', () => {
     expect(r.username).toBe('mario')
     expect(r.password.length).toBeGreaterThan(8)
     expect(state.authUpdates[0].attrs.user_metadata).toMatchObject({ must_change_password: true, x: 1 })
+    // server-enforced: the flag goes into app metadata too, keeping what was already there
+    expect(state.authUpdates[0].attrs.app_metadata).toMatchObject({ role: 'client', kind: 'team_member', must_change_password: true })
     expect(eventsWritten()).toEqual(['password_reset'])
   })
   it('REFUSES a login that is not a team login (a real client\'s password can never be reset here)', async () => {
