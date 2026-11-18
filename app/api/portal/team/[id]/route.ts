@@ -5,6 +5,7 @@
  */
 import { createClient } from '@/lib/supabase/server'
 import { assertAccountAdmin, updateTeammate, revokeTeammate } from '@/lib/portal/team/server'
+import { ownerActorFromRequest } from '@/lib/portal/team/events'
 import { NextRequest, NextResponse } from 'next/server'
 
 export const dynamic = 'force-dynamic'
@@ -23,7 +24,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
     await updateTeammate(params.id, accountId, {
       capabilities: body.capabilities,
       display_name: body.display_name,
-    })
+    }, ownerActorFromRequest(adminContactId, request.headers))
     return NextResponse.json({ ok: true })
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : 'Update failed' }, { status: 400 })
@@ -41,7 +42,7 @@ export async function DELETE(request: NextRequest, { params }: { params: { id: s
   if (!adminContactId) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
   try {
-    await revokeTeammate(params.id, accountId)
+    await revokeTeammate(params.id, accountId, ownerActorFromRequest(adminContactId, request.headers))
     return NextResponse.json({ ok: true })
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : 'Revoke failed' }, { status: 400 })
