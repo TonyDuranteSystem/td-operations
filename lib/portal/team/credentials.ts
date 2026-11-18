@@ -43,6 +43,14 @@ export function usernameFromName(displayName: string): string {
   return base.length >= 3 ? base : (base ? `${base}.team` : 'team').slice(0, 24)
 }
 
+/**
+ * A username as an exact (case-insensitive) pattern for ilike: `_`, `%` and `\` mean "any one letter", "anything" and the escape
+ * in a LIKE pattern, so `a_b` used to match `a.b` too, and the lookup then found two people and signed neither in.
+ */
+export function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, (c) => `\\${c}`)
+}
+
 /** First free username: `marco.rossi`, then `marco.rossi2`, `marco.rossi3`... */
 export async function suggestUsername(displayName: string, isTaken: (usernameLower: string) => Promise<boolean>): Promise<string> {
   const base = usernameFromName(displayName)
@@ -51,5 +59,10 @@ export async function suggestUsername(displayName: string, isTaken: (usernameLow
     const candidate = `${base}${i}`
     if (!(await isTaken(candidate))) return candidate
   }
-  return `${base}${Math.floor(Math.random() * 9000) + 1000}`
+  // 98 taken in a row is very unlikely; try random endings, but never hand back one nobody checked.
+  for (let i = 0; i < 10; i++) {
+    const candidate = `${base}${Math.floor(Math.random() * 9000) + 1000}`
+    if (!(await isTaken(candidate))) return candidate
+  }
+  throw new Error('Could not find a free username — please type one yourself')
 }

@@ -4,6 +4,7 @@
  */
 import { createClient } from '@/lib/supabase/server'
 import { assertAccountAdmin, resetTeammatePassword } from '@/lib/portal/team/server'
+import { ownerActorFromRequest } from '@/lib/portal/team/events'
 import { NextRequest, NextResponse } from 'next/server'
 
 export const dynamic = 'force-dynamic'
@@ -19,7 +20,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   if (!adminContactId) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
   try {
-    const r = await resetTeammatePassword(params.id, accountId)
+    const r = await resetTeammatePassword(params.id, accountId, ownerActorFromRequest(adminContactId, request.headers))
     return NextResponse.json({ ok: true, username: r.username, password: r.password })
   } catch (err) {
     return NextResponse.json({ error: err instanceof Error ? err.message : 'Reset failed' }, { status: 400 })

@@ -24,6 +24,10 @@ export interface TeammateInput {
   capabilities: unknown
   createdByContactId: string
   disclaimerAccepted: boolean
+  /** The responsibility notice the owner accepted (its version) — stored on the row and in the record. Optional until the owner screens send it. */
+  noticeVersion?: string | null
+  /** Where the owner's request came from, for the record. */
+  ip?: string | null
 }
 
 export interface NormalizedTeammate {
@@ -64,6 +68,12 @@ export function validateTeammateInput(input: TeammateInput): { errors: string[];
   }
 }
 
+/** A database "this already exists" refusal (Postgres 23505) — what a double click or a username race produces. */
+export function isDuplicateError(err: unknown): boolean {
+  const e = err as { code?: string; message?: string } | null
+  return e?.code === '23505' || /duplicate key|already exists/i.test(e?.message ?? '')
+}
+
 /** Generate a stable, non-deliverable placeholder email: the team login's address, never shown, never mailed. */
 export function generateTeammateEmail(token: string): string {
   return `tm-${token}@teammate.portal.tonydurante.us`
@@ -85,7 +95,15 @@ export interface ProvisionDeps {
     email: string | null
     capabilities: CapabilityFlags
     created_by: string
+    notice_version?: string | null
+    notice_accepted_ip?: string | null
   }) => Promise<{ id: string }>
+  /** Undo for a half-made add: delete the login that was just created (so no orphan login with a lost password is left behind). */
+  deleteAuthUser?: (authUserId: string) => Promise<void>
+  /** Undo for an add whose record could not be saved: delete the team entry just made. */
+  deleteTeamMember?: (teamMemberId: string) => Promise<void>
+  /** STRICT write of the "added" line of the team record. If it throws, the whole add is undone. */
+  recordAdded?: (info: { teamMemberId: string; accountId: string; createdByContactId: string; username: string; displayName: string; capabilities: CapabilityFlags; noticeVersion: string | null; ip: string | null }) => Promise<void>
   newToken: () => string
   /**
    * A Member / Owner of this company with the same name (a contact linked to it). They get their own full login with the
@@ -154,15 +172,46 @@ export async function provisionTeammate(input: TeammateInput, deps: ProvisionDep
     },
   })
 
-  const row = await deps.insertTeamMember({
-    account_id: value.accountId,
-    auth_user_id: authUser.id,
-    username,
-    display_name: value.displayName,
-    email: null, // no email at all for team members
-    capabilities: value.capabilities,
-    created_by: value.createdByContactId,
-  })
+  // Two separate writes (login, then team entry): if the second fails — a double click or a username race, the database's
+  // unique rule refuses it — the login just made is deleted, so no orphan login and no lost password is left behind.
+  let row: { id: string }
+  try {
+    row = await deps.insertTeamMember({
+      account_id: value.accountId,
+      auth_user_id: authUser.id,
+      username,
+      display_name: value.displayName,
+      email: null, // no email at all for team members
+      capabilities: value.capabilities,
+      created_by: value.createdByContactId,
+      notice_version: input.noticeVersion ?? null,
+      notice_accepted_ip: input.noticeVersion ? input.ip ?? null : null,
+    })
+  } catch (err) {
+    await deps.deleteAuthUser?.(authUser.id).catch(() => undefined)
+    if (isDuplicateError(err)) return { ok: false, errors: ['That username is already taken — pick another'] }
+    throw err
+  }
+
+  // No record, no grant: the line of the team record is written now, and if it cannot be saved the add is undone.
+  if (deps.recordAdded) {
+    try {
+      await deps.recordAdded({
+        teamMemberId: row.id,
+        accountId: value.accountId,
+        createdByContactId: value.createdByContactId,
+        username,
+        displayName: value.displayName,
+        capabilities: value.capabilities,
+        noticeVersion: input.noticeVersion ?? null,
+        ip: input.ip ?? null,
+      })
+    } catch {
+      await deps.deleteTeamMember?.(row.id).catch(() => undefined)
+      await deps.deleteAuthUser?.(authUser.id).catch(() => undefined)
+      return { ok: false, errors: ['We could not save the record of this change, so nothing was created. Please try again.'] }
+    }
+  }
 
   return { ok: true, teamMemberId: row.id, username, password }
 }
