@@ -1,0 +1,12 @@
+{
+  "title": "Company page: a Team card shows the people the owners gave a login, with a silent switch off and on",
+  "tag": "new",
+  "text": "A company's page now has a Team logins card whenever its owners have given a colleague their own sign-in. For each person it shows what they can do, who added them and when, the notice the owner accepted (the saved words), their last sign-in and whether they are active. Staff can switch a person off or back on from the card. It is silent: nobody is emailed. Switching off needs a reason, which is saved in the team record together with the staff login that did it. If TD switches someone off, the owner cannot switch them back on. The card is not shown for companies without team logins, and it never changes the company's members or contacts.",
+  "points": [
+    "Open a company that has team logins: the Team logins card sits under Contacts and Members",
+    "Notice signed shows the exact words the owner accepted; History lists what happened to the person",
+    "Switch off asks for a reason and blocks the sign-in at once; Switch on lets them in again",
+    "Nothing is sent to the owner or the person when staff switch someone off or on"
+  ],
+  "screenshot": "team-crm-card.png"
+}
