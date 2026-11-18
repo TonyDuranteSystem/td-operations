@@ -42,6 +42,12 @@ function collectField(field: FieldConfig, out: Record<string, string>): void {
     addIfPresent(out, field.hint)
     addIfPresent(out, field.repeaterAddLabel)
     addIfPresent(out, field.danger?.text)
+    // The login-email box (dev job beb43385): its locked label and the big red must-read block.
+    addIfPresent(out, field.lockedLabel)
+    addIfPresent(out, field.mustRead?.lead)
+    addIfPresent(out, field.mustRead?.text)
+    addIfPresent(out, field.mustRead?.extraLead)
+    addIfPresent(out, field.mustRead?.extraText)
     for (const opt of field.options ?? []) addIfPresent(out, opt.label)
   }
 
@@ -161,6 +167,12 @@ const WIZARD_UI_TEXT_EN: string[] = [
   "⚠️ Double-check the account number after you type it — if it's wrong, your P&L will be wrong.",
   'This is a multi-currency service or crypto (no single account number)',
   // wizard-field.tsx
+  // The shared must-read block + the locked login email (dev job beb43385)
+  'Read well before proceeding.',
+  'I read it',
+  'To change it, message us in chat.',
+  // wizard-client.tsx — what the step gate and the grey Next button say while the tick is missing
+  'Tick "I read it" to continue.',
   'Pre-filled',
   'Draft an answer with AI',
   'Drafting…',

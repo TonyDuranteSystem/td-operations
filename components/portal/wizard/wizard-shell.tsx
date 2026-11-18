@@ -31,6 +31,10 @@ interface WizardShellProps {
    *  form — which otherwise opens with no indication of its purpose). */
   title?: string | null
   subtitle?: string | null
+  /** A plain sentence saying why the client cannot go on yet (the unticked "I read it"). While set,
+   *  Next/Submit is drawn GREY with this sentence beside it. The button still works: pressing it runs
+   *  the step check, which scrolls to and highlights the block (never a silent dead button). */
+  blockedReason?: string | null
 }
 
 export function WizardShell({
@@ -48,6 +52,7 @@ export function WizardShell({
   autosaveStatus,
   title,
   subtitle,
+  blockedReason,
 }: WizardShellProps) {
   const isLastStep = currentStep === steps.length - 1
   const isFirstStep = currentStep === 0
@@ -165,26 +170,37 @@ export function WizardShell({
             HIGHLIGHTS the exact missing fields and explains them, instead of a
             silent greyed-out button the client can't understand. `canProceed`
             is still passed (for styling) but no longer disables the control. */}
-        {isLastStep ? (
-          <button
-            onClick={onSubmit}
-            disabled={isSubmitting}
-            aria-disabled={!canProceed}
-            className="flex items-center gap-1 px-6 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors font-medium"
-          >
-            {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-            {isSubmitting ? t.submitting : (submitLabel ?? t.submit)}
-          </button>
-        ) : (
-          <button
-            onClick={() => onStepChange(currentStep + 1)}
-            aria-disabled={!canProceed}
-            className="flex items-center gap-1 px-6 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
-          >
-            {t.next}
-            <ChevronRight className="h-4 w-4" />
-          </button>
-        )}
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          {blockedReason && (
+            <span role="status" className="text-sm font-medium text-red-700">{blockedReason}</span>
+          )}
+          {isLastStep ? (
+            <button
+              onClick={onSubmit}
+              disabled={isSubmitting}
+              aria-disabled={!canProceed || !!blockedReason}
+              className={cn(
+                'flex items-center gap-1 px-6 py-2 text-sm rounded-lg transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed',
+                blockedReason ? 'bg-zinc-200 text-zinc-500 hover:bg-zinc-300' : 'bg-blue-600 text-white hover:bg-blue-700',
+              )}
+            >
+              {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+              {isSubmitting ? t.submitting : (submitLabel ?? t.submit)}
+            </button>
+          ) : (
+            <button
+              onClick={() => onStepChange(currentStep + 1)}
+              aria-disabled={!canProceed || !!blockedReason}
+              className={cn(
+                'flex items-center gap-1 px-6 py-2 text-sm rounded-lg transition-colors font-medium',
+                blockedReason ? 'bg-zinc-200 text-zinc-500 hover:bg-zinc-300' : 'bg-blue-600 text-white hover:bg-blue-700',
+              )}
+            >
+              {t.next}
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          )}
+        </div>
       </div>
     </div>
   )

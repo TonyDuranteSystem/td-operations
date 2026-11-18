@@ -238,7 +238,10 @@ export async function handleFormationSetup(job: Job): Promise<JobResult> {
 
       if (submitted.owner_first_name) contactUpdates.first_name = submitted.owner_first_name
       if (submitted.owner_last_name) contactUpdates.last_name = submitted.owner_last_name
-      if (submitted.owner_email) contactUpdates.email = submitted.owner_email
+      // The portal wizard's Email box IS the login email and is locked to it (dev job beb43385): the form no longer
+      // writes the CRM contact's email, so a form can never move the contact away from its login. Only a submission that
+      // did not come from the portal wizard (the old emailed form) still carries a typed address onto the contact.
+      if (submitted.owner_email && p.source !== "portal_wizard") contactUpdates.email = submitted.owner_email
       if (submitted.owner_phone) contactUpdates.phone = submitted.owner_phone
       if (submitted.owner_nationality) contactUpdates.citizenship = submitted.owner_nationality
       if (submitted.owner_dob) contactUpdates.date_of_birth = submitted.owner_dob
