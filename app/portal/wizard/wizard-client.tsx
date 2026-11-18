@@ -8,6 +8,7 @@ import { ReviewNote, FLAGGED_FIELD_CLASS } from '@/components/portal/wizard/revi
 import { resolveClientLabel } from '@/lib/tax/review-labels'
 import { getWizardConfig, wizardCollectsOwnerMembers, wizardRequiresSs4Signer, OWNER_ITIN_FIELD, MEMBER_ITIN_FIELD, TAX_MEMBER_FIELDS } from '@/components/portal/wizard/wizard-configs'
 import { useLocale } from '@/lib/portal/use-locale'
+import { mustReadAckKey } from '@/lib/portal/login-email-field'
 import { createClient } from '@/lib/supabase/client'
 import { resolveInstitution } from '@/lib/tax/bank-identity'
 import { interpolateString } from '@/lib/template-interpolation'
@@ -117,6 +118,12 @@ interface WizardClientProps {
   closureOtherPendingCount?: number | null
   /** Tax only: what our team asked the client to fix when they pressed Request Changes (dev job 7df278cd) — a note next to the answers it is about, by the answer's own key, plus an optional overall message. Null/absent = nothing was written. */
   reviewRequests?: { message: string | null; notes: Record<string, string> } | null
+  /** Answers the system fixes and the client cannot change, by field name (formation and onboarding: the owner email is the
+   *  portal login email). A locked field is drawn read-only with a lock, its saved value is replaced by this one, and its
+   *  `mustRead` block turns on (dev job beb43385). Empty/absent = every field behaves as before. */
+  lockedValues?: Record<string, string>
+  /** Show the extra paragraph of the login-email block: the client already has a company, so the same email must be kept. */
+  sameEmailNote?: boolean
 }
 
 // isFieldVisible lives in lib/portal/wizard-money.ts (dev job 89195c68) so
@@ -323,6 +330,8 @@ export function WizardClient({
   closureServiceDeliveryId = null,
   closureOtherPendingCount = null,
   reviewRequests = null,
+  lockedValues,
+  sameEmailNote = false,
 }: WizardClientProps) {
   // Any language beyond en/it (dev job 12cab351) — see the identical
   // comment in wizard-field.tsx. Layered UNDER the existing it/en choice,
@@ -368,7 +377,8 @@ export function WizardClient({
   // Money fields (dev job 89195c68): a stored string that reads cleanly
   // (legacy "5000") becomes a number on load so the step gate and the server
   // agree; an unanswered "80.000" stays a string and re-asks its question.
-  const initialData = normalizeMoneyData(steps, fields, { ...prefillData, ...filteredSaved }, { clearHiddenPending: false })
+  // A locked answer (the portal login email) always wins over a saved draft: an old draft may hold an email typed before the box was locked.
+  const initialData = normalizeMoneyData(steps, fields, { ...prefillData, ...filteredSaved, ...(lockedValues ?? {}) }, { clearHiddenPending: false })
 
   const isResubmitMode = initialSubmitStatus === 'submitted' && !isLocked
 
@@ -445,11 +455,18 @@ export function WizardClient({
   const [autosavedAt, setAutosavedAt] = useState<Date | null>(null)
 
   const handleFieldChange = useCallback((name: string, value: string | string[] | boolean | number) => {
+    // A locked answer (the portal login email) cannot be edited, whatever calls this.
+    if (lockedValues && name in lockedValues) return
     setFormData(prev => ({ ...prev, [name]: value }))
     dirtyRef.current = true
     // Clear any server-side validation error for this field when the user edits it
     setFieldErrors(prev => prev.length > 0 ? prev.filter(e => e.field !== name) : prev)
-  }, [])
+    // Ticking "I read it" belongs to its field: clear that field's error too.
+    if (name.endsWith('_read')) {
+      const owner = name.slice(0, -'_read'.length)
+      setFieldErrors(prev => prev.length > 0 ? prev.filter(e => e.field !== owner) : prev)
+    }
+  }, [lockedValues])
 
   // File upload handler — uploads the file DIRECTLY to Supabase Storage with a
   // RESUMABLE (TUS) upload: 6MB chunks, auto-retry on network blips, progress
@@ -603,6 +620,9 @@ export function WizardClient({
   const reqMsg = pickText('Required field', 'Campo obbligatorio')!
   const minMsg = pickText('Value is not valid', 'Il valore non è valido')!
   const einMsg = pickText('EIN must be 9 digits (e.g. 30-1482516)', "L'EIN deve avere 9 cifre (es. 30-1482516)")!
+  // The big red "I read it" block (dev job beb43385) is on only for a field whose value the system locked (the portal login email).
+  const mustReadActive = useCallback((f: FieldConfig): boolean => !!f.mustRead && !!lockedValues && f.name in lockedValues, [lockedValues])
+  const readMsg = pickText('Tick "I read it" to continue.', 'Spunta "Ho letto" per continuare.')!
 
   // Localized text for a money problem (dev job 89195c68) — the same wording
   // the server backstop sends, so client and server read identically.
@@ -696,6 +716,8 @@ export function WizardClient({
       if (field.required && isEmptyValue(formData[field.name])) errs[field.name] = reqMsg
       else if (belowFieldMin(field, formData[field.name])) errs[field.name] = minMsg
       else if (malformedEin(field, formData[field.name])) errs[field.name] = einMsg
+      // The big red block: the client must tick "I read it" before going on (dev job beb43385).
+      else if (mustReadActive(field) && formData[mustReadAckKey(field.name)] !== true) errs[field.name] = readMsg
     }
     // Money amounts (dev job 89195c68): an unanswered "80.000" question, an
     // unreadable amount, too many decimals (legacy 10.596) or a negative in a
@@ -707,7 +729,7 @@ export function WizardClient({
       errs[p.key] = moneyMsg(p, formData[p.key])
     }
     return errs
-  }, [steps, fields, formData, memberCount, repeaterCounts, wizardType, isMMLLC, reqMsg, minMsg, einMsg, institutions, pickText, moneyMsg])
+  }, [steps, fields, formData, memberCount, repeaterCounts, wizardType, isMMLLC, reqMsg, minMsg, einMsg, institutions, pickText, moneyMsg, mustReadActive, readMsg])
 
   const getStepErrors = useCallback(() => computeStepErrors(currentStep), [computeStepErrors, currentStep])
 
@@ -1338,6 +1360,7 @@ export function WizardClient({
       onSubmit={handleSubmit}
       onSave={handleSave}
       canProceed={validateStep()}
+      blockedReason={(fields[steps[currentStep].id] ?? []).some(f => mustReadActive(f) && isFieldVisible(f, fields[steps[currentStep].id] ?? [], formData) && formData[mustReadAckKey(f.name)] !== true) ? readMsg : null}
       isSubmitting={isSubmitting}
       isSaving={isSaving}
       locale={locale}
@@ -1805,9 +1828,9 @@ export function WizardClient({
               }
               // ── Regular field ────────────────────────────────────────
               return (
-                <div key={field.name} data-field-key={field.name} className={`${field.type === 'textarea' || field.type === 'checkbox' || field.type === 'signature' ? 'md:col-span-2' : ''} ${noteFor(field.name) ? FLAGGED_FIELD_CLASS : ''}`}>
+                <div key={field.name} data-field-key={field.name} className={`${field.type === 'textarea' || field.type === 'checkbox' || field.type === 'signature' || mustReadActive(field) ? 'md:col-span-2' : ''} ${noteFor(field.name) ? FLAGGED_FIELD_CLASS : ''}`}>
                   <WizardField
-                    field={{ ...field, prefilled: !!prefillData[field.name] }}
+                    field={{ ...field, prefilled: !!prefillData[field.name] && !(lockedValues && field.name in lockedValues), mustRead: mustReadActive(field) ? field.mustRead : undefined }}
                     value={formData[field.name] ?? ''}
                     onChange={handleFieldChange}
                     onFileUpload={handleFileUpload}
@@ -1815,6 +1838,8 @@ export function WizardClient({
                     locale={locale}
                     error={errorFor(field.name)}
                     context={formData}
+                    locked={!!lockedValues && field.name in lockedValues}
+                    showExtraNote={sameEmailNote}
                   />
                   {noteFor(field.name) && <ReviewNote note={noteFor(field.name)!} heading={noteHeading} />}
                   {/* High-stakes confirmation: show an amber warning when the

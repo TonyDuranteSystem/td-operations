@@ -264,9 +264,21 @@ export function WhatsAppContactMatchBanner({ groupId, onSaved }: { groupId: stri
   if (data?.match) {
     const { type, name: matchName, accountName } = data.match
     return (
-      <div data-tour="wa-match-banner" className="px-4 py-1.5 bg-emerald-50 border-b border-emerald-100 text-xs text-emerald-800">
-        Matches an existing {type === 'lead' ? 'lead' : 'contact'}: <span className="font-medium">{matchName}</span>
-        {accountName && <> · {accountName}</>}
+      <div data-tour="wa-match-banner" className="flex items-center justify-between gap-2 px-4 py-1.5 bg-emerald-50 border-b border-emerald-100 text-xs text-emerald-800">
+        <span className="min-w-0">
+          Matches an existing {type === 'lead' ? 'lead' : 'contact'}: <span className="font-medium">{matchName}</span>
+          {accountName && <> · {accountName}</>}
+        </span>
+        {/* One person has this exact number: staff confirm it with a click (the automatic linker also compares names and can refuse, e.g. "Andrew" vs "Andrea"). Nothing links by itself here. */}
+        <button
+          type="button"
+          onClick={() => handleLinkMatch(data.match as ContactMatch)}
+          disabled={saving}
+          data-testid="wa-link-match"
+          className="shrink-0 rounded-md border border-emerald-300 bg-white px-2.5 py-1 font-medium text-emerald-800 hover:bg-emerald-100 disabled:opacity-40"
+        >
+          {saving ? 'Linking…' : `Link this chat to ${matchName || 'them'}`}
+        </button>
       </div>
     )
   }
