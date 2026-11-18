@@ -9,6 +9,8 @@ import { normalizeEIN } from '@/lib/jobs/validation'
 import { triggerEINReceivedWorkflow } from '@/lib/operations/ein-received'
 import { syncTier, syncContactTiersForAccount } from '@/lib/operations/sync-tier'
 import { syncPortalLoginEmail } from '@/lib/operations/portal-login-email'
+import { contactHasClientLogin } from '@/lib/portal/login-email-change-staff'
+import { LOGIN_LINKED_ERROR } from '@/lib/portal/login-email-change-staff-shared'
 import { createSD } from '@/lib/operations/service-delivery'
 import { createAccount as createAccountOp, createAndLinkContact as createAndLinkContactOp } from '@/lib/operations/account'
 import { setAccountRenewalDate, type RenewalDateColumn } from '@/lib/operations/renewal-dates'
@@ -332,6 +334,12 @@ export async function updateContactField(
   const allowedFields = ['full_name', 'email', 'phone', 'language', 'role']
   if (!allowedFields.includes(field)) {
     return { success: false, error: `Field '${field}' is not editable` }
+  }
+
+  // A contact that HAS a portal login gets its email changed only through "Change login email" (login + contact + both
+  // mailboxes together). The screen sees this marker and opens that dialog (dev job beb43385, step 3).
+  if (field === 'email' && await contactHasClientLogin(contactId)) {
+    return { success: false, error: LOGIN_LINKED_ERROR }
   }
 
   return safeAction(async () => {
