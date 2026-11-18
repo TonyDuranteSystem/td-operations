@@ -6,5 +6,27 @@
     "Record a voice note in TD Talk: a sound bar moves while you speak",
     "Record with the microphone muted: after 3 seconds a red \"No sound yet\" warning shows, and sending says nothing was sent",
     "Record and send a normal note: it plays as before"
+  ],
+  "stepsTitle": "What happens when you send a voice note",
+  "steps": [
+    {
+      "name": "You record",
+      "detail": "A sound bar moves while you speak; with a muted microphone a red warning shows after 3 seconds.",
+      "flag": "new"
+    },
+    {
+      "name": "You press send",
+      "detail": "TD Talk checks the recording is whole and the microphone heard sound.",
+      "flag": "new"
+    },
+    {
+      "name": "If it is damaged or silent",
+      "detail": "Nothing is sent and you are told to record again.",
+      "flag": "new"
+    },
+    {
+      "name": "If it is fine",
+      "detail": "The note is sent and plays as before."
+    }
   ]
 }
