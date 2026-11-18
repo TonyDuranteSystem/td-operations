@@ -18,7 +18,9 @@
 import { randomUUID } from "crypto"
 import { createClient as createBareClient } from "@supabase/supabase-js"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { listAllAuthUsers, findAuthUserById } from "@/lib/auth-admin-helpers"
+import { findAuthUserById } from "@/lib/auth-admin-helpers"
+import { findEmailOwner } from "@/lib/portal/login-email-owner"
+import { audit, greetingName, readContact } from "@/lib/portal/login-email-change-db"
 import { localeFromLanguage } from "@/lib/locale"
 import { setContactEmailForLoginChange } from "@/lib/operations/contact-login-email"
 import { PORTAL_BASE_URL } from "@/lib/config"
@@ -60,18 +62,9 @@ function secretKey(): string {
   return `login-email-change:${k}`
 }
 
-const likeEscape = (s: string) => s.replace(/[\\%_]/g, (c) => `\\${c}`)
-
-/** Is this email already someone else's: another login (any kind), or another contact's email? Fails closed (throws) when it cannot tell. */
+/** Is this email already someone else's: another login (any kind), or another contact's email? Fails closed (throws) when it cannot tell. The rule itself lives in login-email-owner.ts (staff use it too). */
 async function emailBelongsToSomeoneElse(email: string, me: { authUserId: string; contactId: string }): Promise<boolean> {
-  const users = await listAllAuthUsers()
-  if (users.some((u) => normalizeEmail(u.email) === email && u.id !== me.authUserId)) return true
-  for (const col of ["email", "email_2"]) {
-    const { data, error } = await db().from("contacts").select("id").ilike(col, likeEscape(email)).neq("id", me.contactId).limit(1)
-    if (error) throw new Error(`login-email-change: contact check failed: ${error.message}`)
-    if (data && data.length > 0) return true
-  }
-  return false
+  return (await findEmailOwner(email, me)) !== null
 }
 
 /** Check the password on a THROWAWAY client (same as the staff change-password route): the caller's own session is never touched. */
@@ -81,31 +74,6 @@ async function checkPassword(email: string, password: string): Promise<"right" |
   if (!error) return "right"
   return (error as { status?: number }).status === 429 ? "busy" : "wrong"
 }
-
-async function audit(action: string, who: string, auth: { authUserId: string; contactId: string | null }, summary: string, details: Record<string, unknown>) {
-  try {
-    await supabaseAdmin.from("action_log").insert({
-      actor: who,
-      action_type: action,
-      table_name: "auth.users",
-      record_id: auth.authUserId,
-      contact_id: auth.contactId,
-      summary,
-      details: details as never,
-    })
-  } catch (e) {
-    console.error("[login-email-change] audit log failed:", e)
-  }
-}
-
-interface ContactBits { first_name: string | null; full_name: string | null; language: string | null; email: string | null; alt_emails: string[] | null }
-
-async function readContact(contactId: string): Promise<ContactBits | null> {
-  const { data } = await db().from("contacts").select("first_name, full_name, language, email, alt_emails").eq("id", contactId).limit(1)
-  return (data && data[0]) || null
-}
-
-const greetingName = (c: ContactBits | null) => (c?.first_name?.trim() || c?.full_name?.trim() || null)
 
 // ─── step 1: start ───────────────────────────────────────────────────────────────────────────────
 

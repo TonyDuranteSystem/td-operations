@@ -55,6 +55,8 @@ import { BankReferralsPanel } from './bank-referrals-panel'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { ClosureNotifyCheckbox, isClosureServiceType, showClosurePromptToast } from '@/components/services/closure-notify'
+import { ChangeLoginEmailStaffDialog } from '@/components/contacts/change-login-email-staff-dialog'
+import { LOGIN_LINKED_ERROR } from '@/lib/portal/login-email-change-staff-shared'
 import { updateAccountField as updateAccountFieldRaw, updateContactField as updateContactFieldRaw, addAccountNote, updateAccountContactRole as updateAccountContactRoleRaw, promoteAccountToActive, createDBA, updateDBADetails } from '@/app/(dashboard)/accounts/actions'
 import { StorageCheckBanner } from './storage-check-banner'
 import { TeamSection } from './team-section'
@@ -2531,8 +2533,16 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
     return result
   }
 
+  // "Change login email" (staff): opened from an Email box when that contact HAS a portal login (dev job beb43385, step 3)
+  const [loginEmailDialog, setLoginEmailDialog] = useState<{ contactId: string; initial: string } | null>(null)
+
   const makeContactSaver = (contactId: string, field: string, contactUpdatedAt: string) => async (value: string) => {
     const result = await updateContactField(contactId, field, value, contactUpdatedAt, account.id)
+    // The contact has a portal login: the box must not change the contact alone, so open the real change instead
+    if (field === 'email' && !result.success && result.error === LOGIN_LINKED_ERROR) {
+      setLoginEmailDialog({ contactId, initial: value })
+      return { success: true }
+    }
     if (result.success) toast.success('Saved')
     else toast.error(result.error ?? 'Failed')
     return result
@@ -2563,6 +2573,14 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
 
   return (
     <div className="grid gap-6 lg:grid-cols-2">
+      {loginEmailDialog && (
+        <ChangeLoginEmailStaffDialog
+          contactId={loginEmailDialog.contactId}
+          initialEmail={loginEmailDialog.initial}
+          onClose={() => setLoginEmailDialog(null)}
+          onChanged={() => { setLoginEmailDialog(null); router.refresh() }}
+        />
+      )}
       {/* Company Info */}
       <div className="bg-white rounded-lg border p-5 space-y-4">
         <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">Company Info</h3>
