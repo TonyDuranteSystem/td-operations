@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Building2, ChevronDown, Check, Sparkles, Share2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useLocale } from '@/lib/portal/use-locale'
+import { announceCompanyChange } from '@/lib/portal/company-sync'
 import type { PortalAccount } from '@/lib/types'
 import type { InProgressFormation, InProgressOnboarding } from '@/lib/portal/queries'
 
@@ -81,6 +82,7 @@ export function CompanySwitcher({ accounts, selectedAccountId, inProgress = [], 
     document.cookie = `portal_formation=; path=/portal; max-age=0; SameSite=Lax`
     document.cookie = `portal_onboarding=; path=/portal; max-age=0; SameSite=Lax`
     exitPartnerMode()
+    announceCompanyChange() // every other open tab changes company at once
     setOpen(false)
     if (partnerMode) router.push('/portal')
     else router.refresh()
@@ -90,6 +92,7 @@ export function CompanySwitcher({ accounts, selectedAccountId, inProgress = [], 
     document.cookie = `portal_formation=${formationId}; path=/portal; max-age=31536000; SameSite=Lax`
     document.cookie = `portal_onboarding=; path=/portal; max-age=0; SameSite=Lax`
     exitPartnerMode()
+    announceCompanyChange()
     setOpen(false)
     if (partnerMode) router.push('/portal')
     else router.refresh()
@@ -99,6 +102,7 @@ export function CompanySwitcher({ accounts, selectedAccountId, inProgress = [], 
     document.cookie = `portal_onboarding=${onboardingId}; path=/portal; max-age=31536000; SameSite=Lax`
     document.cookie = `portal_formation=; path=/portal; max-age=0; SameSite=Lax`
     exitPartnerMode()
+    announceCompanyChange()
     setOpen(false)
     if (partnerMode) router.push('/portal')
     else router.refresh()

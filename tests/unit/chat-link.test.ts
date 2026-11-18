@@ -79,6 +79,11 @@ describe('chatPathForTopic', () => {
   it('caps the topic at 100 chars like the chat page', () => {
     expect(chatPathForTopic('x'.repeat(150))).toBe(`/portal/chat?topic=${'x'.repeat(100)}`)
   })
+  it('personal opens the personal chat view, with or without a topic', () => {
+    expect(chatPathForTopic(null, { personal: true })).toBe('/portal/chat?personal=1')
+    expect(chatPathForTopic('Tax', { personal: true })).toBe('/portal/chat?personal=1&topic=Tax')
+    expect(chatPathForTopic('Tax', { personal: false })).toBe('/portal/chat?topic=Tax')
+  })
 })
 
 describe('entityCookieWrites (same state as the company switcher)', () => {
@@ -89,8 +94,8 @@ describe('entityCookieWrites (same state as the company switcher)', () => {
       { name: 'portal_onboarding', value: '', maxAge: 0 },
     ])
   })
-  it('personal → the personal sentinel', () => {
-    expect(entityCookieWrites(personal)[0]).toEqual({ name: 'portal_account_id', value: 'personal', maxAge: 31536000 })
+  it('personal → no company setting at all (the personal chat is a chat-only view, ?personal=1)', () => {
+    expect(entityCookieWrites(personal)).toEqual([])
   })
   it('formation → formation id, clears onboarding, leaves the account cookie alone', () => {
     expect(entityCookieWrites(formation)).toEqual([
