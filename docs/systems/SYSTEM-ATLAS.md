@@ -104,7 +104,7 @@ _(bold = registered and firing; plain = present but not wired, e.g. a manual uti
 _Regenerated 2026-11-18 by directory scan._
 
 - CRM dashboard pages (59): `accounts` `address-book` `addresses` `audit` `bofa-intake` `booking` `calendar` `captures` `cases` `catalog` `client-health` `clients` `code-tasks` `config` `contacts` `conversations` `dashboard` `dev-board` `dev-tools` `email-templates` `exceptions` `finance` `flows` `forms` `inbox` `intake` `invoice-aging` `invoice-settings` `leads` `marketing-leads` `new-calendar` `notes` `onboarding-review` `owner` `partners` `payments` `pipeline` `pipeline-overview` `portal-chats` `portal-launch` `reconciliation` `referrals` `releases` `research` `sandbox-mail` `service-catalog` `services` `storage` `storage-app` `system-health` `tasks` `tax-returns` `td-talk` `team-chat` `team-management` `tools` `trackers` `workflow-issues` `workflows`
-- Client portal pages (31): `activity` `addresses` `banks` `billing` `change-password` `chat` `company` `customers` `deadlines` `documents` `flows` `forgot-password` `form` `guide` `invoices` `login` `members` `notifications` `offer` `partner` `profile` `referrals` `reset-password` `services` `settings` `sign` `tax-documents` `tax-financials` `td-communication` `team` `wizard`
+- Client portal pages (32): `activity` `addresses` `banks` `billing` `change-password` `chat` `company` `customers` `deadlines` `documents` `flows` `forgot-password` `form` `guide` `invoices` `login` `members` `notifications` `offer` `partner` `profile` `referrals` `reset-password` `services` `settings` `sign` `tax-documents` `tax-financials` `td-communication` `team` `undo-email-change` `wizard`
 - API route groups (105)
 - Code modules (102): `accounts` `address-book` `ai-agent` `app` `app-mode` `archive` `audit` `auth` `billing` `bofa-intake` `booking` `booking-links` `calendly` `captures` `case-view` `catalog` `chat` `circleback` `closure` `code-tasks` `contacts` `contracts` `crm-lists` `crm-storage` `crm-store` `cron` `crypto` `decisions` `dev-tracker` `documents` `email` `email-index` `email-store` `embed` `errors` `esign` `exceptions` `fax` `finance` `flows` `formation` `forms` `forms-hub` `harbor-compliance` `hooks` `inbox` `incoming-payments` `infra` `internal` `invoices` `itin` `job-notes` `jobs` `leads` `lease` `legal` `marketing` `mcp` `media` `members` `messaging` `nav` `new-calendar` `notes` `notifications` `oa` `offers` `open-services` `operations` `partners` `payments` `pdf` `per-record-activity` `plan-invoices` `portal` `portal-app` `portal-chats` `public-forms` `push` `release` `research` `scan` `schemas` `security` `services` `signed-contracts` `ss4` `storage` `storage-app` `supabase` `system-health` `talk` `tasks` `tax` `td-communication` `team` `theme` `todo-board` `types` `ui` `utils` `windows`
 - Database tables: 325 _(ground truth: `lib/database.types.ts`)_
@@ -185,7 +185,7 @@ _Regenerated 2026-11-18. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [address-book.md](address-book.md) — Address book — standalone, reads the CRM, saves everyone else _(verified 2026-11-15)_
 - [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-11-13)_
 - [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-11-13)_
-- [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-11-15)_
+- [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-11-18)_
 - [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-11-09)_
 - [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-11-16)_
 - [bofa-intake.md](bofa-intake.md) — Bank Application Intake (Bank of America, one-time link) _(verified 2026-11-06)_
@@ -240,7 +240,7 @@ _Regenerated 2026-11-18. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-11-10)_
 - [td-books-ledger-plan.md](td-books-ledger-plan.md) — TD Books — 2025 filing, then the ledger, then the agent _(no date recorded)_
 - [td-books.md](td-books.md) — TD Books (My Finances — the owner's company books) _(verified 2026-11-06)_
-- [td-communication.md](td-communication.md) — TD Communication _(verified 2026-11-06)_
+- [td-communication.md](td-communication.md) — TD Communication _(verified 2026-11-18)_
 - [team-workspace.md](team-workspace.md) — Team Workspace (internal Slack-replacement chat) _(verified 2026-11-18)_
 - [todo-board.md](todo-board.md) — To-Do Board — "TO DO — FROM CHATS" (staff action cards) _(verified 2026-10-01)_
 - [whats-new.md](whats-new.md) — What's New (client-action chat-event feed) _(verified 2026-10-23)_
