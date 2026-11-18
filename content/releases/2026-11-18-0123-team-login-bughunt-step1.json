@@ -1,0 +1,6 @@
+{
+  "title": "Team logins: no more answering client decisions or filing service requests",
+  "tag": "behind-the-scenes",
+  "text": "A team login can no longer answer a client's decision (approve or choose), which could move a service forward, and can no longer file a service request. Service requests are always filed under the signed-in person's own record. A team login must always name its own company when it saves a form, and can only update the form it holds a tick for. The screens do not change, except that a team login now sees client decisions read-only.",
+  "points": []
+}

@@ -280,6 +280,8 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
     .limit(50)
   const decisions = (decisionData ?? []) as DecisionRequest[]
   const newestPendingId = decisions.find((d) => d.status === 'pending')?.id ?? null
+  // A team login (no contact of its own) may see the company's decisions but never answers them: owners and members only.
+  const canAnswerDecisions = !!contactId
   const actionableDecisions = decisions.filter((d) => d.id === newestPendingId)
   const historicalDecisions = decisions.filter((d) => d.id !== newestPendingId)
 
@@ -370,7 +372,7 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
       {actionableDecisions.length > 0 && (
         <div className="space-y-3">
           {actionableDecisions.map((d) => (
-            <DecisionCard key={d.id} request={d} locale={locale} actionable />
+            <DecisionCard key={d.id} request={d} locale={locale} actionable={canAnswerDecisions} />
           ))}
         </div>
       )}

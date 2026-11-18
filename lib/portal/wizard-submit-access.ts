@@ -62,10 +62,21 @@ export function canSubmitWizard(
   if (identity.kind === 'teammate') {
     // Only the wizards a tick covers (see teammateMayUseWizard) — ITIN, tax, closure, formation and the rest are refused.
     if (!teammateMayUseWizard(identity.capabilities, wizardType)) return false
-    // Teammates are scoped to exactly one company.
-    if (accountId && accountId !== identity.accountId) return false
+    // A team login is always tied to ITS company: a missing company is refused too (it used to pass, which let it
+    // reach contact-scoped drafts that carry no company, e.g. an owner's ITIN draft), and so is any other company.
+    if (!accountId || accountId !== identity.accountId) return false
     return true
   }
   // kind === 'none' (no resolvable portal identity) → deny.
   return false
+}
+
+/**
+ * When a draft (wizard_progress row) is UPDATED by id: the form type the caller names must be the type the draft really is.
+ * A team login holds a tick for ONE kind of form, so naming a different type than the saved one would let it write into
+ * another form's draft in its own company. Other logins are unaffected (they own every form of their own).
+ */
+export function savedDraftTypeAllowed(identity: PortalIdentity, savedType: string | null | undefined, namedType: string | undefined): boolean {
+  if (identity.kind !== 'teammate') return true
+  return !!savedType && savedType === namedType
 }

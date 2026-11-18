@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { canSubmitWizard, teammateMayUseWizard } from '@/lib/portal/wizard-submit-access'
+import { canSubmitWizard, teammateMayUseWizard, savedDraftTypeAllowed } from '@/lib/portal/wizard-submit-access'
 import type { PortalIdentity } from '@/lib/portal/resolve-portal-identity'
 
 const contact = (contactId: string, accountIds: string[]): PortalIdentity => ({
@@ -86,8 +86,26 @@ describe('canSubmitWizard — teammate (only the wizards a tick covers)', () => 
     expect(canSubmitWizard(id, 'ACC-Y', null, 'banking_payset')).toBe(false)
   })
 
-  it('allows the tick-covered wizard when no account is targeted (the server scopes it)', () => {
-    expect(canSubmitWizard(teamWith('ACC-X', { bank_applications: true }), null, null, 'banking_payset')).toBe(true)
+  it('a team login MUST name its own company: no company is refused (it used to pass, reaching contact-scoped drafts)', () => {
+    const id = teamWith('ACC-X', { bank_applications: true })
+    expect(canSubmitWizard(id, null, null, 'banking_payset')).toBe(false)
+    expect(canSubmitWizard(id, null, 'C1', 'banking_payset')).toBe(false)
+    expect(canSubmitWizard(id, 'ACC-X', null, 'banking_payset')).toBe(true)
+  })
+})
+
+describe('savedDraftTypeAllowed', () => {
+  const team = teamWith('ACC-X', { bank_applications: true })
+  it('a team login may update a draft only when the type it names is the type the draft really is', () => {
+    expect(savedDraftTypeAllowed(team, 'banking_payset', 'banking_payset')).toBe(true)
+    expect(savedDraftTypeAllowed(team, 'tax', 'banking_payset')).toBe(false)
+    expect(savedDraftTypeAllowed(team, 'itin', 'banking_payset')).toBe(false)
+    expect(savedDraftTypeAllowed(team, null, 'banking_payset')).toBe(false)
+    expect(savedDraftTypeAllowed(team, undefined, 'banking_payset')).toBe(false)
+  })
+  it('other logins are not affected', () => {
+    expect(savedDraftTypeAllowed(contact('C1', ['ACC-X']), 'tax', 'company_info')).toBe(true)
+    expect(savedDraftTypeAllowed({ kind: 'none' }, 'tax', 'x')).toBe(true)
   })
 })
 

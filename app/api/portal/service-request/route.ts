@@ -38,9 +38,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
+    // A team login never asks for services (the portal menu hides this page); its login carries no person of its own.
+    if ((user.app_metadata as Record<string, unknown> | undefined)?.kind === 'team_member') {
+      return NextResponse.json({ error: 'Service requests are made by the company owners and members.' }, { status: 403 })
+    }
+
     const contactId = getClientContactId(user)
     const body = await req.json()
-    const { service_id, details, urgency, contact_id } = body
+    const { service_id, details, urgency } = body
 
     if (!service_id || !details) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
@@ -58,8 +63,9 @@ export async function POST(req: NextRequest) {
     }
     const serviceName = serviceEntry.display_name
 
-    // Find account linked to this contact
-    const targetContactId = contact_id || contactId
+    // Find account linked to this contact. ALWAYS the signed-in person's own contact: the screens send their own id, and a
+    // contact_id named in the request used to be trusted, so anyone could file a request under someone else's name.
+    const targetContactId = contactId
     let accountId: string | undefined
     let companyName: string | undefined
 
