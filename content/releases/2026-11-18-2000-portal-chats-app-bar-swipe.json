@@ -1,0 +1,25 @@
+{
+  "title": "Portal Chats in the phone app: swipe the top bar of an open chat",
+  "tag": "fixed",
+  "text": "The swipe on an open conversation did nothing inside the TD Social app. It now works there: swipe the top bar right for Read / Unread and Pin, left for Note and Copy link.",
+  "points": [
+    "Right: Read / Unread and Pin / Unpin",
+    "Left: Note and Copy link"
+  ],
+  "stepsTitle": "Swiping the top bar inside the app",
+  "steps": [
+    {
+      "name": "Open a conversation",
+      "detail": "Tap it in the list as usual."
+    },
+    {
+      "name": "Swipe the top bar",
+      "detail": "Right for Read / Unread and Pin; left for Note and Copy link.",
+      "flag": "new"
+    },
+    {
+      "name": "Press a button",
+      "detail": "It does the action and the bar closes."
+    }
+  ]
+}

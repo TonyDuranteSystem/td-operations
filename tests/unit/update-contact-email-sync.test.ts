@@ -6,6 +6,11 @@
  * (lib/operations/portal-login-email.ts — unit-tested separately). A
  * conflict/failure in the helper does NOT roll back the contact email (it's
  * best-effort + flagged), and cross-account cache revalidation still runs.
+ *
+ * That path is for a contact WITHOUT a portal login. A contact that HAS one is
+ * sent to "Change login email" instead (dev job beb43385, step 3): the action
+ * saves nothing and returns LOGIN_LINKED_ERROR, so the login can never be left
+ * on the old address by this box.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
@@ -16,12 +21,18 @@ const {
   mockUpdateWithLock,
   mockRevalidatePath,
   mockSyncPortalLoginEmail,
+  mockContactHasClientLogin,
 } = vi.hoisted(() => ({
   mockMaybeSingle: vi.fn(),
   mockAcctContactsEq: vi.fn(),
   mockUpdateWithLock: vi.fn(),
   mockRevalidatePath: vi.fn(),
   mockSyncPortalLoginEmail: vi.fn(),
+  mockContactHasClientLogin: vi.fn(),
+}))
+
+vi.mock("@/lib/portal/login-email-change-staff", () => ({
+  contactHasClientLogin: (...args: unknown[]) => mockContactHasClientLogin(...args),
 }))
 
 vi.mock("@/lib/supabase-admin", () => ({
@@ -64,6 +75,7 @@ vi.mock("@/lib/supabase/server", () => ({
 }))
 
 import { updateContactField } from "@/app/(dashboard)/accounts/actions"
+import { LOGIN_LINKED_ERROR } from "@/lib/portal/login-email-change-staff-shared"
 
 const CONTACT_ID = "contact-123"
 const NEW_EMAIL = "new@example.com"
@@ -75,9 +87,27 @@ beforeEach(() => {
   mockAcctContactsEq.mockResolvedValue({ data: [{ account_id: "acc-1" }, { account_id: "acc-2" }] })
   mockSyncPortalLoginEmail.mockResolvedValue({ status: "synced", oldEmail: "old@example.com", newEmail: NEW_EMAIL })
   mockUpdateWithLock.mockResolvedValue({ success: true })
+  mockContactHasClientLogin.mockResolvedValue(false)
 })
 
-describe("updateContactField email handling", () => {
+describe("updateContactField on a contact that HAS a portal login", () => {
+  it("saves nothing and hands back the marker, so the screen opens Change login email", async () => {
+    mockContactHasClientLogin.mockResolvedValue(true)
+    const result = await updateContactField(CONTACT_ID, "email", NEW_EMAIL, UPDATED_AT, "acc-1")
+    expect(result).toEqual({ success: false, error: LOGIN_LINKED_ERROR })
+    expect(mockUpdateWithLock).not.toHaveBeenCalled()
+    expect(mockSyncPortalLoginEmail).not.toHaveBeenCalled()
+  })
+
+  it("other fields are not affected (no lookup, saved as before)", async () => {
+    mockContactHasClientLogin.mockResolvedValue(true)
+    const result = await updateContactField(CONTACT_ID, "phone", "+1234567890", UPDATED_AT, "acc-1")
+    expect(result.success).toBe(true)
+    expect(mockContactHasClientLogin).not.toHaveBeenCalled()
+  })
+})
+
+describe("updateContactField email handling (contact without a portal login)", () => {
   it("updates contacts then syncs the portal login on email change", async () => {
     const result = await updateContactField(CONTACT_ID, "email", NEW_EMAIL, UPDATED_AT)
     expect(result.success).toBe(true)
