@@ -107,7 +107,7 @@ export async function POST(req: NextRequest) {
   // submission could be filed under — and write personal data onto — someone else's record).
   if (identity.kind === 'teammate' && contact_id) {
     const { data: link, error: linkErr } = await supabaseAdmin
-      .from('account_contacts').select('contact_id').eq('account_id', identity.accountId).eq('contact_id', contact_id).limit(1).maybeSingle()
+      .from('account_contacts').select('contact_id').is('access_revoked_at', null).eq('account_id', identity.accountId).eq('contact_id', contact_id).limit(1).maybeSingle()
     if (linkErr || !link) return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
 

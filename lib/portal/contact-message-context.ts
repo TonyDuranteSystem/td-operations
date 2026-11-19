@@ -62,7 +62,7 @@ export async function getContactMessageContext(contactId: string): Promise<Share
   if (error) throw new Error(`Could not read the contact (${error.message}).`)
   if (!contact) return null
 
-  const { data: links } = await supabaseAdmin.from("account_contacts").select("account_id").eq("contact_id", contactId)
+  const { data: links } = await supabaseAdmin.from("account_contacts").select("account_id").is("access_revoked_at", null).eq("contact_id", contactId)
   const accountIds: string[] = []
   for (const l of (links ?? []) as { account_id: string }[]) if (!accountIds.includes(l.account_id)) accountIds.push(l.account_id)
 

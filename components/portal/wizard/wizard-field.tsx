@@ -101,6 +101,8 @@ interface WizardFieldProps {
   locked?: boolean
   /** Show the second paragraph of a `mustRead` block (a client who already has a company). */
   showExtraNote?: boolean
+  /** A locked field can be changed by the client themselves (the login email: code sent to the new address). Given = a "Change" button; absent = the old "message us in chat" link. */
+  onChangeLocked?: () => void
 }
 
 // Full ISO 3166-1 country list (195 countries)
@@ -127,7 +129,7 @@ const COUNTRIES = [
   'United States','Uruguay','Uzbekistan','Vanuatu','Vatican City','Venezuela','Vietnam','Yemen','Zambia','Zimbabwe',
 ].sort()
 
-export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, locale, error, context, locked = false, showExtraNote = false }: WizardFieldProps) {
+export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, locale, error, context, locked = false, showExtraNote = false, onChangeLocked }: WizardFieldProps) {
   // Any language beyond en/it (dev job 12cab351) — loaded translations are
   // keyed by the field's own English text (lib/portal/wizard-translatable-
   // text.ts), so this MUST be layered under the existing it/en choice, not
@@ -525,9 +527,15 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
 
       {locked && (
         <p className="text-sm">
-          <a href="/portal/chat" className="font-medium text-blue-600 hover:underline">
-            {pick('To change it, message us in chat.', 'Per cambiarla, scrivici in chat.')}
-          </a>
+          {onChangeLocked ? (
+            <button type="button" onClick={onChangeLocked} className="font-medium text-blue-600 hover:underline" data-testid="wizard-change-login-email">
+              {pick('Change login email', 'Cambia email di accesso')}
+            </button>
+          ) : (
+            <a href="/portal/chat" className="font-medium text-blue-600 hover:underline">
+              {pick('To change it, message us in chat.', 'Per cambiarla, scrivici in chat.')}
+            </a>
+          )}
         </p>
       )}
 

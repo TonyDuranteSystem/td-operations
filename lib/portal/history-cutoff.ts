@@ -12,6 +12,7 @@ export type CutoffDb = Pick<typeof supabaseAdmin, "from">
 export async function getHistoryCutoff(accountId: string, contactId: string | null | undefined, d: CutoffDb = supabaseAdmin): Promise<string | null> {
   if (!contactId) return null
   try {
+    // portal-access-ok: per-person history date on one exact link
     const { data } = await d.from("account_contacts").select("history_visible_from").eq("account_id", accountId).eq("contact_id", contactId).maybeSingle()
     return ((data as { history_visible_from?: string | null } | null)?.history_visible_from) ?? null
   } catch {
@@ -27,6 +28,7 @@ export async function getHistoryCutoff(accountId: string, contactId: string | nu
  */
 export async function historyFromForNewLink(p: { accountId: string; contactId: string; choice: HistoryChoice; now?: Date }, d: CutoffDb = supabaseAdmin): Promise<string | null | undefined> {
   try {
+    // portal-access-ok: per-person history date on one exact link
     const { data: existing } = await d.from("account_contacts").select("account_id").eq("account_id", p.accountId).eq("contact_id", p.contactId).maybeSingle()
     if (existing) return undefined
     if (p.choice === "all") return null
@@ -46,6 +48,7 @@ export async function startHistoryFromNow(p: { accountId: string; contactId: str
   try {
     const { count } = await d.from("documents").select("id", { count: "exact", head: true }).eq("account_id", p.accountId).eq("portal_visible", true)
     if ((count ?? 0) === 0) return false
+    // portal-access-ok: per-person history date on one exact link
     const { error } = await d.from("account_contacts").update({ history_visible_from: (p.now ?? new Date()).toISOString() }).eq("account_id", p.accountId).eq("contact_id", p.contactId)
     return !error
   } catch {
@@ -63,6 +66,7 @@ export async function getHistoryCutoffs(contactId: string | null | undefined, d:
   const out = new Map<string, string>()
   if (!contactId) return out
   try {
+    // portal-access-ok: per-person history date on one exact link
     const { data } = await d.from("account_contacts").select("account_id, history_visible_from").eq("contact_id", contactId).not("history_visible_from", "is", null)
     for (const r of (data ?? []) as Array<{ account_id: string; history_visible_from: string | null }>) {
       if (r.history_visible_from) out.set(r.account_id, r.history_visible_from)

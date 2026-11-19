@@ -36,6 +36,7 @@ vi.mock("@/lib/supabase-admin", () => {
     b.from = () => b
     b.select = () => b
     b.eq = () => b
+    b.is = () => b // the no-portal-access filter (dev job beb43385)
     b.in = () => b
     b.maybeSingle = async () => ({
       data: table === "leads" ? state.lead : table === "contacts" ? state.contact : state.account,

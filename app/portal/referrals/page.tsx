@@ -31,6 +31,7 @@ export default async function PortalReferralsPage() {
   const { data: myMemberships } = await supabaseAdmin
     .from('account_contacts')
     .select('account_id')
+    .is('access_revoked_at', null)
     .eq('contact_id', contactId)
 
   const myAccountIds = Array.from(new Set((myMemberships ?? []).map(m => m.account_id).filter(Boolean) as string[]))
@@ -38,6 +39,7 @@ export default async function PortalReferralsPage() {
   let primaryAccountIds: string[] = []
   if (myAccountIds.length > 0) {
     const { data: allMembers } = await supabaseAdmin
+      // portal-access-ok: ownership roster for the primary-owner rule, not a portal visibility check
       .from('account_contacts')
       .select('account_id, contact_id, is_primary')
       .in('account_id', myAccountIds)

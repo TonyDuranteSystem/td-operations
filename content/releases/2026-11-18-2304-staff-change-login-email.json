@@ -1,0 +1,12 @@
+{
+  "title": "Staff can change a client's login email in one step, and both addresses are told",
+  "tag": "new",
+  "text": "On a contact's Portal tab there is now a Change login email button. Staff type the new email, tick the big red \"Read well before proceeding.\" block, and the change happens right away with no code: the client's login and the CRM email move together. The new address gets a note with the portal link, and the old address gets a note saying our team changed it. If the email already belongs to someone else, staff are told who has it. The Email box on the contact page and on the company page now opens this same window for a contact who has a portal login, instead of changing only the CRM email and leaving the login behind. The Portal tab also shows the real login email next to the CRM email.",
+  "points": [
+    "Open a client's contact, go to the Portal tab and press Change login email",
+    "Try an email another client already uses: the window says whose it is",
+    "Change it: the client signs in with the new email and the same password, and both addresses get a note",
+    "Edit the Email box on the contact page of a client with a portal login: the same window opens"
+  ],
+  "screenshot": "staff-change-login-email.png"
+}

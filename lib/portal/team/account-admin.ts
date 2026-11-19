@@ -44,7 +44,7 @@ const defaultDeps: AccountAdminDeps = {
 
     const [{ data: account }, { data: links }, { data: members }] = await Promise.all([
       sb.from('accounts').select('entity_type, portal_admin_contact_id').eq('id', accountId).maybeSingle(),
-      sb.from('account_contacts').select('contact_id, role, contacts:contact_id(full_name)').eq('account_id', accountId),
+      sb.from('account_contacts').select('contact_id, role, contacts:contact_id(full_name)').is('access_revoked_at', null).eq('account_id', accountId),
       sb.from('members').select('contact_id, is_signer, full_name').eq('account_id', accountId),
     ])
 

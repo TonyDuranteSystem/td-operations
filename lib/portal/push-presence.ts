@@ -48,6 +48,7 @@ export async function companyEmailRecipientContactId(accountId: string): Promise
   const { data: links } = await supabaseAdmin
     .from('account_contacts')
     .select('contact_id, contacts(email)')
+    .is('access_revoked_at', null)
     .eq('account_id', accountId)
   for (const l of (links ?? []) as Array<{ contact_id: string | null; contacts: { email: string | null } | null }>) {
     if (l.contact_id && (l.contacts?.email ?? '').trim().toLowerCase() === wanted) return l.contact_id

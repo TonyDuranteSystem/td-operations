@@ -79,6 +79,7 @@ async function resolveThreadScopePlan(
     const { data: acRows } = await supabaseAdmin
       .from("account_contacts")
       .select("account_id")
+      .is("access_revoked_at", null)
       .eq("contact_id", contact_id)
     linkedAccountIds = (acRows ?? []).map((r) => r.account_id as string)
     mm = await multiMemberAccountIds(linkedAccountIds)

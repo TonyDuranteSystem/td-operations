@@ -132,6 +132,7 @@ export async function promptClientForClosureForm(opts: {
       const { data: link } = await supabaseAdmin
         .from("account_contacts")
         .select("contact_id")
+        .is("access_revoked_at", null)
         .eq("account_id", sd.account_id)
         .eq("contact_id", contactId)
         .maybeSingle()

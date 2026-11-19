@@ -144,6 +144,7 @@ async function resolveRecipients(params: ActionRequiredParams): Promise<Recipien
     const { data: links } = await supabaseAdmin
       .from('account_contacts')
       .select('contacts(id, email, full_name, language)')
+      .is('access_revoked_at', null)
       .eq('account_id', params.account_id)
     return (links ?? [])
       .map((l) => {
