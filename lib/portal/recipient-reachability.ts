@@ -121,7 +121,7 @@ export async function checkPortalReachability(input: {
   const { data: acct } = await db.from("accounts").select("company_name").eq("id", input.id).maybeSingle()
   if (!acct) return { reachable: false, reason: "That company no longer exists — pick the client again." }
 
-  const { data: links } = await db.from("account_contacts").select("contact_id").eq("account_id", input.id)
+  const { data: links } = await db.from("account_contacts").select("contact_id").is("access_revoked_at", null).eq("account_id", input.id)
   const ids = ((links ?? []) as Array<{ contact_id: string | null }>).map((l) => l.contact_id).filter(Boolean)
   if (!ids.length) {
     return {

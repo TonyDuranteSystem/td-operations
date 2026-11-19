@@ -44,6 +44,7 @@ export async function POST(request: NextRequest) {
     const { data: acRows } = await supabaseAdmin
       .from('account_contacts')
       .select('account_id')
+      .is('access_revoked_at', null)
       .eq('contact_id', contact_id)
     const linkedAccountIds = (acRows ?? []).map(r => r.account_id)
 

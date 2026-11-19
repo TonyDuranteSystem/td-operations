@@ -152,6 +152,7 @@ export async function POST(request: NextRequest) {
   for (const m of after) {
     if (m.contact_id) {
       if (Number(members.find(b => b.id === m.id)?.ownership_pct) !== Number(m.ownership_pct)) {
+        // portal-access-ok: legal roster repair
         const { error } = await supabaseAdmin.from('account_contacts').update({ ownership_pct: Number(m.ownership_pct) }).eq('account_id', accountId).eq('contact_id', m.contact_id)
         if (error) failed.push(memberLabel(m))
       }
@@ -172,8 +173,10 @@ export async function POST(request: NextRequest) {
       now,
     })
     if (!newContactId) { failed.push(memberLabel(m)); continue }
+    // portal-access-ok: legal roster repair
     const { data: already } = await supabaseAdmin.from('account_contacts').select('contact_id').eq('account_id', accountId).eq('contact_id', newContactId).maybeSingle()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- ownership_pct / is_primary are not in the generated types
+    // portal-access-ok: legal roster repair
     const { error: linkErr } = await supabaseAdmin.from('account_contacts').upsert({ account_id: accountId, contact_id: newContactId, role: 'Member', ownership_pct: Number(m.ownership_pct) } as any, { onConflict: 'account_id,contact_id', ignoreDuplicates: true })
     const { error: memErr } = await supabaseAdmin.from('members').update({ contact_id: newContactId, updated_at: now }).eq('id', m.id).is('contact_id', null)
     if (linkErr || memErr) { failed.push(memberLabel(m)); continue }

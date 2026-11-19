@@ -1,13 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// Mock supabaseAdmin: account_contacts.select('contact_id').eq('account_id', X)
-// resolves to a configurable rows array.
+// Mock supabaseAdmin: account_contacts.select('contact_id').is('access_revoked_at', null).eq('account_id', X)
+// resolves to a configurable rows array. `isCalls` records the no-portal-access filter (dev job beb43385).
 let rows: { contact_id: string }[] = []
+const isCalls: unknown[][] = []
 vi.mock('@/lib/supabase-admin', () => ({
   supabaseAdmin: {
     from: () => ({
       select: () => ({
-        eq: async () => ({ data: rows }),
+        is: (...args: unknown[]) => {
+          isCalls.push(args)
+          return { eq: async () => ({ data: rows }) }
+        },
       }),
     }),
   },
@@ -28,6 +32,13 @@ describe('resolvePersonalNullInclusion (privacy choke point)', () => {
     rows = []
     membership = { accounts: [], membersByAccount: new Map(), hasSoleOwned: true, hasShared: false }
     formations = []
+  })
+
+  it('counts only members who can open the company (a member with no portal access is left out)', async () => {
+    isCalls.length = 0
+    rows = [{ contact_id: 'me' }]
+    await resolvePersonalNullInclusion('acct', 'me')
+    expect(isCalls).toContainEqual(['access_revoked_at', null])
   })
 
   it('true when the account has exactly one linked contact == the viewer (sole-owned SMLLC)', async () => {
