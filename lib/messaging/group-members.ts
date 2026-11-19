@@ -41,3 +41,15 @@ export function matchMembersToCrm(members: GroupMember[], contacts: CrmPhoneRow[
     return { ...m, crm: hits.length === 1 ? hits[0] : null }
   })
 }
+
+/**
+ * A member WhatsApp gave no name for: borrow the name the person used when writing in this group, else the name of their own
+ * one-to-one chat with us. Never overwrites a name the phone already supplied. `byPhone` keys are digits.
+ */
+export function fillMemberNames(members: GroupMember[], namesInGroup: Map<string, string>, namesFromOwnChats: Map<string, string>): GroupMember[] {
+  return members.map((m) => {
+    if (m.name || !m.phone) return m
+    const name = namesInGroup.get(m.phone) ?? namesFromOwnChats.get(m.phone) ?? null
+    return name ? { ...m, name } : m
+  })
+}

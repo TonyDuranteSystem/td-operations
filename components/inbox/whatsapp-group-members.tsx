@@ -56,7 +56,7 @@ export function WhatsAppGroupMembersDialog({ groupId, groupName, onClose }: { gr
               </div>
               <div className="min-w-0 flex-1">
                 <p className="flex items-center gap-1.5 text-sm font-medium text-zinc-900">
-                  <span className="truncate">{m.crm?.name ?? m.name ?? 'Unknown'}</span>
+                  <span className="truncate">{m.crm?.name ?? m.name ?? 'Not saved in your contacts'}</span>
                   {m.admin && (
                     <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
                       <ShieldCheck className="h-3 w-3" /> Admin

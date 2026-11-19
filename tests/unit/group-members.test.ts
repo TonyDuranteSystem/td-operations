@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest"
 import { normalizeMembers, parseGroupsBatch } from "@/lib/messaging/wabridge-groups"
-import { matchMembersToCrm, phoneSearchTail } from "@/lib/messaging/group-members"
+import { fillMemberNames, matchMembersToCrm, phoneSearchTail } from "@/lib/messaging/group-members"
 
 describe("normalizeMembers", () => {
   it("keeps good members, hides bad numbers, drops repeats and empty rows", () => {
@@ -63,5 +63,20 @@ describe("matchMembersToCrm", () => {
   })
   it("search tail is the last 4 digits", () => {
     expect(phoneSearchTail("+1 727 589 3417")).toBe("3417")
+  })
+})
+
+describe("fillMemberNames", () => {
+  const members = [
+    { phone: "111111", name: "From phone", admin: false },
+    { phone: "222222", name: null, admin: false },
+    { phone: "333333", name: null, admin: true },
+    { phone: "444444", name: null, admin: false },
+    { phone: null, name: null, admin: false },
+  ]
+  it("never overwrites a name the phone gave; prefers the name used in the group, then the own chat; leaves the rest empty", () => {
+    const r = fillMemberNames(members, new Map([["222222", "Seen In Group"], ["111111", "Ignored"]]), new Map([["222222", "Own Chat"], ["333333", "Own Chat Only"]]))
+    expect(r.map((m) => m.name)).toEqual(["From phone", "Seen In Group", "Own Chat Only", null, null])
+    expect(r[2].admin).toBe(true)
   })
 })

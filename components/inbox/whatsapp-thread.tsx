@@ -153,6 +153,7 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
   const [text, setText] = useState('')
   const [file, setFile] = useState<StagedFile | null>(null)
   const [uploading, setUploading] = useState(false)
+  const [dragActive, setDragActive] = useState(false)
   const [confirming, setConfirming] = useState(false)
   // The confirm screen's language dropdown — like the Portal Chats card, switching it REWRITES the message
   // (Antonio, 2026-08-01 precedent). Reset whenever confirm opens, never carried over between chats/drafts.
@@ -755,12 +756,41 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
   const isGroupChat = data?.chat?.isGroup === true
   const notice = data?.send ? sendNotice(data.send) : null
   const canSend = !data?.send || (data.send.mode !== 'paused' && data.send.hasInbound)
+
+  // Drag a file onto the chat to attach it (Antonio 2026-11-20: "I can't drag and drop a file in the group"). Same path as the
+  // paperclip: one file at a time, only while no file is staged, nothing is being recorded and the confirm step is not open.
+  const canDrop = !!data?.send && canSend && !file && !uploading && !confirming && !audioNoteRecorder.isRecording
+  const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files')
+  const handleDragOver = (e: React.DragEvent) => {
+    if (!hasFiles(e)) return
+    e.preventDefault() // without this the browser opens the file instead of handing it to us
+    if (canDrop) setDragActive(true)
+  }
+  const handleDragLeave = (e: React.DragEvent) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+    setDragActive(false)
+  }
+  const handleDrop = (e: React.DragEvent) => {
+    if (!hasFiles(e)) return
+    e.preventDefault()
+    setDragActive(false)
+    if (!canDrop) { toast.error(!canSend || !data?.send ? 'You cannot send in this chat right now.' : 'Finish or remove the current attachment first.'); return }
+    const files = Array.from(e.dataTransfer.files)
+    if (files.length === 0) return
+    if (files.length > 1) toast.message('One file at a time — attaching the first one.')
+    void uploadAndStageFile(files[0])
+  }
   // Attachments/voice notes ARE supported on the self-hosted line now (Antonio 2026-09-27) — kept as a named
   // constant since the paperclip button still needs to know "is this the wabridge line" for its upload route.
   const isWabridgeLine = !!data?.send
 
   return (
-    <div className="flex flex-col flex-1 min-h-0">
+    <div className="relative flex flex-col flex-1 min-h-0" onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop} data-testid="wa-thread-root">
+      {dragActive && (
+        <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center rounded-lg border-2 border-dashed border-blue-400 bg-blue-50/80 text-sm font-medium text-blue-700" data-testid="wa-drop-overlay">
+          Drop the file to attach it
+        </div>
+      )}
       {isLoading ? (
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {Array.from({ length: 6 }).map((_, i) => (
