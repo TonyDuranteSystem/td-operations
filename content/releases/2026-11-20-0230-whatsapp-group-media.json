@@ -1,0 +1,26 @@
+{
+  "title": "Photos, voice notes and files in WhatsApp groups now open",
+  "tag": "new",
+  "text": "In a WhatsApp group, a photo, voice note, video or file sent by a member used to show only as a grey label like [Photo]. They now open like in a one-to-one chat: the picture, the voice player and the file. Items from the last 25 days are picked up automatically; older ones are no longer available from WhatsApp.",
+  "points": [
+    "Photos show in the chat",
+    "Voice notes play",
+    "Files open"
+  ],
+  "stepsTitle": "Opening a group member's file",
+  "steps": [
+    {
+      "name": "Open a group chat",
+      "detail": "The one with the green Group label."
+    },
+    {
+      "name": "Find the photo, voice note or file",
+      "detail": "It shows within a couple of minutes of arriving.",
+      "flag": "new"
+    },
+    {
+      "name": "Click to open or play",
+      "detail": "The same as in a one-to-one chat."
+    }
+  ]
+}
