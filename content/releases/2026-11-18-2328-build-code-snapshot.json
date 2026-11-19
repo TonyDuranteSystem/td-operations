@@ -1,0 +1,5 @@
+{
+  "title": "Behind the scenes: the website build no longer runs out of memory",
+  "tag": "behind-the-scenes",
+  "text": "Nothing to see on screen. The code-reading tools that Hermes and the connector use now read the system's source from one packed file instead of thousands of loose files. The tools answer exactly the same, and they now say so clearly if that file is ever missing. This stops the live website build from running out of memory on Vercel, which was blocking new work from being tested."
+}
