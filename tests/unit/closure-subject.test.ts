@@ -29,6 +29,7 @@ function chainable(resolveRaw: () => { data: unknown }, onEq?: (col: string, val
   const resolve = () => ({ ...resolveRaw(), error: forcedError ? { message: forcedError } : null })
   const obj = {
     eq: (col: string, val: string) => { onEq?.(col, val); return obj },
+    is: () => obj, // the no-portal-access filter (dev job beb43385)
     or: (filter: string) => { lastSdOrFilter = filter; return obj },
     order: () => Promise.resolve(resolve()),
     maybeSingle: () => Promise.resolve(resolve()),
