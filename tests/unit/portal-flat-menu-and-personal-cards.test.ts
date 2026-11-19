@@ -135,7 +135,8 @@ describe('Panoramica (company-client page)', () => {
     expect(i).toBeGreaterThan(-1)
     expect(j).toBeGreaterThan(i)
     expect(j).toBeLessThan(k)
-    expect(home).toContain('rowSpan />')
+    // the call also hands the client iPhone app's flag along (dev job 056a70d0); rowSpan itself is still there
+    expect(home).toContain('rowSpan appMode={inClientApp} />')
   })
 
   it('shows the personal cards under EVERY other dashboard (formation, welcome / lead / onboarding)', () => {

@@ -9,6 +9,7 @@ import { FORMATION_STATE_CODES, FORMATION_STATE_NAMES, type FormationStateCode }
 import { parsePriceQuirk } from '@/lib/offers/compute-offer-totals'
 import { parseAuthoredAmount, authoredAmountValue } from '@/lib/offers/parse-authored-amount'
 import { deriveContractType, isUntypedFormationFallback } from '@/lib/offers/derive-contract-type'
+import { lineNameWithYear, taxYearProblem } from '@/lib/offers/tax-year'
 import { buildAnnualCostRows } from '@/lib/offers/annual-maintenance-wording'
 import { formatOptionLabel } from '@/lib/offers/package-option-label'
 import { canGroundFormationState, canGroundEntityType } from '@/lib/offers/narrative-business-rules'
@@ -22,6 +23,7 @@ import {
   type PaymentPlanPart,
   type TrancheTriggerKind,
 } from '@/lib/offers/payment-plan'
+import { defaultStepWording, type StepOption } from '@/lib/plan-invoices/steps'
 
 // ── Service catalog: loaded from DB ──
 interface CatalogService {
@@ -48,6 +50,8 @@ interface SelectedService {
   price: string            // unit price entered by staff
   quantity: number         // default 1; >1 only for services with supports_quantity
   service_context: 'individual' | 'business' | 'ask'
+  /** Tax Return line only: the tax year it is for (dev job 0a60f416) — written into the line name ("Tax Return 2026") */
+  tax_year?: number
 }
 
 const PAYMENT_TYPES = [
@@ -352,7 +356,7 @@ export function CreateOfferDialog({
   // just moves the error later.
   const [splitEnabled, setSplitEnabled] = useState(false)
   const [allowSplitPaymentChoice, setAllowSplitPaymentChoice] = useState(false)
-  const [splitParts, setSplitParts] = useState<Array<{ amount: string; kind: TrancheTriggerKind; date: string; label: string }>>([
+  const [splitParts, setSplitParts] = useState<Array<{ amount: string; kind: TrancheTriggerKind; date: string; label: string; service_type?: string; stage?: string }>>([
     { amount: '', kind: 'signing', date: '', label: '' },
     { amount: '', kind: 'manual', date: '', label: '' },
   ])
@@ -902,7 +906,8 @@ export function CreateOfferDialog({
         trigger: {
           kind: i === 0 ? ('signing' as TrancheTriggerKind) : p.kind,
           ...(p.kind === 'date' && i > 0 ? { date: p.date } : {}),
-          ...(p.kind === 'manual' && i > 0 && p.label.trim() ? { label: p.label.trim() } : {}),
+          ...(p.kind === 'step' && i > 0 ? { service_type: p.service_type ?? '', stage: p.stage ?? '' } : {}),
+          ...((p.kind === 'manual' || p.kind === 'step') && i > 0 && p.label.trim() ? { label: p.label.trim() } : {}),
         },
       })),
     [splitParts, currency, parsedAmounts],
@@ -911,6 +916,44 @@ export function CreateOfferDialog({
     () => (splitActive ? validatePaymentPlan(planDraft) : null),
     [splitActive, planDraft],
   )
+  // "When a step is reached" (dev job ae3c19db): the steps of the services bought in THIS offer whose job is tied to the offer (formation, ITIN),
+  // read from the step settings. Empty = the choice is not offered.
+  const boughtServiceTypes = useMemo(
+    () => selected.map(sv => catalog.find(c => c.id === sv.id)?.pipeline).filter((x): x is string => !!x),
+    [selected, catalog],
+  )
+  const [stepOptions, setStepOptions] = useState<StepOption[]>([])
+  const boughtKey = boughtServiceTypes.join(',')
+  useEffect(() => {
+    if (!open || !splitEnabled || !boughtKey) { setStepOptions([]); return }
+    let cancelled = false
+    fetch(`/api/crm/offer-plan-steps?services=${encodeURIComponent(boughtKey)}`)
+      .then(r => (r.ok ? r.json() : { steps: [] }))
+      .then(d => { if (!cancelled) setStepOptions(Array.isArray(d.steps) ? d.steps : []) })
+      .catch(() => { if (!cancelled) setStepOptions([]) })
+    return () => { cancelled = true }
+  }, [open, splitEnabled, boughtKey])
+  // Choosing "When a step is reached" pre-selects the first step (the EIN, for a formation) and writes the client's sentence for it.
+  const changePartKind = (i: number, kind: TrancheTriggerKind) =>
+    setSplitParts(prev => prev.map((p, j) => {
+      if (j !== i) return p
+      if (kind !== 'step') return { ...p, kind }
+      const first = stepOptions.find(o => o.stage_name.toLowerCase() === 'ein received') ?? stepOptions[0]
+      return first
+        ? { ...p, kind, service_type: first.service_type, stage: first.stage_name, label: p.label.trim() ? p.label : defaultStepWording(first.service_type, first.stage_name) }
+        : { ...p, kind }
+    }))
+  const changePartStep = (i: number, value: string) =>
+    setSplitParts(prev => prev.map((p, j) => {
+      if (j !== i) return p
+      const [service_type, ...rest] = value.split('|')
+      const stage = rest.join('|')
+      const oldDefault = p.service_type && p.stage ? defaultStepWording(p.service_type, p.stage) : ''
+      // Rewrite the client's sentence only when it is still the one we wrote for the previous step (never the author's own words).
+      const label = !p.label.trim() || p.label === oldDefault ? defaultStepWording(service_type, stage) : p.label
+      return { ...p, service_type, stage, label }
+    }))
+
   const planSum = planDraft.reduce((s, p) => s + p.amount, 0)
   // ⛔ COMPARED AGAINST THE ENGINE'S GROSS — services PLUS pre-conditions (`totalAmount`), which
   // is what computeOfferTotals sums and what decideSigningBill judges the plan against. Comparing
@@ -958,7 +1001,9 @@ export function CreateOfferDialog({
       if (exists) return prev.filter(s => s.id !== id)
       const svc = catalog.find(c => c.id === id)
       const defaultPrice = svc?.default_price != null ? String(svc.default_price) : ''
-      return [...prev, { id, price: defaultPrice, quantity: 1, service_context: getDefaultContext(svc) }]
+      // A Tax Return line starts on last year (what activation always assumed) — now visible, and staff can change it.
+      const taxYear = svc?.pipeline === 'Tax Return' ? new Date().getFullYear() - 1 : undefined
+      return [...prev, { id, price: defaultPrice, quantity: 1, service_context: getDefaultContext(svc), ...(taxYear ? { tax_year: taxYear } : {}) }]
     })
   }
 
@@ -973,6 +1018,16 @@ export function CreateOfferDialog({
       prev.map(s => s.id === id ? { ...s, quantity: Math.max(1, quantity) } : s)
     )
   }
+
+  const updateTaxYear = (id: string, year: number) => {
+    setSelected(prev => prev.map(s => s.id === id ? { ...s, tax_year: year } : s))
+  }
+
+  // The tax-year box shows only on a Tax Return line of a short-contract tax return offer — the one kind whose year the activation reads.
+  const taxYearRowProps = (svc: CatalogService) =>
+    svc.pipeline === 'Tax Return' && derivedContractType === 'tax_return'
+      ? { taxYear: selected.find(s => s.id === svc.id)?.tax_year ?? null, onTaxYearChange: (y: number) => updateTaxYear(svc.id, y) }
+      : {}
 
   const updateServiceContext = (id: string, ctx: 'individual' | 'business' | 'ask') => {
     setSelected(prev =>
@@ -1055,6 +1110,15 @@ export function CreateOfferDialog({
       }
     }
 
+    // A Tax Return line states a year the company could really have a return for (dev job 0a60f416). The server checks it again against the company.
+    if (derivedContractType === 'tax_return') {
+      for (const s of selected) {
+        if (catalog.find(c => c.id === s.id)?.pipeline !== 'Tax Return' || !s.tax_year) continue
+        const problem = taxYearProblem(s.tax_year, { currentYear: new Date().getFullYear() })
+        if (problem) { toast.error(`Tax Return line: ${problem}`); return }
+      }
+    }
+
     startTransition(async () => {
       try {
         // Every ticked service is sold. No price = free / gift (Antonio 2026-09-27):
@@ -1066,8 +1130,9 @@ export function CreateOfferDialog({
             const unitPrice = s.price.replace(/[^0-9.]/g, '') || '0'
             const qty = s.quantity ?? 1
             const totalPrice = (parseFloat(unitPrice) * qty).toLocaleString('en-US')
+            const lineYear = derivedContractType === 'tax_return' && svc_cat?.pipeline === 'Tax Return' ? s.tax_year : undefined
             const svc: Record<string, unknown> = {
-              name: svc_cat?.name || s.id,
+              name: lineYear ? lineNameWithYear(svc_cat?.name || s.id, lineYear) : (svc_cat?.name || s.id),
               price: `${currencySymbol}${qty > 1 ? totalPrice : unitPrice}`,
               service_context: s.service_context,
             }
@@ -1599,6 +1664,7 @@ export function CreateOfferDialog({
                   onPriceChange={(p) => updatePrice(svc.id, p)}
                   onQuantityChange={(q) => updateQuantity(svc.id, q)}
                   onContextChange={(ctx) => updateServiceContext(svc.id, ctx)}
+                  {...taxYearRowProps(svc)}
                 />
               ))}
             </div>
@@ -1618,6 +1684,7 @@ export function CreateOfferDialog({
                   onPriceChange={(p) => updatePrice(svc.id, p)}
                   onQuantityChange={(q) => updateQuantity(svc.id, q)}
                   onContextChange={(ctx) => updateServiceContext(svc.id, ctx)}
+                  {...taxYearRowProps(svc)}
                 />
               ))}
             </div>
@@ -1637,6 +1704,7 @@ export function CreateOfferDialog({
                   onPriceChange={(p) => updatePrice(svc.id, p)}
                   onQuantityChange={(q) => updateQuantity(svc.id, q)}
                   onContextChange={(ctx) => updateServiceContext(svc.id, ctx)}
+                  {...taxYearRowProps(svc)}
                 />
               ))}
             </div>
@@ -1912,14 +1980,41 @@ export function CreateOfferDialog({
                           <label className="text-xs text-muted-foreground">Due</label>
                           <select
                             value={part.kind}
-                            onChange={e => setSplitParts(prev => prev.map((p, j) => j === i ? { ...p, kind: e.target.value as TrancheTriggerKind } : p))}
+                            onChange={e => changePartKind(i, e.target.value as TrancheTriggerKind)}
                             className="block px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                           >
                             <option value="manual">When you say so</option>
                             <option value="date">On a date</option>
+                            {(stepOptions.length > 0 || part.kind === 'step') && <option value="step">When a step is reached</option>}
                           </select>
                         </div>
-                        {part.kind === 'date' ? (
+                        {part.kind === 'step' ? (
+                          <>
+                            <div>
+                              <label className="text-xs text-muted-foreground">Step</label>
+                              <select
+                                value={`${part.service_type ?? ''}|${part.stage ?? ''}`}
+                                onChange={e => changePartStep(i, e.target.value)}
+                                data-testid="plan-step-select"
+                                className="block px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              >
+                                {stepOptions.length === 0 && <option value={`${part.service_type ?? ''}|${part.stage ?? ''}`}>{part.service_type} → {part.stage}</option>}
+                                {stepOptions.map(o => (
+                                  <option key={`${o.service_type}|${o.stage_name}`} value={`${o.service_type}|${o.stage_name}`}>{o.service_type} → {o.stage_name}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="flex-1 min-w-[200px]">
+                              <label className="text-xs text-muted-foreground">What the client reads — continues &quot;Part {i + 1} of {splitParts.length}, due …&quot;</label>
+                              <input
+                                type="text"
+                                value={part.label}
+                                onChange={e => setSplitParts(prev => prev.map((p, j) => j === i ? { ...p, label: e.target.value } : p))}
+                                className="w-full px-2 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              />
+                            </div>
+                          </>
+                        ) : part.kind === 'date' ? (
                           <div>
                             <label className="text-xs text-muted-foreground">Date</label>
                             <input
@@ -1972,9 +2067,10 @@ export function CreateOfferDialog({
                     scheduler. Said here because the alternative is Antonio discovering it by a
                     payment that never arrived. */}
                 <p className="text-xs text-muted-foreground">
-                  Only the first part is invoiced automatically, at signing. Every later part is raised
-                  by you from the client&apos;s account page when it comes due — a date is a reminder, not
-                  a scheduler.
+                  Only the first part is invoiced automatically, at signing. Nothing else is ever raised or
+                  emailed by itself: when a later part is due (its date, or the step you chose) it shows on the
+                  Calendar under <b>Invoices to raise</b>, blinking red, and you click <b>Raise and send</b>.
+                  &quot;When you say so&quot; never turns red by itself — it waits in that list until you raise it.
                 </p>
 
                 {ambiguousAmounts.map(a => (
@@ -2733,6 +2829,8 @@ function ServiceRow({
   onPriceChange,
   onQuantityChange,
   onContextChange,
+  taxYear,
+  onTaxYearChange,
 }: {
   service: { id: string; name: string; supports_quantity: boolean }
   isSelected: boolean
@@ -2744,6 +2842,9 @@ function ServiceRow({
   onPriceChange: (price: string) => void
   onQuantityChange: (quantity: number) => void
   onContextChange: (ctx: 'individual' | 'business' | 'ask') => void
+  /** Tax Return line of a tax return offer only: the year it is for, and how to change it. Absent = no year box. */
+  taxYear?: number | null
+  onTaxYearChange?: (year: number) => void
 }) {
   const unitPrice = parsePriceQuirk(price)
   const lineTotal = unitPrice > 0 && quantity > 1
@@ -2782,6 +2883,22 @@ function ServiceRow({
               <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
           </select>
+          {/* Tax year — only on the Tax Return line of a tax return offer (dev job 0a60f416) */}
+          {taxYear !== undefined && onTaxYearChange && (
+            <label className="flex items-center gap-1 text-xs text-zinc-600">
+              Tax year
+              <input
+                type="number"
+                min={2000}
+                max={new Date().getFullYear()}
+                value={taxYear ?? ''}
+                onChange={e => onTaxYearChange(parseInt(e.target.value, 10) || 0)}
+                className="w-20 px-2 py-1.5 text-sm text-center border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                title="The tax year this return is for"
+                aria-label="Tax year"
+              />
+            </label>
+          )}
           {/* Quantity input — only for services that support it (e.g. ITIN) */}
           {service.supports_quantity && (
             <div className="flex items-center gap-1">

@@ -1,0 +1,10 @@
+{
+  "title": "Company Closure: fixes after testing the whole flow on real data",
+  "tag": "fixed",
+  "text": "Problems found while testing Company Closure from start to finish were fixed. A company can no longer be closed by accident: moving a job to Closing now asks first. Unpaid invoices are cancelled the same way Finance's Void does it, and an invoice that is part-paid is left open and reported. If something goes wrong while closing, a note is left on the job instead of the warning disappearing.",
+  "points": [
+    "The step bar and Go Back now say what a move does, for example that going back deletes the saved IRS tracking number and that a finished closure's company stays Closed.",
+    "Upload boxes in the client's closure form refuse files that are not documents, and empty or fake PDFs. Tracking numbers are saved without spaces.",
+    "If the client's EIN differs from our record, staff get a note instead of being blocked. For a company that is not ours, staff can fix a typo in the name or EIN first."
+  ]
+}

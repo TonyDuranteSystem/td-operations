@@ -1,0 +1,9 @@
+{
+  "title": "Offers: optional Invoice description under Invoice to",
+  "tag": "new",
+  "text": "Create Offer has a new optional box, Invoice description, under Invoice to. What you type is printed on the offer's invoice exactly as written (up to 200 characters), for example when a lead pays with his own company. Left empty, the invoice keeps the automatic wording, so existing offers do not change.",
+  "points": [
+    "It is private: never shown on the offer page the client sees.",
+    "It is kept when an offer is revised, and used for the signing invoice, staff Confirm payment and the later parts of a payment plan."
+  ]
+}

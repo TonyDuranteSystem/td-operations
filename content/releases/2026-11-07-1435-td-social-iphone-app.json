@@ -1,0 +1,11 @@
+{
+  "title": "TD Social iPhone app: first builds, slim phone screens, Privacy and Support pages",
+  "tag": "new",
+  "text": "TD Social, the iPhone app for the team, now exists: the first builds went to TestFlight. It shows CRM pages such as Inbox, WhatsApp, Portal Chats, TD Talk and the Marketing chat in slimmer phone layouts, lets you pinch-zoom, and opens email attachments in the phone's own viewer with Done and Share. Public Privacy Policy and Support pages were added for the App Store.",
+  "points": [
+    "The Inbox and WhatsApp lists use two slim bars instead of four (about 13% of the screen instead of about 28%).",
+    "On the computer nothing changes: the phone layouts apply only inside the app.",
+    "The new icon (blue TD logo with 'social' in red) appears only with the next build that goes through Apple's review.",
+    "Alerts to phones are built but not turned on yet."
+  ]
+}

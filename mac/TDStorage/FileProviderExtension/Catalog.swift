@@ -144,6 +144,7 @@ actor Catalog {
         var out: [FPItem] = l.folders.map { FPItem(id: ItemID.folder(owner: owner, folder: $0.id).shown(via: via), parent: parent, filename: names[$0.id] ?? $0.name, isFolder: true, canSave: $0.canSave ?? false, canEdit: $0.canEdit ?? false) }
         out += people.map { pp in
             let target = pp.ownerId ?? "c-\(pp.contactId)"
+            ViaRegistry.shared.record(link: "\(owner):\(folder ?? ""):\(target)")   // Finder is now showing this person here: later changes must reach this copy too
             return FPItem(id: .link(company: owner, folder: folder ?? "", target: target), parent: parent, filename: names["p:" + pp.contactId] ?? pp.name, isFolder: true)
         }
         out += l.files.map { f in

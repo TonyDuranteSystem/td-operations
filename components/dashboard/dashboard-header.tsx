@@ -13,7 +13,8 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { Search, MoreHorizontal } from 'lucide-react'
+import Link from 'next/link'
+import { Search, MoreHorizontal, Sparkles } from 'lucide-react'
 import { GlobalSearch } from '@/components/shared/global-search'
 import { DashboardPushToggle } from '@/components/dashboard/push-toggle'
 import { StaffAlertsBell } from '@/components/dashboard/staff-alerts-bell'
@@ -120,9 +121,19 @@ function OverflowMenu() {
         </button>
       </FastTooltip>
       {open && <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />}
-      <div className={`absolute right-0 top-full z-50 mt-2 flex w-56 flex-col gap-2 rounded-lg border bg-white p-3 shadow-lg ${open ? '' : 'hidden'}`}>
-        <HelpToggle />
-        <DashboardPushToggle refreshOnMount />
+      {/* One entry per line, each full width (Antonio, 2026-11-12: "put every voice vertically"). */}
+      <div className={`absolute right-0 top-full z-50 mt-2 flex w-56 flex-col items-stretch gap-2 rounded-lg border bg-white p-3 shadow-lg ${open ? '' : 'hidden'}`}>
+        <HelpToggle stacked />
+        <DashboardPushToggle refreshOnMount stacked />
+        {/* Releases: what each release does + the history (dev job 616dc839). A plain in-page link: this header only exists on the live build. */}
+        <Link
+          href="/releases"
+          onClick={() => setOpen(false)}
+          className="flex w-full items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-600 transition-colors hover:text-zinc-900"
+        >
+          <Sparkles className="h-3.5 w-3.5" />
+          Releases
+        </Link>
       </div>
     </div>
   )

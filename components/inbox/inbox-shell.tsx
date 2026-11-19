@@ -292,8 +292,8 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
 
   // Antonio, 2026-09-28: "I want to see the phone number next to the name" — WhatsappThread already
   // fetches the chat's own name/phone; it reports it up here rather than this header re-fetching it.
-  const [waChatInfo, setWaChatInfo] = useState<{ name: string | null; phone: string | null } | null>(null)
-  const handleWaChatInfo = useCallback((info: { name: string | null; phone: string | null } | null) => setWaChatInfo(info), [])
+  const [waChatInfo, setWaChatInfo] = useState<{ name: string | null; phone: string | null; nameSource?: string } | null>(null)
+  const handleWaChatInfo = useCallback((info: { name: string | null; phone: string | null; nameSource?: string } | null) => setWaChatInfo(info), [])
 
   const isWhatsApp = activeChannel === 'whatsapp'
 
@@ -1949,6 +1949,9 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
                         name live on open and already hands it up via onChatInfo — prefer that fresh name
                         over the stale snapshot whenever it resolved to something real. */}
                     {(selected.channel === 'whatsapp' && waChatInfo?.name) || selected.name}
+                    {selected.channel === 'whatsapp' && waChatInfo?.name && waChatInfo.nameSource === 'whatsapp' && (
+                      <span className="ml-1.5 text-[11px] font-normal italic text-zinc-400" title="The name this person chose for their own WhatsApp — not a CRM record">WhatsApp name</span>
+                    )}
                     {selected.channel === 'whatsapp' && waChatInfo?.phone && (
                       <span className="ml-1.5 text-xs font-normal text-zinc-400">{waChatInfo.phone}</span>
                     )}

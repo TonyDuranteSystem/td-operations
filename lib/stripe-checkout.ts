@@ -168,3 +168,33 @@ export async function createMarketingCheckoutSession(params: {
     return { success: false, error: err instanceof Error ? err.message : String(err) }
   }
 }
+
+/**
+ * Booking page, paid links: the live state of a Checkout Session we made earlier. `url` is only present while the session is still open (Stripe stops giving the
+ * address once it is paid or expired). Never throws: { ok: false } means "could not ask Stripe", which is NOT the same as "expired".
+ */
+export async function readCheckoutSession(sessionId: string): Promise<{ ok: true; status: string | null; paymentStatus: string | null; url: string | null } | { ok: false; error: string }> {
+  const stripe = getStripe()
+  if (!stripe) return { ok: false, error: "STRIPE_SECRET_KEY not set" }
+  try {
+    const s = await stripe.checkout.sessions.retrieve(sessionId)
+    return { ok: true, status: s.status ?? null, paymentStatus: s.payment_status ?? null, url: s.url ?? null }
+  } catch (err) {
+    // A session Stripe says does not exist (a key or account change, purged test data) is gone for good: it counts as expired so a new one can be made.
+    // Any other failure (network, busy Stripe) is NOT "expired": the caller must make nothing then.
+    if ((err as { code?: unknown } | null)?.code === "resource_missing") return { ok: true, status: "expired", paymentStatus: null, url: null }
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/** Booking page, paid links: close a Checkout Session so nobody can pay for a call that was cancelled. Best effort: the caller decides what a failure means. */
+export async function expireCheckoutSession(sessionId: string): Promise<{ ok: boolean; error?: string }> {
+  const stripe = getStripe()
+  if (!stripe) return { ok: false, error: "STRIPE_SECRET_KEY not set" }
+  try {
+    await stripe.checkout.sessions.expire(sessionId)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}

@@ -28,7 +28,7 @@ import { createClient } from '@/lib/supabase/server'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { pickChatSenderName } from '@/lib/portal/chat-sender-name'
-import { createPortalNotification, notifyClientOfAdminMessage } from '@/lib/portal/notifications'
+import { createPortalNotification, notifyClientOfAdminMessage, waitForClientAlert } from '@/lib/portal/notifications'
 
 const MAX_MESSAGE_LENGTH = 5000
 
@@ -133,18 +133,20 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       return NextResponse.json({ success: false, error: `Could not send message: ${error?.message ?? 'unknown error'}` }, { status: 500 })
     }
 
-    createPortalNotification({
+    const clientAlert = createPortalNotification({
       contact_id: contactId,
       type: 'chat',
       title: 'New message from Tony Durante Team',
       body: message.slice(0, 100),
       link: topic ? `/portal/chat?topic=${encodeURIComponent(topic)}` : '/portal/chat',
-    }).catch(() => {})
+    })
     notifyClientOfAdminMessage({
       contact_id: contactId,
       topic,
       messagePreview: message,
     }).catch(() => {})
+    // wait (at most 4 s) for the client's browser + iPhone-app alert: a serverless function may be stopped as soon as it has answered
+    await waitForClientAlert(clientAlert)
 
     const row = inserted as unknown as ChatRow
     const { contacts, ...rest } = row

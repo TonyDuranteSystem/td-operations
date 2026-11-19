@@ -1,0 +1,11 @@
+{
+  "title": "Spoken alerts for TD Talk, TD Marketing, client messages and WhatsApp, in recorded voice",
+  "tag": "new",
+  "text": "TD Talk, TD Marketing, portal chats and WhatsApp can now announce a new message out loud instead of beeping, naming who it is from (for example \"New Luca message in TD Talk\" or \"Message from Rocco\"; \"New message from client\" for portal chats). The announcements are recorded voice clips, so once Chrome is set to allow sound for the site the click-to-start bar no longer appears.",
+  "points": [
+    "TD Talk's chat list has a Voice switch (on by default); the group named New implementation always says a new feature was posted and shows Read by N of M under each message.",
+    "While Voice is on, TD Talk plays a tone too quiet to hear so Chrome keeps a hidden tab awake; that had not been confirmed in practice when it shipped.",
+    "A hidden TD Talk tab catches up on chats whose unread count rose and announces them once, several chats in one line.",
+    "A person nobody recorded still falls back to the browser's voice, then to the beep."
+  ]
+}

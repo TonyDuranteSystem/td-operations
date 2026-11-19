@@ -3,7 +3,7 @@ import { cookies } from 'next/headers'
 import { createClient } from '@/lib/supabase/server'
 import { getClientContactId } from '@/lib/portal-auth'
 import { getChatEntities } from '@/lib/portal/queries'
-import { chatLinkTargetEntity, chatPathForTopic, entityCookieWrites } from '@/lib/portal/chat-link'
+import { chatLinkTargetEntity, chatPathForTopic, entityCookieWrites, PERSONAL_CHAT_LINK } from '@/lib/portal/chat-link'
 
 /**
  * GET /portal/chat/open?account=<id|personal>&topic=<name>
@@ -40,16 +40,21 @@ export async function GET(request: NextRequest) {
     const formationId = cookieStore.get('portal_formation')?.value
     const accountId = cookieStore.get('portal_account_id')?.value
     // Same precedence as the chat page and the sidebar switcher.
+    // (An old 'personal' value, written by the retired in-chat switch, selects nothing: the personal chat is a chat-only view.)
     const current =
       (formationId ? byId.get(formationId) : undefined) ??
-      (accountId ? byId.get(accountId) : undefined) ??
+      (accountId && accountId !== PERSONAL_CHAT_LINK ? byId.get(accountId) : undefined) ??
+      entities.find(e => e.kind !== 'personal') ??
       entities[0]
 
     // Write the switcher's cookies for the target EVERY time (idempotent):
     // even a link to the already-selected company must clear a leftover
     // onboarding selection, or the sidebar and the chat disagree.
     const target = chatLinkTargetEntity(entities, accountParam, current)
-    if (target) {
+    if (target?.kind === 'personal') {
+      // The personal chat is a chat-only view: open it without touching the company the portal is on.
+      response.headers.set('Location', chatPathForTopic(topic, { personal: true }))
+    } else if (target) {
       for (const c of entityCookieWrites(target)) {
         response.cookies.set(c.name, c.value, { path: '/portal', maxAge: c.maxAge, sameSite: 'lax' })
       }

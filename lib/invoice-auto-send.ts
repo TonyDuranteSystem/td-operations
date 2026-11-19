@@ -291,7 +291,7 @@ export async function sendTDInvoice(
     billTo: entityBillTo
       ? { name: entityBillTo.name, email: recipientEmail, address: entityBillTo.address, vatNumber: entityBillTo.vatNumber }
       : {
-          name: account?.company_name ?? "Client",
+          name: account?.company_name ?? (recipientName || "Client"),
           email: recipientEmail,
           address: resolveMailingAddress((account as any)?.mailing_address, account?.physical_address, (account as any)?.suite_number),
         },
@@ -507,7 +507,7 @@ export async function sendPaidReceipt(paymentId: string, opts?: { language?: "en
     billTo: entityBillTo
       ? { name: entityBillTo.name, email: recipientEmail, address: entityBillTo.address, vatNumber: entityBillTo.vatNumber }
       : {
-          name: account?.company_name ?? "Client",
+          name: account?.company_name ?? (recipientName || "Client"),
           email: recipientEmail,
           address: resolveMailingAddress((account as any)?.mailing_address, account?.physical_address, (account as any)?.suite_number),
         },

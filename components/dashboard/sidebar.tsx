@@ -29,6 +29,7 @@ import {
   Eye,
   EyeOff,
   UserCheck,
+  BookUser,
   Target,
   Wrench,
   Share2,
@@ -50,6 +51,7 @@ import {
   Pencil,
   Plus,
   RotateCcw,
+  Sparkles,
 } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { toast } from 'sonner'
@@ -68,6 +70,7 @@ import { GroupRow, useFlyoutController, useFlyoutMode } from '@/components/dashb
 import { EditMenuTree, GroupNameDialog } from '@/components/dashboard/menu-editor'
 import { useMenuLayout } from '@/components/dashboard/use-menu-layout'
 import { isNavItemActive, onWhatsappView } from '@/lib/nav/nav-active'
+import { useWakeSignal } from '@/lib/hooks/use-wake-signal'
 import {
   containerOf,
   createGroup,
@@ -86,8 +89,10 @@ interface SidebarProps {
   isOwner?: boolean
   /** Ids of administrator-only items this non-administrator may still see (e.g. 'forms' for the people named in lib/auth/forms-access.ts). */
   extraNavIds?: string[]
-  badgeCounts?: { inbox: number; whatsapp?: number; tasks: number; portalChats?: number; teamChat?: number; talk?: number; overdueInvoices?: number; reconciliationReview?: number; commUnread?: number; marketing?: number; devBoard?: number }
+  badgeCounts?: { inbox: number; whatsapp?: number; tasks: number; portalChats?: number; teamChat?: number; talk?: number; overdueInvoices?: number; reconciliationReview?: number; commUnread?: number; marketing?: number; devBoard?: number; invoicesToRaise?: number }
   enabledFeatures?: string[]
+  /** further menu features switched on for this login (the Booking item); kept apart so the Calendar's own flag line stays as pinned */
+  moreFeatures?: string[]
   /** The signed-in login — keys this computer's own copy of the menu layout. */
   userId: string
   /** The layout saved on this login (read on the server), or null when the person has not changed the standard one. */
@@ -116,10 +121,15 @@ const defaultNavigation: NavItem[] = [
   { id: 'dev-board', name: 'Dev Board', href: '/dev-board', icon: LayoutGrid, tooltip: 'Dev-tracker board — every dev job by channel (td-dev/td-bug/td-support): request, findings, approved plan, milestones and status. Claude Code sessions keep it current so nothing is lost.' },
   { id: 'storage', name: 'Storage', href: '/storage', icon: HardDrive, tooltip: 'General-purpose CRM storage — folders and files organized by staff. Not connected to Google Drive.' },
   { id: 'forms', name: 'Forms', href: '/forms', icon: ClipboardList, adminOnly: true, tooltip: 'Standalone forms that are not tied to a client — view a form, make a one-time link to send, and read what comes back. Admins and the staff logins named for it.' },
-  { id: 'leads', name: 'Leads', href: '/leads', icon: Target, tooltip: 'New inquiries that haven\'t signed yet. First stage of the client journey.' },
+  // Booking (dev job a1839d8b, Antonio 2026-11-14): the Leads page now lives INSIDE the Booking page as its first tab, so this one row replaces the old Leads row (same place, same group).
+  // Every staff login that saw Leads sees it (admin and team); the page itself turns anyone else away. While the Calendly link side is turned off an administrator sees a small "Links off"
+  // tag (the layout passes 'booking-off' to administrators only); staff see no tag, because Leads works the same either way.
+  { id: 'booking', name: 'Booking', href: '/booking', icon: Target, tooltip: 'Leads — new inquiries that haven\'t signed yet, the first stage of the client journey — plus a Calendly link for a chosen person and kind of call, the links you made, and the calls to check.' },
   { id: 'marketing', name: 'Marketing', href: '/marketing-leads', icon: Megaphone, adminOnly: true, tooltip: 'TD Marketing — the master view of Rocco\'s team: leads from the ads, who is working them, what needs you today, and the Meta connection. Admin only.' },
   { id: 'intake', name: 'Intake', href: '/intake', icon: PhoneIncoming, tooltip: 'Review new Calendly bookings — create leads, link calls, or dismiss.' },
   { id: 'contacts', name: 'Contacts', href: '/contacts', icon: UserCheck, tooltip: 'All people in the system. Each contact can own one or more LLCs (accounts).' },
+  // Address book (dev job 055f2400, Antonio 2026-11-14): standalone — shows everyone the CRM already has (read only) and the people saved here. Sits in the Network group beside Contacts; it never changes Contacts.
+  { id: 'address-book', name: 'Address book', href: '/address-book', icon: BookUser, tooltip: 'Everyone we know in one list: the people from the CRM (read only) and the people you save here — suppliers, lawyers, a banker you met. You make the types.' },
   { id: 'accounts', name: 'Accounts', href: '/accounts', icon: Building2, tooltip: 'LLCs and companies. Each account has services, documents, invoices, and a timeline.' },
   { id: 'conversations', name: 'Conversations', href: '/conversations', icon: Tag, tooltip: 'Client threads tagged by client + topic — pull up everything for a client or a topic. Auto-tagged from #td-support.' },
   { id: 'client-audit', name: 'Client Audit', href: '/clients/audit', icon: ClipboardCheck, tooltip: 'Point zero — review every active client account, establish ground truth, fix data inconsistencies.' },
@@ -152,6 +162,8 @@ const defaultNavigation: NavItem[] = [
   // power-user governance (status / tags / translations).
   { id: 'inv-settings', name: 'Invoice Settings', href: '/invoice-settings', icon: Settings, tooltip: 'Configure invoice templates, payment methods, and default settings.' },
   { id: 'email-templates', name: 'Email Templates', href: '/email-templates', icon: Mail, tooltip: 'Manage reusable email templates used by the CRM compose dialog. Placeholders like {{first_name}} are filled at send time.' },
+  // Releases (dev job 616dc839, Antonio 2026-11-11): every release of the CRM, what changed and what it does — the history behind the blue "New release available" bar.
+  { id: 'releases', name: 'Releases', href: '/releases', icon: Sparkles, tooltip: 'Every update to the CRM, newest first — what changed and what it does. The blue "New release available" bar links here.' },
   { id: 'team-mgmt', name: 'Team Management', href: '/team-management', icon: Users, adminOnly: true, tooltip: 'Manage staff accounts, roles, and permissions.' },
   { id: 'code-tasks', name: 'Code Tasks', href: '/code-tasks', icon: Bot, adminOnly: true, tooltip: 'Live view of Claude code sessions started from Slack — watch in real time, type to steer, and end a session. Admin only.' },
   // NOTE: 'tools' lives up in the Pipeline cluster (moved 2026-06-15 — it was
@@ -171,10 +183,13 @@ export function Sidebar({
   isOwner = false,
   extraNavIds = [],
   badgeCounts,
-  enabledFeatures = [],
+  enabledFeatures: enabledFeaturesProp = [],
+  moreFeatures = [],
   initialMenuLayout = null,
   menuLayoutStatus = 'none',
 }: SidebarProps) {
+  // The Calendar's flag arrives as `enabledFeatures`, any further flag (the Booking item) as `moreFeatures`; the rows below read one merged list.
+  const enabledFeatures = [...enabledFeaturesProp, ...moreFeatures]
   const pathname = usePathname()
   // Inbox and WhatsApp are the same page told apart by the address, so the menu has to read the query too.
   const search = useSearchParams()?.toString() ?? ''
@@ -195,6 +210,8 @@ export function Sidebar({
   const [liveReconReview, setLiveReconReview] = useState(badgeCounts?.reconciliationReview ?? 0)
   const [liveComm] = useState(badgeCounts?.commUnread ?? 0)
   const [liveDevBoard, setLiveDevBoard] = useState(badgeCounts?.devBoard ?? 0)
+  // Invoices the Calendar says are due to raise (red count on the Calendar item — dev job ae3c19db).
+  const [liveInvoices, setLiveInvoices] = useState(badgeCounts?.invoicesToRaise ?? 0)
   // Marketing: what the team is waiting on Antonio for (@mentions, direct messages, lead chats); 0 until he has joined the team
   const [liveMarketing, setLiveMarketing] = useState(0)
   const [liveWhatsNew, setLiveWhatsNew] = useState(0)
@@ -224,6 +241,9 @@ export function Sidebar({
   useEffect(() => { closeFlyout() }, [pathname, search, editMode, naming, closeFlyout])
   const onWhatsapp = onWhatsappView(pathname, search)
 
+  // The full badge check, reachable from outside its effect (the wake signal below).
+  const fetchBadgesRef = useRef<() => void>(() => {})
+
   // Fetch badge counts via API (uses supabaseAdmin server-side to bypass RLS)
   useEffect(() => {
     const fetchBadges = () => {
@@ -234,7 +254,9 @@ export function Sidebar({
         })
         .then(data => {
           if (!data) return
-          if (typeof data.portalChats === 'number' && pathnameRef.current !== '/portal-chats') {
+          // Always follow the server, also while the Portal Chats page is open: a page left open must learn that someone read the
+          // messages in another window (it used to freeze the number from 3 s after you arrived — Antonio, 2026-11-17, the stale red dot).
+          if (typeof data.portalChats === 'number') {
             setLivePortalChats(data.portalChats)
           }
           if (typeof data.teamChat === 'number' && !isChatTab(pathnameRef.current)) {
@@ -258,15 +280,34 @@ export function Sidebar({
           if (typeof data.devBoard === 'number') {
             setLiveDevBoard(data.devBoard)
           }
+          if (typeof data.invoicesToRaise === 'number') setLiveInvoices(data.invoicesToRaise)
           if (typeof data.marketing === 'number') setLiveMarketing(data.marketing)
         })
         .catch(() => {})
     }
+    fetchBadgesRef.current = fetchBadges
     // Delay first fetch to ensure auth cookies are set after hydration
     const initialTimer = setTimeout(fetchBadges, 2000)
     const interval = setInterval(fetchBadges, 15_000)
     return () => { clearTimeout(initialTimer); clearInterval(interval) }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Coming back to a window that was left (another tab, another app, a locked screen): its timers were paused or slowed while hidden, so the
+  // numbers it shows can be old. Ask at once instead of waiting for the next tick (same hook as the rest of the app).
+  useWakeSignal({ onWake: () => fetchBadgesRef.current() })
+
+  // "Invoices to raise": after a click on the Calendar's Raise and send, the red count on the Calendar item drops at once
+  // instead of waiting up to 15 seconds for the next refresh (the button announces it with this event).
+  useEffect(() => {
+    const refresh = () => {
+      fetch('/api/dashboard/badges')
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => { if (data && typeof data.invoicesToRaise === 'number') setLiveInvoices(data.invoicesToRaise) })
+        .catch(() => {})
+    }
+    window.addEventListener('td:invoices-to-raise-changed', refresh)
+    return () => window.removeEventListener('td:invoices-to-raise-changed', refresh)
+  }, [])
 
   // Fetch the global "What's New" unhandled total for the Portal Chats badge.
   // Same source the Portal Chats page uses; staff-only endpoint (403 → ignored).
@@ -300,6 +341,7 @@ export function Sidebar({
             if (typeof data.inbox === 'number') setLiveInbox(data.inbox)
             if (typeof data.whatsapp === 'number') setLiveWhatsapp(data.whatsapp)
             if (typeof data.devBoard === 'number') setLiveDevBoard(data.devBoard)
+            if (typeof data.invoicesToRaise === 'number') setLiveInvoices(data.invoicesToRaise)
           })
           .catch(() => {})
       }, 3000)
@@ -353,6 +395,18 @@ export function Sidebar({
     // Team Chat dot) or a DM/@mention (which must). We can't tell from the row
     // alone, so refetch the server's DM+mention-only count (debounced).
     let teamDebounce: ReturnType<typeof setTimeout> | null = null
+    // The Portal Chats number, asked the LIGHT way (`?only=portalChats`: one cheap count, no Gmail) and coalesced, so a burst of changes
+    // is one question per tab. Used when a client message is read in another window (an UPDATE) and for a new one while you are ON the page.
+    let portalDebounce: ReturnType<typeof setTimeout> | null = null
+    const refetchPortalChats = () => {
+      if (portalDebounce) clearTimeout(portalDebounce)
+      portalDebounce = setTimeout(() => {
+        fetch('/api/dashboard/badges?only=portalChats')
+          .then(r => (r.ok ? r.json() : null))
+          .then(d => { if (d && typeof d.portalChats === 'number') setLivePortalChats(d.portalChats) })
+          .catch(() => {})
+      }, 800)
+    }
     const refetchTeamChat = () => {
       if (teamDebounce) clearTimeout(teamDebounce)
       teamDebounce = setTimeout(() => {
@@ -376,10 +430,20 @@ export function Sidebar({
           filter: 'sender_type=eq.client',
         },
         () => {
-          if (pathnameRef.current !== '/portal-chats') {
-            setLivePortalChats(prev => prev + 1)
-          }
+          // on the Portal Chats page the page may have read the message already: ask the server instead of adding one
+          if (pathnameRef.current !== '/portal-chats') setLivePortalChats(prev => prev + 1)
+          else refetchPortalChats()
         }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'portal_messages',
+          filter: 'sender_type=eq.client',
+        },
+        () => { refetchPortalChats() }
       )
       .on(
         'postgres_changes',
@@ -396,6 +460,7 @@ export function Sidebar({
 
     return () => {
       if (teamDebounce) clearTimeout(teamDebounce)
+      if (portalDebounce) clearTimeout(portalDebounce)
       supabase.removeChannel(channel)
     }
   }, [])
@@ -417,9 +482,11 @@ export function Sidebar({
     if (item.id === 'dev-board' && liveDevBoard > 0) return { ...item, badge: liveDevBoard }
     if (item.id === 'finance' && (liveOverdue + liveReconReview) > 0) return { ...item, badge: liveOverdue + liveReconReview }
     if (item.id === 'td-communication' && liveComm > 0) return { ...item, badge: liveComm }
+    // The Booking item says "Links off" while the Calendly link side is turned off (the layout passes 'booking-off' to administrators only). The Leads tab inside it works either way.
+    if (item.id === 'booking' && enabledFeatures.includes('booking-off')) return { ...item, tag: 'Links off' }
     // The Calendar item opens the New Calendar for the people who may see it (never inside a window: no menu there anyway).
     if (item.id === 'calendar' && enabledFeatures.includes('new-calendar')) {
-      return { ...item, href: '/new-calendar', icon: CalendarDays, tooltip: 'The day-by-day work list: what is on us, what is waiting on someone else, what is finished. Renewals and annual reports are on its third tab.' }
+      return { ...item, href: '/new-calendar', icon: CalendarDays, badge: liveInvoices > 0 ? liveInvoices : undefined, tooltip: 'The day-by-day work list: what is on us, what is waiting on someone else, what is finished. Renewals and annual reports are on its third tab.' }
     }
     return item
   })

@@ -1,0 +1,9 @@
+{
+  "title": "Storage viewer: every kind of file now opens, including video and audio",
+  "tag": "improved",
+  "text": "The in-CRM file viewer no longer says a file cannot be shown. Video and audio, such as Zoom recordings, play in the browser's own player straight from storage. Word, Excel, PowerPoint, OpenOffice, Apple files, text-like files, RTF, SVG and TIFF pictures, and zip contents open as a page. Saved HTML mockups open as the real page in a locked box with a View source toggle. Anything else gets a details page with its name, type, size and the readable text inside.",
+  "points": [
+    "A file over 8 MB downloads straight from storage instead of through the CRM.",
+    "The Marketing documents viewer uses the same, and every document there has an Open button."
+  ]
+}

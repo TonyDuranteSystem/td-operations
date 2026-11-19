@@ -17,7 +17,16 @@ public struct WhoAmI: Codable, Equatable {
     /// `latestBuild`: the newest app build the CRM offers THIS Mac (nil = none) — the app checks for the update at once when it is newer than its own.
     /// the values the CRM's settings row gives the Mac (older servers do not send them)
     public var leaseHours: Double?; public var resyncMinutes: Double?; public var updateCheckMinutes: Double?; public var latestBuild: Int?; public var updateHintSeconds: Double?
+    /// when this Mac must be approved again (ISO time; the CRM caps a sign-in at 30 days). The app warns a few days before. Older servers do not send it.
+    public var signInExpiresAt: String?
 }
+
+/// One place that shows a person's storage under a company: "company › 2. Contacts › person" (answer of /api/storage-app/routes).
+public struct RouteEntry: Codable, Equatable {
+    public var owner: String; public var company: String; public var folder: String
+    public init(owner: String, company: String, folder: String) { self.owner = owner; self.company = company; self.folder = folder }
+}
+public struct RoutesResponse: Codable, Equatable { public var routes: [RouteEntry] }
 
 public struct NavOwner: Codable, Equatable, Hashable {
     public var id: String; public var kind: String; public var label: String; public var status: String?; public var fileCount: Int

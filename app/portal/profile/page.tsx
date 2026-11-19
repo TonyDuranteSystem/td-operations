@@ -14,6 +14,7 @@ import { ProfileEditor } from '@/components/portal/profile-editor'
 import { isInvoiceHubOnFor } from '@/lib/portal/invoice-hub'
 import { getInvoiceHubSetting } from '@/lib/settings'
 import { LanguageSwitcher } from '@/components/portal/language-switcher'
+import { loginIdentityFromUser } from '@/lib/portal/login-email-change'
 
 export default async function PortalProfilePage() {
   const supabase = createClient()
@@ -52,6 +53,7 @@ export default async function PortalProfilePage() {
         </div>
         <ProfileEditor
           contactId={contactId}
+          loginEmail={loginIdentityFromUser(user)?.currentEmail ?? null}
           initialData={{
             first_name: contact?.first_name ?? '',
             last_name: contact?.last_name ?? '',

@@ -9,9 +9,8 @@ import { usePathname, useSearchParams } from 'next/navigation'
 import { Menu } from 'lucide-react'
 import { useAppMode } from '@/lib/app-mode/app-mode-context'
 import { useLocale } from '@/lib/portal/use-locale'
-import { screenTitleFor, type AppMenuItem } from '@/lib/portal-app/frame'
-
-interface ClientBridge { webkit?: { messageHandlers?: { tdclient?: { postMessage: (m: string) => void } } } }
+import { APP_FRAME_SLOT_ID, frameHasChatSlot, screenTitleFor, type AppMenuItem } from '@/lib/portal-app/frame'
+import { postToApp } from '@/lib/portal-app/native-bridge'
 
 interface MeAnswer { menuBadge?: number; items?: AppMenuItem[] }
 
@@ -27,7 +26,7 @@ export function ClientAppFrame({ selectionQuery, switcher }: { selectionQuery: s
   // message from this site's main frame and checks the words before using them (lib: ios/TDClient/Sources/TDClientCore/Rules.swift `SelectionRules`).
   useEffect(() => {
     if (!appMode) return
-    ;(window as unknown as ClientBridge).webkit?.messageHandlers?.tdclient?.postMessage(`selection:${selectionQuery}`)
+    postToApp(`selection:${selectionQuery}`)
   }, [appMode, selectionQuery])
 
   // The number on the button and the screen names come from the app's own server answer, so the website's menu rule and the app can
@@ -58,14 +57,16 @@ export function ClientAppFrame({ selectionQuery, switcher }: { selectionQuery: s
       // Stays at the top of the scrolling page (the Menu is the way to every entry that is not in the bar, so it must never scroll away).
       className="sticky top-0 z-30 flex h-[52px] shrink-0 items-center justify-between gap-3 bg-slate-50/95 px-4 backdrop-blur"
     >
-      <div className="min-w-0 flex-1">
-        {pathname === '/portal' ? switcher : title ? <span className="block truncate text-[17px] font-semibold text-zinc-900">{title}</span> : null}
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        {pathname === '/portal' ? switcher : title ? <span className="block min-w-0 truncate text-[17px] font-semibold text-zinc-900">{title}</span> : null}
+        {/* the Chat draws its Topic button and refresh button here, right after its name (one slim row instead of two) */}
+        {frameHasChatSlot(pathname) && <div id={APP_FRAME_SLOT_ID} data-testid="app-frame-slot" className="flex shrink-0 items-center gap-1" />}
       </div>
       <button
         type="button"
         aria-label={label}
         data-testid="client-app-menu"
-        onClick={() => (window as unknown as ClientBridge).webkit?.messageHandlers?.tdclient?.postMessage('menu')}
+        onClick={() => postToApp('menu')}
         className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-zinc-300 bg-white text-zinc-900"
       >
         <Menu className="h-[22px] w-[22px]" aria-hidden="true" />

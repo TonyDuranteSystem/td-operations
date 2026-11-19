@@ -1,0 +1,9 @@
+{
+  "title": "Leads: the CRM now asks \"client or lead?\" and links the lead to the client",
+  "tag": "new",
+  "text": "For each lead the CRM now looks through your contacts (emails including second emails, phone, name, names on the call recording, company names in the call notes) and decides whether it is probably an existing client. The lead window shows a question card with Yes existing client, No new lead or Decide later, and the Leads table shows an amber Client? Check tag. Already a client is also shown when the match is sure.",
+  "points": [
+    "Yes links the lead to the contact and teaches the contact the lead's new email and phone; No is remembered.",
+    "The automatic Call Done, when it is switched on, never moves a sure client and waits when the match is only a maybe."
+  ]
+}

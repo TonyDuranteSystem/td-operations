@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useTransition } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { leadsListHref } from '@/lib/leads/leads-url'
 import { Search, X, Phone, Mail, UserCheck } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
@@ -65,7 +66,7 @@ export function LeadsFilterBar({ query, filters, sources, referrers, quickCounts
     }
     next.delete('page') // a different list can have fewer pages
     paramsRef.current = next
-    const url = `/leads?${next.toString()}`
+    const url = leadsListHref(next)
     startTransition(() => { if (replace) router.replace(url); else router.push(url) })
   }
 

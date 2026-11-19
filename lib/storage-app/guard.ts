@@ -5,7 +5,7 @@
  */
 import { NextRequest, NextResponse } from "next/server"
 import { bearerFrom } from "./tokens"
-import { verifyAccessToken, type DeviceCaller } from "./device-auth"
+import { verifyAccessToken, DeviceAuthError, type DeviceCaller } from "./device-auth"
 import { denyUnlessStoreStaff } from "@/app/api/crm-store/browse/_auth"
 
 const NO_STORE = { "Cache-Control": "no-store" }
@@ -17,7 +17,13 @@ export async function withDevice(req: NextRequest, handler: (caller: DeviceCalle
   const token = bearerFrom(req.headers.get("authorization"))
   if (!token) return unauthorized()
   const ip = req.headers.get("x-forwarded-for")
-  const caller = await verifyAccessToken(token, ip)
+  let caller: DeviceCaller | null
+  try { caller = await verifyAccessToken(token, ip) }
+  catch (e) {
+    // the CRM could not check the login just now: say so (503), do NOT say "signed out" — the Mac keeps its tokens and asks again
+    if (e instanceof DeviceAuthError && e.code === "temporarily_unavailable") return json({ error: "temporarily_unavailable", message: e.message }, 503)
+    throw e
+  }
   if (!caller) return unauthorized()
   const denied = await denyUnlessStoreStaff(caller.user)   // the same staff check as the Storage page, belt and braces
   if (denied) return denied

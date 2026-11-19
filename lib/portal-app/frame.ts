@@ -11,6 +11,18 @@ export interface AppMenuItem { key: string; path: string; label: string }
 export const TITLE_IN_ROW: readonly string[] = ['/portal/chat']
 
 /**
+ * The empty spot in the top row, right after the screen's name, where the Chat draws its Topic button and refresh button (so the chat does not need
+ * a second row of its own). The top row (components/portal/client-app-frame.tsx) draws the spot only on the Chat screens; the chat fills it.
+ */
+export const APP_FRAME_SLOT_ID = 'app-frame-slot'
+
+/** True on the Chat screens (the only screen with the spot). */
+export function frameHasChatSlot(pathname: string): boolean {
+  const here = pathOnly(pathname)
+  return here === '/portal/chat' || here.startsWith('/portal/chat/')
+}
+
+/**
  * Same, but only for exactly this address, not for the pages under it: `/portal/invoices/new` and an invoice's own page still draw their
  * own heading. On `/portal/invoices` the address word `tab=billing` is the TD Billing screen, which takes the name of the TD Billing entry.
  */

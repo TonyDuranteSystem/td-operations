@@ -1,0 +1,12 @@
+{
+  "title": "Signed contracts on the Contact page",
+  "tag": "new",
+  "text": "Every Contact page now has a Signed contracts card, right under the Offers. It lists what the client signed after reading the offer, newest first. Each line shows the date signed and the installment amounts saved in the system, exactly as they are saved, with a button that opens the signed PDF. If a saved amount is wrong, the owner can click Edit, type the right amount and save. The old amount and who changed it stay on the line.",
+  "points": [
+    "Open Contacts, pick a person, and look under Offers on the Overview tab.",
+    "Click Open signed contract to compare the PDF with the amounts saved in the system.",
+    "In Edit you can type an amount either way, 1,250 or 1.250. The form shows how it read it before you save.",
+    "Only the owner sees Edit. The signed PDF and the invoices already sent are never changed."
+  ],
+  "screenshot": "signed-contracts-card.png"
+}

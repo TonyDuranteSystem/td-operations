@@ -1,0 +1,10 @@
+{
+  "title": "TD Talk: drafts, last-message previews, unread count and Load earlier messages",
+  "tag": "improved",
+  "text": "TD Talk now keeps what you typed in each chat until you send it, also after a reload on that device. The chat list shows the last message of every chat, in bold while it has unread messages, and a Load earlier messages button at the top of a chat reaches past the newest 500 messages. Leaving a chat while a voice note is being recorded now asks first: send it, throw it away or keep recording.",
+  "points": [
+    "The unread count shows in the tab title, like (3) TD Talk, and on the app icon where the browser allows it. This is for the standalone TD Talk app only.",
+    "A copied message link or a quote to an old message now loads earlier pages until it finds the message (up to 4,000 messages back).",
+    "Search says how many messages it covers and has a Load earlier link."
+  ]
+}

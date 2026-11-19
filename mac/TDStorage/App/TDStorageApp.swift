@@ -3,6 +3,7 @@ import FileProvider
 import AppKit
 import Sparkle
 import ServiceManagement
+import UserNotifications
 
 @main
 struct TDStorageApp: App {
@@ -91,6 +92,10 @@ final class AppModel: ObservableObject {
     @Published var state: SignInState = .checking
     @Published var fileVaultOK = true
     @Published var browserProblem: String?
+    /// shown in the window (and sent as a Mac notification) in the last days before the CRM asks this Mac to sign in again (every 30 days)
+    @Published var expiryNotice: String?
+    /// why the Mac is signed out, when the CRM (not the person) ended the sign-in: said plainly, never a silent sign-out
+    @Published var signedOutNote: String?
     /// how often the CRM wants this Mac to look for a new version (nil until the CRM has said)
     @Published var updateCheckMinutes: Double?
     /// set by the app: look for an update now. Called at most every 10 minutes, when the CRM reports a build newer than this one.
@@ -176,6 +181,7 @@ final class AppModel: ObservableObject {
             let me = try await api.whoami()
             updateCheckMinutes = me.updateCheckMinutes
             noteLatest(me.latestBuild)
+            noteExpiry(me.signInExpiresAt)
             applyPace(me.updateHintSeconds)
             nudgeFinder()
             startListening()
@@ -185,12 +191,43 @@ final class AppModel: ObservableObject {
                 let ns = error as NSError
                 state = .problem("Signed in, but macOS would not add TD Storage to Finder (\(ns.domain) \(ns.code): \(ns.localizedDescription)).")
             }
-        } catch StorageAPIError.deviceRevoked { await wipe(); state = .signedOut }
-        catch StorageAPIError.notSignedIn { await wipe(); state = .signedOut }
+        } catch StorageAPIError.deviceRevoked { await signedOutByCRM() }
+        catch StorageAPIError.notSignedIn { await signedOutByCRM() }
         catch { state = .problem("Could not reach the CRM. Check your internet connection.") }
     }
 
+
+    /// The CRM caps a sign-in at 30 days. In the last days the window says so, and a Mac notification repeats it once a day, so nobody is signed out by surprise.
+    private func noteExpiry(_ expiresAt: String?) {
+        let text = SignInExpiry.warning(expiresAt: expiresAt, now: Date())
+        expiryNotice = text
+        guard let text else { return }
+        let key = "td.expiryNoticeSent", day: TimeInterval = 86_400
+        if let last = UserDefaults.standard.object(forKey: key) as? Date, Date().timeIntervalSince(last) < day { return }
+        UserDefaults.standard.set(Date(), forKey: key)
+        notify(title: "TD Storage: sign in again soon", body: text)
+    }
+
+    /// The CRM ended this Mac's sign-in: keep the reason on screen (and tell the person) instead of silently showing the sign-in button.
+    private func signedOutByCRM() async {
+        await wipe()
+        signedOutNote = SignInExpiry.endedMessage
+        expiryNotice = nil
+        state = .signedOut
+        notify(title: "TD Storage: sign in again", body: SignInExpiry.endedMessage)
+    }
+
+    private func notify(title: String, body: String) {
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            guard granted else { return }
+            let c = UNMutableNotificationContent(); c.title = title; c.body = body
+            center.add(UNNotificationRequest(identifier: UUID().uuidString, content: c, trigger: nil))
+        }
+    }
+
     func signIn() async {
+        signedOutNote = nil
         let verifier = PKCE.makeVerifier()
         let challenge = PKCE.challenge(for: verifier)
         let checkCode = PKCE.checkCode(for: challenge)
@@ -204,6 +241,7 @@ final class AppModel: ObservableObject {
             _ = try await api.exchange(code: code, verifier: verifier, redirectURI: started.redirectURI)
             let me = try await api.whoami()      // the CRM answered: the 24-hour lease starts
             updateCheckMinutes = me.updateCheckMinutes
+            noteExpiry(me.signInExpiresAt)
             enableStartAtLogin()
             try await register()
             startLeaseWatch()
@@ -251,13 +289,13 @@ final class AppModel: ObservableObject {
     private func checkLease() async {
         guard store.load() != nil else { return }
         if lease.isExpired() { await wipe(); state = .problem(leaseMessage); return }
-        do { let me = try await api.whoami(); noteLatest(me.latestBuild); applyPace(me.updateHintSeconds); nudgeFinder() }
-        catch StorageAPIError.deviceRevoked { await wipe(); state = .signedOut }
-        catch StorageAPIError.notSignedIn { await wipe(); state = .signedOut }
+        do { let me = try await api.whoami(); noteLatest(me.latestBuild); noteExpiry(me.signInExpiresAt); applyPace(me.updateHintSeconds); nudgeFinder() }
+        catch StorageAPIError.deviceRevoked { await signedOutByCRM() }
+        catch StorageAPIError.notSignedIn { await signedOutByCRM() }
         catch { /* offline for now: the lease keeps running */ }
     }
 
-    func signOut() async { await wipe(); state = .signedOut }
+    func signOut() async { await wipe(); signedOutNote = nil; expiryNotice = nil; state = .signedOut }
 
     func openInFinder() {
         NSFileProviderManager(for: domain)?.getUserVisibleURL(for: .rootContainer) { url, _ in

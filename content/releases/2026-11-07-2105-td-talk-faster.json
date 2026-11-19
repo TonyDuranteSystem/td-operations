@@ -1,0 +1,9 @@
+{
+  "title": "TD Talk: Back to the chat list and opening a chat are faster",
+  "tag": "improved",
+  "text": "Tapping Back now shows a fresh chat list at once, and the chat you just read no longer keeps its unread number. Opening a chat no longer spins every time: TD Talk asks for a lighter chat list and opens a chat with its newest 60 messages first. On the test system, opening a chat dropped from about 900 ms to about 400 ms, and a long chat's data from 352 kB to 42 kB.",
+  "points": [
+    "In the TD Social phone app the last chat list and your last 6 chats (60 messages each) are kept on the phone and shown at once, then replaced by the server's answer.",
+    "The phone app loads its tabs one after the other, the one on screen first (this needs app version 0.2.2)."
+  ]
+}

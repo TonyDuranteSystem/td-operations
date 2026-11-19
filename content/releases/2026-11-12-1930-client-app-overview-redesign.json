@@ -1,0 +1,12 @@
+{
+  "title": "The client iPhone app opens on the client's own company and details",
+  "tag": "improved",
+  "text": "Inside the client iPhone app only (the website is unchanged), the Overview now starts with one blue company card: name, type, state, EIN with a Copy button, formation date and filing ID. The announcement cards moved behind a round News button on that card, with a red number. Anything the client must act on stays on the page. Below, the client's details are a short profile with Edit, and the Identity and Tax card is always there: with no ITIN it says so, and numbers stay hidden until the client taps Show. The four addresses are four cards with a Copy button each.",
+  "points": [
+    "Open the app's Overview: the company card is first",
+    "Tap the round News button to read the announcements",
+    "Scroll to Identity and Tax: the ITIN row is there even with no ITIN",
+    "Tap Copy on the EIN or on an address"
+  ],
+  "screenshot": "client-app-overview.png"
+}

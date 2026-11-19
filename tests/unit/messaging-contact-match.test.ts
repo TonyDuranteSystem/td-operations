@@ -1,145 +1,116 @@
 /**
- * Tests for lib/messaging/contact-match.ts — findContactByPhone.
- *
- * Covers the exact behavior the WhatsApp contact-match banner depends on:
- * a lead match wins over a contact match, phone formatting differences don't
- * break the match, a candidate sharing only the last 8 digits (different
- * country code) is correctly rejected, and no match returns null rather
- * than throwing.
+ * Tests for lib/messaging/contact-match.ts — the number lookup behind the WhatsApp chat bar.
+ * Digits only (spaces/dashes never matter), the ENTIRE number must match, every match is returned, a lead that became a matched
+ * contact is the same person, and a failed read throws instead of looking like "no match".
  */
-
 import { describe, it, expect, vi, beforeEach } from "vitest"
 
-type LeadRow = { id: string; full_name: string; phone: string | null }
-type ContactRow = {
-  id: string
-  full_name: string
-  phone: string | null
-  phone_2: string | null
-  phone_3?: string | null
-  phone_4?: string | null
-  account_contacts: Array<{ accounts: { company_name: string } }>
-}
-
-let leadRows: LeadRow[] = []
-let contactRows: ContactRow[] = []
+type Row = Record<string, unknown>
+let leadRows: Row[] = []
+let contactRows: Row[] = []
+let readError: string | null = null
 
 vi.mock("@/lib/supabase-admin", () => {
-  const from = vi.fn((table: string) => {
-    if (table === "leads") {
-      return {
-        select: () => ({
-          ilike: () => ({
-            limit: () => Promise.resolve({ data: leadRows, error: null }),
-          }),
-        }),
-      }
+  const builder = (table: string) => {
+    const b: Record<string, unknown> = {}
+    for (const m of ["select", "not", "is", "or", "order"]) b[m] = () => b
+    b.range = (from: number, to: number) => {
+      if (readError) return Promise.resolve({ data: null, error: { message: readError } })
+      const rows = table === "leads" ? leadRows : contactRows
+      return Promise.resolve({ data: rows.slice(from, to + 1), error: null })
     }
-    if (table === "contacts") {
-      return {
-        select: () => ({
-          or: () => ({
-            limit: () => Promise.resolve({ data: contactRows, error: null }),
-          }),
-        }),
-      }
-    }
-    throw new Error(`unexpected table: ${table}`)
-  })
-  return { supabaseAdmin: { from } }
+    return b
+  }
+  return { supabaseAdmin: { from: (t: string) => builder(t) } }
 })
 
-import { findContactByPhone } from "@/lib/messaging/contact-match"
+import { findAllMatchesByPhone, matchPhoneRecords } from "@/lib/messaging/contact-match"
 
 beforeEach(() => {
   leadRows = []
   contactRows = []
+  readError = null
 })
 
-describe("findContactByPhone", () => {
-  it("returns null for a phone number too short to match reliably", async () => {
-    const result = await findContactByPhone("+123")
-    expect(result).toBeNull()
+describe("matchPhoneRecords", () => {
+  it("finds a number however it is written", () => {
+    const contacts = [{ id: "c1", full_name: "Santo Catania", phone: "+39 349 703 7513", account_contacts: [{ account_id: "a1", accounts: { company_name: "Trade Charls LLC" } }] }]
+    for (const chat of ["+393497037513", "393497037513", "+39 349 70 37 513", "0039 349 703 7513".replace(/^00/, "")]) {
+      const r = matchPhoneRecords(chat, [], contacts)
+      expect(r).toEqual([{ type: "contact", id: "c1", name: "Santo Catania", accountName: "Trade Charls LLC", accountId: "a1" }])
+    }
   })
 
-  it("returns null when neither a lead nor a contact matches", async () => {
-    const result = await findContactByPhone("+17274521093")
-    expect(result).toBeNull()
+  it("matches on any of a contact's four phone slots, and a lead's phone", () => {
+    const contacts = [
+      { id: "c2", full_name: "B", phone: "+1 111 111 1111", phone_4: "+1 (727) 452-1093" },
+    ]
+    const leads = [{ id: "l1", full_name: "L", phone: "1-727-452-1093" }]
+    const r = matchPhoneRecords("+17274521093", leads, contacts)
+    expect(r.map((m) => `${m.type}:${m.id}`)).toEqual(["contact:c2", "lead:l1"])
   })
 
-  it("matches a lead regardless of phone formatting differences (same full number)", async () => {
-    leadRows = [{ id: "lead-1", full_name: "Marco Bianchi", phone: "+1 (727) 452-1093" }]
-    const result = await findContactByPhone("17274521093")
-    expect(result).toEqual({ type: "lead", id: "lead-1", name: "Marco Bianchi" })
+  it("a number saved WITHOUT its country code does not match (the whole number must match)", () => {
+    expect(matchPhoneRecords("+17274521093", [], [{ id: "c8", full_name: "N", phone: "(727) 452-1093" }])).toEqual([])
   })
 
-  it("a lead match wins even when a contact would also match", async () => {
-    leadRows = [{ id: "lead-1", full_name: "Marco Bianchi", phone: "+17274521093" }]
-    contactRows = [{ id: "contact-1", full_name: "Someone Else", phone: "+17274521093", phone_2: null, account_contacts: [] }]
-    const result = await findContactByPhone("+17274521093")
-    expect(result?.type).toBe("lead")
+  it("requires the ENTIRE number — a number that merely ends the same never matches", () => {
+    const contacts = [{ id: "c3", full_name: "X", phone: "+1 727 452 1093" }]
+    expect(matchPhoneRecords("+390 727 452 1093".replace(/\s/g, ""), [], contacts)).toEqual([])
+    expect(matchPhoneRecords("+17274521093", [], [{ id: "c4", full_name: "Y", phone: "452 1093" }])).toEqual([])
   })
 
-  it("matches a contact and surfaces its linked account name", async () => {
-    contactRows = [{
-      id: "contact-1",
-      full_name: "Adam Mihaly",
-      phone: "+17274521093",
-      phone_2: null,
-      account_contacts: [{ accounts: { company_name: "THW Global LLC" } }],
-    }]
-    const result = await findContactByPhone("+17274521093")
-    expect(result).toEqual({
-      type: "contact",
-      id: "contact-1",
-      name: "Adam Mihaly",
-      accountName: "THW Global LLC",
-    })
+  it("never matches blank values or a chat number that is not a real phone", () => {
+    const contacts = [{ id: "c5", full_name: "Z", phone: null, phone_2: "", phone_3: "-", phone_4: null }]
+    expect(matchPhoneRecords("+17274521093", [], contacts)).toEqual([])
+    expect(matchPhoneRecords("", [], contacts)).toEqual([])
+    expect(matchPhoneRecords("1234567", [], [{ id: "c6", full_name: "S", phone: "1234567" }])).toEqual([])
+    expect(matchPhoneRecords("1203630000000000000", [], [{ id: "c7", full_name: "G", phone: "1203630000000000000" }])).toEqual([])
   })
 
-  it("matches a standalone contact with no linked account", async () => {
-    contactRows = [{ id: "contact-2", full_name: "Giulio Rossi", phone: "+17274521093", phone_2: null, account_contacts: [] }]
-    const result = await findContactByPhone("+17274521093")
-    expect(result).toEqual({
-      type: "contact",
-      id: "contact-2",
-      name: "Giulio Rossi",
-      accountName: null,
-    })
+  it("returns every match, the same contact only once, and skips test records", () => {
+    const contacts = [
+      { id: "c1", full_name: "A", phone: "+39 349 703 7513", phone_2: "393497037513" },
+      { id: "c2", full_name: "B", phone: "393497037513" },
+      { id: "c3", full_name: "Test", phone: "393497037513", is_test: true },
+    ]
+    const leads = [{ id: "l1", full_name: "A lead", phone: "+39 349 703 7513" }, { id: "l2", full_name: "T", phone: "393497037513", is_test: true }]
+    const r = matchPhoneRecords("+393497037513", leads, contacts)
+    expect(r.map((m) => m.id)).toEqual(["c1", "c2", "l1"])
   })
 
-  it("does NOT match a contact whose full number differs, even sharing the last 8 digits", async () => {
-    // Real incident, 2026-09-18: an Albanian and an Italian number can share
-    // 8 trailing digits by coincidence — the old substring rule would have
-    // wrongly matched them. The full country code must agree too.
-    contactRows = [{ id: "contact-3", full_name: "Wrong Country", phone: "+355 69 867 8746", phone_2: null, account_contacts: [] }]
-    const result = await findContactByPhone("+39 69 867 8746")
-    expect(result).toBeNull()
+  it("a lead that became a matched contact is the same person: only the contact is shown", () => {
+    const contacts = [{ id: "c1", full_name: "Santo", phone: "+39 349 703 7513" }]
+    const leads = [
+      { id: "l1", full_name: "Santo", phone: "393497037513", converted_to_contact_id: "c1" },
+      { id: "l2", full_name: "Santo", phone: "393497037513", converted_to_contact_id: null },
+    ]
+    expect(matchPhoneRecords("+393497037513", leads, contacts).map((m) => m.id)).toEqual(["c1", "l2"])
+  })
+})
+
+describe("findAllMatchesByPhone", () => {
+  it("reads the records and returns every match", async () => {
+    contactRows = [{ id: "c1", full_name: "Santo", phone: "+39 349 703 7513", account_contacts: [] }]
+    leadRows = [{ id: "l1", full_name: "Santo", phone: "+39 349 703 7513", converted_to_contact_id: null }]
+    const r = await findAllMatchesByPhone("+393497037513")
+    expect(r.map((m) => m.id)).toEqual(["c1", "l1"])
   })
 
-  it("matches via phone_2 when phone_1 differs", async () => {
-    contactRows = [{ id: "contact-4", full_name: "Second Number", phone: "+15550001111", phone_2: "+17274521093", account_contacts: [] }]
-    const result = await findContactByPhone("+17274521093")
-    expect(result?.id).toBe("contact-4")
+  it("reads past the first 1,000 rows", async () => {
+    contactRows = Array.from({ length: 1200 }, (_, i) => ({ id: `c${i}`, full_name: `P${i}`, phone: `+1 555 ${String(1000000 + i).slice(1)}` }))
+    contactRows.push({ id: "target", full_name: "Last one", phone: "+39 349 703 7513" })
+    const r = await findAllMatchesByPhone("+393497037513")
+    expect(r.map((m) => m.id)).toEqual(["target"])
   })
 
-  it("matches via phone_3 or phone_4 when the first two numbers differ (Claudia Taffarello / Snowfy LLC, 2026-10-01: US number on file, Italian WhatsApp number had nowhere to go)", async () => {
-    contactRows = [{
-      id: "contact-5",
-      full_name: "Claudia Taffarello",
-      phone: "+17272398495",
-      phone_2: null,
-      phone_3: "+393488593759",
-      phone_4: null,
-      account_contacts: [{ accounts: { company_name: "Snowfy LLC" } }],
-    }]
-    const result = await findContactByPhone("+393488593759")
-    expect(result).toEqual({ type: "contact", id: "contact-5", name: "Claudia Taffarello", accountName: "Snowfy LLC" })
+  it("does not touch the database for a number that is not a real phone", async () => {
+    readError = "should not be read"
+    expect(await findAllMatchesByPhone("+12")).toEqual([])
   })
 
-  it("does not match on phone_3/phone_4 when both are null", async () => {
-    contactRows = [{ id: "contact-6", full_name: "No Extra Numbers", phone: "+15550002222", phone_2: null, phone_3: null, phone_4: null, account_contacts: [] }]
-    const result = await findContactByPhone("+393488593759")
-    expect(result).toBeNull()
+  it("throws when the database cannot be read — a failed read is never 'no match'", async () => {
+    readError = "timeout"
+    await expect(findAllMatchesByPhone("+393497037513")).rejects.toThrow(/timeout/)
   })
 })

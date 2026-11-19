@@ -10,13 +10,13 @@ import { HelpCircle } from 'lucide-react'
 import { useHelp } from './help-provider'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 
-export function HelpToggle() {
+export function HelpToggle({ stacked = false }: { stacked?: boolean } = {}) {
   const { helpOn, toggle } = useHelp()
   return (
-    <FastTooltip label={helpOn ? 'Hide the help buttons' : 'Show help buttons next to features'}>
+    <FastTooltip label={helpOn ? 'Hide the help buttons' : 'Show help buttons next to features'} className={stacked ? 'w-full' : undefined}>
       <button
         onClick={toggle}
-        className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+        className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors ${stacked ? 'w-full' : ''} ${
           helpOn ? 'bg-violet-600 text-white border-violet-600' : 'bg-white text-zinc-600 border-zinc-200 hover:text-zinc-900'
         }`}
         aria-label={helpOn ? 'Hide the help buttons' : 'Show help buttons next to features'}

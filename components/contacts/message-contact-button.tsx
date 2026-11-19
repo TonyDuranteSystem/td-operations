@@ -1,0 +1,130 @@
+'use client'
+
+/**
+ * The Contact page's "Message" button (Antonio 2026-11-15: "write the message in portal chats directly from the contact — a card
+ * pop-up to write the message, choose the topic etc."). It opens the same choices as the Portal Chats "Before you send" pop-up
+ * — personal or one of the person's companies, who it is addressed to, the topic — in the small shared pop-up the document "eye" uses
+ * (ShareMessageDialog, mode "message"), and sends through the normal staff chat route (POST /api/portal/chat), so every rule of a
+ * normal staff send applies: the scope check, the portal notification, the email throttle.
+ *
+ * Nothing is pre-selected when there is more than one choice (a message to the wrong chat can reach every member of a company).
+ * A typed message is never lost: if the send fails the pop-up stays open and shows why.
+ *
+ * Two looks, one behaviour: the labelled button in the Contact page header, and (variant "icon", Antonio 2026-11-15: "directly from the
+ * list") a small chat icon beside a person's name in the Contacts list. The "no portal login" line is worked out by the server when the
+ * pop-up opens, so a list of 50 rows costs nothing extra. In a list row the pop-up lives inside a clickable row, so the wrapper stops
+ * clicks (and is marked data-no-nav) — otherwise a click inside the pop-up would open the person's page behind it.
+ *
+ * The same button also serves the ACCOUNTS list (Antonio 2026-11-15: yes to the same icon on companies): pass accountId + accountName
+ * instead of a contact, and it asks GET /api/accounts/:id/message-context — the company's own chat is the only choice and is already
+ * selected (the row is the choice), with a grey line saying who the portal alert goes to and an amber one when nobody can read it yet.
+ * `disabledReason` greys the icon with that reason (a company whose chat the client cannot see).
+ *
+ * 2026-11-16 (Antonio: "open the chat window in the chat that you built … this small icon in the list"): a PLAIN click on the icon / the
+ * Message button now opens that person's or company's Portal Chats as a floating window (`/portal-chats?contact=` or `?account=`) with
+ * all the chat tools. The small pop-up below is what Ctrl/Cmd/Shift-click, a screen under 1024 px, windows off, or being inside a
+ * window still show, so a click never does nothing.
+ */
+import { useState, type MouseEvent } from 'react'
+import { MessageSquare, Loader2 } from 'lucide-react'
+import { toast } from 'sonner'
+import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { ShareMessageDialog, type ShareSendResult } from '@/components/storage/share-message-dialog'
+import { sendShareMessage } from '@/lib/crm-store/document-share-client'
+import type { ShareContext } from '@/lib/portal/document-share-text'
+import { useWindowsAvailable, canOpenWindowNow, requestOpenWindow } from '@/lib/windows/windows-context'
+import { isWindowLinkClick } from '@/lib/windows/open-intent'
+import { isWindowableUrl } from '@/lib/windows/window-model'
+import { chatWindowHref, chatWindowTitle } from '@/lib/windows/chat-window'
+
+type Askable = Extract<ShareContext, { askable: true }>
+
+/** Fired on window after a message is sent from the Contact page, so an open Chat tab can reload its timeline. */
+export const CONTACT_CHAT_SENT_EVENT = 'td:contact-chat-sent'
+
+async function fetchMessageContext(target: { kind: 'contact' | 'account'; id: string }): Promise<Askable> {
+  const url = target.kind === 'account' ? `/api/accounts/${encodeURIComponent(target.id)}/message-context` : `/api/contacts/${encodeURIComponent(target.id)}/message-context`
+  const res = await fetch(url, { cache: 'no-store' })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error((data as { error?: string }).error || 'Could not work out who the message can go to — please try again.')
+  const ctx = data as ShareContext
+  if (!ctx.askable) throw new Error(target.kind === 'account' ? 'This company has nobody a message can go to.' : 'This contact has nobody a message can go to.')
+  return ctx
+}
+
+export function MessageContactButton({ contactId, contactName, accountId, accountName, variant = 'button', disabledReason }: {
+  contactId?: string; contactName?: string; accountId?: string; accountName?: string
+  variant?: 'button' | 'icon'; disabledReason?: string
+}) {
+  const [loading, setLoading] = useState(false)
+  const [ctx, setCtx] = useState<Askable | null>(null)
+  const isAccount = !!accountId
+  const id = (isAccount ? accountId : contactId) ?? ''
+  const name = (isAccount ? accountName : contactName) ?? ''
+
+  const windowsAvailable = useWindowsAvailable()
+
+  const open = async (e: MouseEvent) => {
+    if (loading || disabledReason || !id) return
+    // A plain click opens this person's / company's Portal Chats as a FLOATING WINDOW (Antonio 2026-11-16: "open the chat window … this
+    // small icon in the list") — the whole chat with all its tools. Ctrl/Cmd/Shift-click, a screen under 1024 px, windows off, or being
+    // inside a window keep the small pop-up below, so a click never does nothing.
+    if (isWindowLinkClick(e) && canOpenWindowNow(windowsAvailable)) {
+      const href = chatWindowHref(isAccount ? { accountId: id } : { contactId: id })
+      if (isWindowableUrl(href)) {
+        requestOpenWindow(href, chatWindowTitle(name))
+        return
+      }
+    }
+    setLoading(true)
+    try {
+      const c = await fetchMessageContext({ kind: isAccount ? 'account' : 'contact', id })
+      setCtx({ ...c, recipientName: c.recipientName || name || undefined })
+    } catch (e) {
+      toast.error(e instanceof Error && e.message ? e.message : 'Could not open the message window — please try again.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const send = async (r: ShareSendResult) => {
+    await sendShareMessage(r) // throws with the server's reason; the pop-up shows it and stays open
+    toast.success(`Message sent to ${r.target.label}`)
+    setCtx(null)
+    if (!isAccount) window.dispatchEvent(new CustomEvent(CONTACT_CHAT_SENT_EVENT, { detail: { contactId } }))
+  }
+
+  const label = isAccount
+    ? "Opens this company's chat in a window, with all the chat tools. Ctrl/Cmd-click for a quick message instead."
+    : "Opens this person's chat in a window, with all the chat tools. Ctrl/Cmd-click for a quick message instead."
+  const tip = disabledReason ?? (variant === 'icon' ? `Chat with ${name || (isAccount ? 'this company' : 'this person')} — opens in a window` : label)
+  return (
+    <span data-no-nav className="inline-flex" onClick={(e) => e.stopPropagation()}>
+      <FastTooltip label={tip}>
+        {variant === 'icon' ? (
+          <button
+            type="button"
+            onClick={open}
+            disabled={loading || !!disabledReason}
+            aria-label={disabledReason ?? label}
+            className="inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-blue-50 hover:text-blue-700 focus-visible:text-blue-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-muted-foreground/60"
+          >
+            {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MessageSquare className="h-3.5 w-3.5" />}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={open}
+            disabled={loading || !!disabledReason}
+            aria-label={disabledReason ?? label}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-blue-300 px-3 py-1 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-50 disabled:opacity-60"
+          >
+            {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MessageSquare className="h-3.5 w-3.5" />}
+            Message
+          </button>
+        )}
+      </FastTooltip>
+      {ctx && <ShareMessageDialog mode="message" ctx={ctx} onResult={() => setCtx(null)} onSend={send} />}
+    </span>
+  )
+}

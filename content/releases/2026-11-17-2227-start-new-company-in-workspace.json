@@ -1,0 +1,12 @@
+{
+  "title": "Start a new company moved into the formation job",
+  "tag": "improved",
+  "text": "The \"Start a new company\" button is no longer in the Wizard card on the Contact page. It is now a panel called \"The state refused the company name?\" in the formation job's own workspace, on every step from Articles Received to EIN Received. The panel says in plain words when to use it. The pop-up is the same, except it no longer asks which company is being replaced, because you open it from that company's job. After you confirm, the panel turns into a green result with a button to the new formation job, and the cancelled job always shows a \"replaced by a new one\" card with the same button.",
+  "points": [
+    "Open a formation job at Articles Received or later and look for the panel with the orange border",
+    "Before the company exists, use \"State refused this name\" in the names step, as before",
+    "Open the job that was replaced: a green card at the top takes you to the new one",
+    "The Contact page's Wizard card shows only the wizard again"
+  ],
+  "screenshot": "start-new-company-workspace.png"
+}

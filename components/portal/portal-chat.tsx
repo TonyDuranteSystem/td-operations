@@ -2,7 +2,8 @@
 
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
-import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, ArrowUp, CheckCheck, ChevronUp, ChevronDown, Reply, X, ZoomIn, Smile, RotateCw, ImageIcon, Plus, Pin, MailOpen, Building2, Sparkles, Check, Users, User as UserIcon } from 'lucide-react'
+import { createPortal } from 'react-dom'
+import { Send, Loader2, MessageCircle, Paperclip, FileText, ExternalLink, Mic, ArrowUp, CheckCheck, ChevronUp, ChevronDown, Reply, X, ZoomIn, Smile, RotateCw, ImageIcon, Plus, Pin, MailOpen, Building2, Sparkles, Lock, User as UserIcon } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { parseTimestamp } from '@/lib/portal/chat-refresh-merge'
@@ -20,13 +21,15 @@ import { VoiceNote } from '@/components/team-chat/voice-note'
 import { TalkI18nProvider } from '@/components/talk/talk-i18n'
 import { PortalVoiceBar } from '@/components/portal/portal-voice-bar'
 import { portalVoiceI18n } from '@/components/portal/portal-voice-i18n'
-import { hasVoiceAttachment, isVoiceAttachment, heldVoiceGoesOut, leavingHref } from '@/lib/portal/chat-voice'
+import { hasVoiceAttachment, isVoiceAttachment, leavingHref } from '@/lib/portal/chat-voice'
 import { SEND_BEFORE_LEAVING_TIMEOUT_MS } from '@/lib/talk/recording-guard'
 import { toast } from 'sonner'
 import { format, parseISO, isToday, isYesterday } from 'date-fns'
 import dynamic from 'next/dynamic'
 import { useAppMode } from '@/lib/app-mode/app-mode-context'
 import { chooseOpeningTopic } from '@/lib/portal-app/chat-topic'
+import { APP_FRAME_SLOT_ID } from '@/lib/portal-app/frame'
+import { tapOpensActions, nextActionsFor } from '@/lib/portal-app/chat-actions'
 import { AppTopicButton } from '@/components/portal/chat/app-topic-button'
 
 const EmojiPicker = dynamic(() => import('emoji-picker-react'), { ssr: false })
@@ -98,19 +101,6 @@ const MAX_ATTACHMENTS = 5
  *  be reachable, or its badge could never be cleared. */
 const MAX_DEEP_LINK_PAGES = 40
 
-/** Same cookies the sidebar CompanySwitcher writes (portal_account_id / portal_formation). */
-function writeEntityCookie(e: PortalChatEntity): void {
-  if (e.kind === 'formation') {
-    document.cookie = `portal_formation=${e.id}; path=/portal; max-age=31536000; SameSite=Lax`
-  } else if (e.kind === 'personal') {
-    document.cookie = `portal_account_id=personal; path=/portal; max-age=31536000; SameSite=Lax`
-    document.cookie = `portal_formation=; path=/portal; max-age=0; SameSite=Lax`
-  } else {
-    document.cookie = `portal_account_id=${e.accountId}; path=/portal; max-age=31536000; SameSite=Lax`
-    document.cookie = `portal_formation=; path=/portal; max-age=0; SameSite=Lax`
-  }
-}
-
 interface PendingFile {
   file: File
   previewUrl?: string // for images
@@ -127,7 +117,7 @@ function formatTime(dateStr: string): string {
   return format(parseISO(dateStr), 'MMM d, h:mm a')
 }
 
-export function PortalChat({ scope, accountId, contactId, userId, locale = 'en', entities = [], selectedEntityId, initialTopic = null }: { scope: ChatScope; accountId?: string; contactId: string; userId: string; locale?: string; entities?: PortalChatEntity[]; selectedEntityId: string; initialTopic?: string | null }) {
+export function PortalChat({ scope, accountId, contactId, userId, locale = 'en', entities = [], selectedEntityId, companyEntityId = '', personalUnread = 0, initialTopic = null }: { scope: ChatScope; accountId?: string; contactId: string; userId: string; locale?: string; entities?: PortalChatEntity[]; selectedEntityId: string; companyEntityId?: string; personalUnread?: number; initialTopic?: string | null }) {
   const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics, ready, serverUnread, markRead } = usePortalChat(scope, accountId || null, contactId)
   // Inside the client iPhone app (dev job 056a70d0, Step 3b): one Topic button instead of the row of topic pills, and the chat opens on the
   // topic of the newest unread answer. The website (appMode false) is exactly as it was.
@@ -181,14 +171,15 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
       })
       .catch(() => { noticesClearedRef.current = false })
   }, [ready, messages, seenReactionKeys, userId, accountId])
-  // Per-company scoping (2026-06-24). Multi-entity clients pick which company a
-  // message is about via a first-send popup; the choice is the SEND TAG and the
-  // VIEW follows it (cookie switch). Single-entity clients are auto-tagged.
+  // Per-company scoping (2026-06-24). The chat belongs to ONE company, or to the client's personal chat, and the company is chosen with
+  // the chip at the top of the portal: the chat has no switch of its own (dev job 58cb7a82). A message is tagged to the chat it is written in.
   const isMultiEntity = entities.length > 1
   const currentEntity = entities.find(e => e.id === selectedEntityId) ?? entities[0] ?? null
-  const [popupOpen, setPopupOpen] = useState(false)
-  // Multi-entity clients must confirm the target on the first send of a session.
-  const [targetConfirmed, setTargetConfirmed] = useState(!isMultiEntity)
+  // The personal chat: company-less messages between the client and the team. It is a chat-only view (?personal=1) and never the
+  // portal's company, so opening it and coming back leaves the chip at the top, the menu and every other tab alone.
+  const personalEntity = entities.find(e => e.kind === 'personal') ?? null
+  const inPersonalChat = currentEntity?.kind === 'personal'
+  const companyEntity = entities.find(e => e.id === companyEntityId) ?? entities.find(e => e.kind !== 'personal') ?? null
   // Deep-linked topic (Wave 2, card 4a39e0fd — Antonio's ruling): a tax
   // notification's "open chat" link lands the client ON the tax tab, so
   // whatever they type is tagged without them doing or knowing anything.
@@ -247,19 +238,10 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
     stripTopicParam()
   }, [stripTopicParam])
 
-  // Set by the "which company?" send popup just before it switches company and
-  // sends: the message goes out in the tab that is open, so on arriving at the
-  // new company that tab must stay open even before the message shows up there
-  // (with an attachment the upload takes seconds) — falling back to General
-  // would hide the message the client just sent.
-  const sendSwitchEntityRef = useRef<string | null>(null)
-
   // The component is NOT remounted on a company switch (a remount would drop
-  // the draft, the send popup's answer and the live channel), so the per-view
-  // state is re-armed here:
-  //  - company changed → keep trying the tab that is open (e.g. the popup sent
-  //    the message to the other company in that tab); not in the new company
-  //    → General, never an empty tab.
+  // the draft and the live channel), so the per-view state is re-armed here:
+  //  - company changed → keep trying the tab that is open; not in the new
+  //    company → General, never an empty tab.
   //  - a new ?topic= arrived by soft navigation → go there.
   //  - ?topic= removed (we stripped it) → nothing to do.
   const lastEntityRef = useRef(selectedEntityId)
@@ -271,11 +253,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
     const topicChanged = lastInitialTopic.current !== initialTopic
     lastEntityRef.current = selectedEntityId
     lastInitialTopic.current = initialTopic
-    if (entityChanged && sendSwitchEntityRef.current === selectedEntityId) {
-      // Popup send: keep the open tab as is.
-      sendSwitchEntityRef.current = null
-      pendingTopicRef.current = null
-    } else if (entityChanged) {
+    if (entityChanged) {
       const topic = activeTopicRef.current
       pendingTopicRef.current = topic ? { topic, allowPaging: false } : null
       deepLinkPagesRef.current = 0
@@ -369,18 +347,19 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
   // Localized display label + icon per entity (company / formation / personal).
   const entityLabel = useCallback((e: PortalChatEntity): string => {
     if (e.kind === 'formation') return `${e.label} ${t('portalChat.inFormationSuffix')}`
-    if (e.kind === 'personal') return t('portalChat.personalGeneral')
+    if (e.kind === 'personal') return t('portalChat.personalChatShort')
     return e.label
   }, [t])
 
-  // Switch the active entity (view-follows-choice). Reuses the same cookies the
-  // sidebar CompanySwitcher writes, so chat stays in lock-step with the rest of
-  // the portal (portal_account_id / portal_formation; 'personal' sentinel).
-  const selectEntity = useCallback((e: PortalChatEntity) => {
-    writeEntityCookie(e)
-    // An explicit company choice ends any linked-tab search.
+  // Open the personal chat, or come back to the company chat. Both are plain navigations of this page (?personal=1): they write no company
+  // setting, so the company chip at the top, the menu and every other open tab keep showing the same company.
+  const goToPersonalChat = useCallback(() => {
     pendingTopicRef.current = null
-    router.refresh()
+    router.push('/portal/chat?personal=1')
+  }, [router])
+  const goToCompanyChat = useCallback(() => {
+    pendingTopicRef.current = null
+    router.push('/portal/chat')
   }, [router])
 
   const draftKey = `chat_draft_${selectedEntityId || contactId}`
@@ -399,6 +378,56 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
   const [isDragging, setIsDragging] = useState(false)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
   const [pinHighlightId, setPinHighlightId] = useState<string | null>(null)
+
+  // A draft belongs to the chat it was written in (dev job 58cb7a82). A private message typed in the personal chat must never be sent to a
+  // company chat that other members read, and the other way round, so when the chat changes the draft and its files are put aside and the
+  // other chat's own draft comes back.
+  const draftsByEntityRef = useRef(new Map<string, { input: string; files: PendingFile[] }>())
+  const draftEntityRef = useRef(selectedEntityId)
+  const draftLiveRef = useRef({ input, pendingFiles })
+  draftLiveRef.current = { input, pendingFiles }
+  useEffect(() => {
+    const prev = draftEntityRef.current
+    if (prev === selectedEntityId) return
+    draftEntityRef.current = selectedEntityId
+    const live = draftLiveRef.current
+    draftsByEntityRef.current.set(prev, { input: live.input, files: live.pendingFiles })
+    const back = draftsByEntityRef.current.get(selectedEntityId)
+    draftsByEntityRef.current.delete(selectedEntityId)
+    setInput(back?.input ?? '')
+    setPendingFiles(back?.files ?? [])
+    setReplyTo(null)
+  }, [selectedEntityId])
+
+  // Client iPhone app only: the message whose small action row (Reply / Pin / Mark unread / React) is open. A tap on a message opens it.
+  const [actionsFor, setActionsFor] = useState<string | null>(null)
+  // Client iPhone app only: the Topic button and the refresh button sit in the app's top row, right after the screen's name, not in a row of the
+  // chat's own. `frameSlot` is that spot once found; `slotMissing` (the spot never appeared) brings the chat's own row back so the Topic button is never lost.
+  const [frameSlot, setFrameSlot] = useState<HTMLElement | null>(null)
+  const [slotMissing, setSlotMissing] = useState(false)
+  // The row opens BELOW the tapped message: when that is the newest message it would sit under the "Replying in" bar, so the message (with its row)
+  // is scrolled just into view (a message already fully on screen does not move).
+  useEffect(() => {
+    if (!appMode || !actionsFor) return
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(`pc-msg-${actionsFor}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [appMode, actionsFor])
+  useEffect(() => {
+    if (!appMode) return
+    let live = true
+    let tries = 0
+    const find = () => {
+      if (!live) return
+      const el = document.getElementById(APP_FRAME_SLOT_ID)
+      if (el) { setFrameSlot(el); setSlotMissing(false) }
+      else if (tries++ < 30) requestAnimationFrame(find)
+      else setSlotMissing(true)
+    }
+    find()
+    return () => { live = false }
+  }, [appMode])
 
   // Pin/unpin a message (client side). Realtime reconciles both chats; refresh() is a fallback.
   const togglePin = async (id: string, pinned: boolean) => {
@@ -718,16 +747,11 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
     inputRef.current?.focus()
   }
 
-  // A recorded voice note: a client with several companies first says which one (same step as a typed message), then it goes out.
+  // A recorded voice note goes to the chat it was recorded in (or the one it was held for).
   const sendVoice = (file: File) => {
     if (sending || uploading) return
     // a note that already failed goes to the company it was being sent to, not to whichever company is on screen now
     const bound = heldVoiceFor ? entities.find(e => e.id === heldVoiceFor) ?? null : null
-    if (!bound && isMultiEntity && !targetConfirmed) {
-      setLeaveAsk(null) // the company window takes the place of the "leave?" question
-      setPopupOpen(true)
-      return
-    }
     void doSend(bound ?? currentEntity, file)
   }
   sendVoiceRef.current = sendVoice
@@ -755,31 +779,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
     // a voice note is waiting: it goes first (or is thrown away) — typed text is not sent past it, and the client is told why
     if (heldVoice && (input.trim() || pendingFiles.length > 0) && !sending && !uploading) { toast.info(t('portalChat.voice.finishFirst')); return }
     if ((!input.trim() && pendingFiles.length === 0) || sending || uploading) return
-    // First send of the session for a multi-entity client → confirm the target.
-    if (isMultiEntity && !targetConfirmed) {
-      setPopupOpen(true)
-      return
-    }
     await doSend()
-  }
-
-  // Popup / pill choice: tag the message to the chosen entity AND make the view
-  // follow it (so the just-sent message is visible). Confirms the target for the
-  // rest of the session.
-  const chooseEntity = (entity: PortalChatEntity) => {
-    setTargetConfirmed(true)
-    setPopupOpen(false)
-    // A voice note waiting for its company goes out first, alone — but only for ITS company: a note that failed for company A is not sent to B
-    // because the client switched to B. What is drafted stays in the box for the next send, and is not sent past a waiting note.
-    const voiceGoesNow = !!heldVoice && heldVoiceGoesOut(heldVoiceFor, entity.id)
-    const draftGoesNow = !heldVoice && (!!input.trim() || pendingFiles.length > 0)
-    if (entity.id !== selectedEntityId) {
-      if (voiceGoesNow || draftGoesNow) sendSwitchEntityRef.current = entity.id
-      selectEntity(entity)
-    }
-    if (voiceGoesNow && heldVoice) { void doSend(entity, heldVoice); return }
-    // Send only if there's something drafted (the pill "switch" path may have none).
-    if (draftGoesNow) doSend(entity)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -894,17 +894,36 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      {/* Refresh button — replaces pull-to-refresh gesture on chat page */}
-      <FastTooltip label={t('portalChat.refreshMessages')}>
-        <button
-          onClick={handleRefresh}
-          disabled={isRefreshing || loading}
-          className="absolute top-2 right-2 z-10 p-1.5 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 disabled:opacity-40 transition-colors"
-          aria-label={t('portalChat.refreshMessages')}
-        >
-          <RotateCw className={cn('h-4 w-4', isRefreshing && 'animate-spin')} />
-        </button>
-      </FastTooltip>
+      {/* Refresh button — replaces pull-to-refresh gesture on chat page. Inside the client iPhone app it lives in the app's top row (below). */}
+      {(!appMode || slotMissing) && (
+        <FastTooltip label={t('portalChat.refreshMessages')}>
+          <button
+            onClick={handleRefresh}
+            disabled={isRefreshing || loading}
+            className="absolute top-2 right-2 z-10 p-1.5 rounded-full text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 disabled:opacity-40 transition-colors"
+            aria-label={t('portalChat.refreshMessages')}
+          >
+            <RotateCw className={cn('h-4 w-4', isRefreshing && 'animate-spin')} />
+          </button>
+        </FastTooltip>
+      )}
+      {/* Client iPhone app: the Topic button and the refresh button go into the app's top row, right after the screen's name (one slim row, no second row). */}
+      {appMode && frameSlot && createPortal(
+        <>
+          <AppTopicButton activeTopic={activeTopic} topicOrder={topicOrder} unreadByTopic={unreadByTopic} onChoose={chooseTopic} />
+          <button
+            type="button"
+            onClick={handleRefresh}
+            disabled={isRefreshing || loading}
+            aria-label={t('portalChat.refreshMessages')}
+            data-testid="app-chat-refresh"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-zinc-500 disabled:opacity-40"
+          >
+            <RotateCw className={cn('h-[18px] w-[18px]', isRefreshing && 'animate-spin')} aria-hidden="true" />
+          </button>
+        </>,
+        frameSlot,
+      )}
       {/* Drag overlay */}
       {isDragging && (
         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center border-2 border-dashed border-blue-400 bg-blue-50/90 rounded-xl pointer-events-none">
@@ -912,46 +931,96 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
           <p className="text-sm font-medium text-blue-600">{t('portalChat.dropToAttach')}</p>
         </div>
       )}
-      {/* Prominent "Chatting about" banner — multi-entity clients only. Big and
-          unmissable (Antonio): the client must instantly see which company this
-          conversation is tagged to. Single-entity clients are auto-tagged → no
-          banner. pr-10 keeps the Switch button clear of the absolute refresh icon. */}
+      {/* The label that names which chat this is, for clients with more than one view. Read only: the company is chosen with the chip at the top of
+          the portal and the chat follows it (dev job 58cb7a82). A shared company says that other members read the chat. Where the website has room
+          a strip under it opens the personal chat (and a strip in the personal chat goes back); inside the apps that is the button in the top row,
+          so the chat keeps its space. pr-10 keeps the label clear of the absolute refresh icon. */}
       {isMultiEntity && currentEntity && (() => {
         const accent =
           currentEntity.kind === 'formation'
-            ? { bar: 'bg-amber-50 border-amber-200', badge: 'bg-amber-100 text-amber-700', label: 'text-amber-600', name: 'text-amber-900', btn: 'border-amber-300 text-amber-800 hover:bg-amber-100' }
+            ? { bar: 'bg-amber-50 border-amber-200', badge: 'bg-amber-100 text-amber-700', label: 'text-amber-600', name: 'text-amber-900' }
             : currentEntity.kind === 'personal'
-              ? { bar: 'bg-zinc-100 border-zinc-200', badge: 'bg-zinc-200 text-zinc-600', label: 'text-zinc-500', name: 'text-zinc-900', btn: 'border-zinc-300 text-zinc-700 hover:bg-zinc-200' }
-              : { bar: 'bg-blue-50 border-blue-200', badge: 'bg-blue-100 text-blue-700', label: 'text-blue-600', name: 'text-blue-900', btn: 'border-blue-300 text-blue-800 hover:bg-blue-100' }
+              ? { bar: 'bg-zinc-100 border-zinc-200', badge: 'bg-zinc-200 text-zinc-600', label: 'text-zinc-500', name: 'text-zinc-900' }
+              : { bar: 'bg-blue-50 border-blue-200', badge: 'bg-blue-100 text-blue-700', label: 'text-blue-600', name: 'text-blue-900' }
         const Icon = currentEntity.kind === 'formation' ? Sparkles : currentEntity.kind === 'personal' ? UserIcon : Building2
+        // In the apps the personal chat's label is short, so it fits beside the Company button without cutting the words.
+        const heading = inPersonalChat ? (appMode ? t('portalChat.personalTitleApp') : t('portalChat.personalTitle')) : entityLabel(currentEntity)
+        // The apps have no strip: their button sits on this label row, so the chat keeps its space (the top row is already full).
+        const stripsHere = !appMode
+        const showAppButton = appMode && !!personalEntity && (inPersonalChat ? !!companyEntity : true)
         return (
-          <div className={cn('flex items-center justify-between gap-3 px-4 py-3 border-b pr-10', accent.bar)}>
-            <div className="flex items-center gap-3 min-w-0">
-              <span className={cn('flex items-center justify-center h-9 w-9 rounded-full shrink-0', accent.badge)}>
-                <Icon className="h-5 w-5" />
+          <>
+            <div className={cn('flex items-center gap-3 border-b', appMode ? 'px-3 py-2' : 'px-4 py-3 pr-10', accent.bar)} data-testid="portal-chat-label">
+              <span className={cn('flex shrink-0 items-center justify-center rounded-full', appMode ? 'h-7 w-7' : 'h-9 w-9', accent.badge)}>
+                <Icon className={appMode ? 'h-4 w-4' : 'h-5 w-5'} />
               </span>
               <div className="min-w-0">
                 <div className={cn('text-[10px] font-semibold uppercase tracking-wider', accent.label)}>
-                  {t('portalChat.chattingAbout')}
+                  {inPersonalChat ? t('portalChat.personalEyebrow') : t('portalChat.chattingAbout')}
                 </div>
-                <div className={cn('text-base sm:text-lg font-bold leading-tight truncate', accent.name)} title={entityLabel(currentEntity)}>
-                  {entityLabel(currentEntity)}
+                <div className={cn('font-bold leading-tight truncate', appMode ? 'text-[15px]' : 'text-base sm:text-lg', accent.name)} title={heading}>
+                  {heading}
                 </div>
+                {inPersonalChat && (
+                  <div className="text-[11.5px] text-zinc-500 mt-0.5">{appMode ? t('portalChat.personalSubApp') : t('portalChat.personalSub')}</div>
+                )}
+                {currentEntity.kind === 'company' && currentEntity.isShared && (
+                  <div className="text-[11px] text-amber-700 mt-0.5" data-testid="portal-chat-shared-note">
+                    {appMode ? t('portalChat.sharedNoteShort') : t('portalChat.sharedEntityNote')}
+                  </div>
+                )}
               </div>
+              {showAppButton && (
+                <button
+                  type="button"
+                  onClick={inPersonalChat ? goToCompanyChat : goToPersonalChat}
+                  data-testid={inPersonalChat ? 'app-chat-company' : 'app-chat-private'}
+                  className="ml-auto flex h-8 shrink-0 items-center gap-1 rounded-full border border-zinc-300 bg-white px-2.5 text-[12px] font-semibold text-zinc-700"
+                >
+                  {inPersonalChat ? <Building2 className="h-3.5 w-3.5" aria-hidden="true" /> : <Lock className="h-3.5 w-3.5" aria-hidden="true" />}
+                  {inPersonalChat ? t('portalChat.appCompany') : t('portalChat.appPrivate')}
+                  {!inPersonalChat && personalUnread > 0 && (
+                    <span className="inline-flex h-[16px] min-w-[16px] items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white">{personalUnread}</span>
+                  )}
+                </button>
+              )}
             </div>
-            <button
-              type="button"
-              onClick={() => setPopupOpen(true)}
-              className={cn('shrink-0 inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white border text-xs font-semibold transition-colors', accent.btn)}
-            >
-              {t('portalChat.switch')}
-              <ChevronDown className="h-3.5 w-3.5" />
-            </button>
-          </div>
+            {stripsHere && personalEntity && !inPersonalChat && (
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-zinc-200 bg-zinc-50 px-4 py-2.5 text-[13px] text-zinc-700" data-testid="portal-chat-personal-strip">
+                <UserIcon className="h-4 w-4 shrink-0 text-zinc-500" aria-hidden="true" />
+                <span className="min-w-[10rem] flex-1">{t('portalChat.personalStripText')}</span>
+                <button
+                  type="button"
+                  onClick={goToPersonalChat}
+                  data-testid="portal-chat-open-personal"
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-xs font-semibold text-blue-800 hover:bg-blue-50"
+                >
+                  {t('portalChat.personalStripButton')}
+                  {personalUnread > 0 && (
+                    <span className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-bold text-white">{personalUnread}</span>
+                  )}
+                </button>
+              </div>
+            )}
+            {stripsHere && inPersonalChat && companyEntity && (
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-zinc-200 bg-white px-4 py-2.5 text-[13px] text-zinc-700" data-testid="portal-chat-back-strip">
+                <span className="min-w-[10rem] flex-1">{t('portalChat.personalBackText')}</span>
+                <button
+                  type="button"
+                  onClick={goToCompanyChat}
+                  data-testid="portal-chat-back-to-company"
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-xs font-semibold text-blue-800 hover:bg-blue-50"
+                >
+                  {interpolateString(t('portalChat.personalBackButton'), { company: companyEntity.label })}
+                </button>
+              </div>
+            )}
+          </>
         )
       })()}
-      {/* Inside the client iPhone app the row of topic pills below is replaced by ONE Topic button (Step 3b). */}
-      {appMode && (
+      {/* Inside the client iPhone app the row of topic pills below is replaced by ONE Topic button (Step 3b), drawn in the app's top row (above).
+          Only if that spot never appears does the chat draw its own row, so the Topic button can never be lost. */}
+      {appMode && slotMissing && (
         <div className="flex items-center justify-between gap-3 border-b border-zinc-100 px-4 py-3 pr-12" data-testid="app-chat-header">
           <p className="min-w-0 truncate text-sm text-zinc-600">{t('chat.team')}</p>
           <AppTopicButton activeTopic={activeTopic} topicOrder={topicOrder} unreadByTopic={unreadByTopic} onChoose={chooseTopic} />
@@ -1117,8 +1186,8 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                   </div>
                 )}
                 <div className={cn('flex mb-1 items-end gap-1', isOwn ? 'justify-end' : 'justify-start')}>
-                  {/* Reply button — left side for own messages */}
-                  {isOwn && (
+                  {/* Reply button — left side for own messages. Not in the client iPhone app: there a TAP on the message opens one small action row. */}
+                  {isOwn && !appMode && (
                     <>
                       <FastTooltip label={msg.pinned_at ? t('portalChat.unpin') : t('portalChat.pin')}>
                         <button
@@ -1140,12 +1209,17 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                       </FastTooltip>
                     </>
                   )}
-                  <div className={cn(
-                    'max-w-[75%] px-3.5 py-2 rounded-2xl text-sm',
+                  <div
+                    // Client iPhone app: a tap opens / closes this message's action row, unless it was meant for a link, button, picture or voice note inside it.
+                    onClick={appMode ? (e) => { if (tapOpensActions(e.target as Element, window.getSelection()?.toString())) setActionsFor(cur => nextActionsFor(cur, msg.id)) } : undefined}
+                    className={cn(
+                    appMode ? 'max-w-[88%]' : 'max-w-[75%]',
+                    'px-3.5 py-2 rounded-2xl text-sm',
                     isOwn
                       ? 'bg-blue-600 text-white rounded-br-md'
                       : 'bg-zinc-100 text-zinc-900 rounded-bl-md',
-                    msg.client_kept_unread && 'border-l-2 border-blue-400'
+                    msg.client_kept_unread && 'border-l-2 border-blue-400',
+                    appMode && actionsFor === msg.id && 'ring-2 ring-blue-300'
                   )}>
                     {/* PR 2 Step 6 — sender_context badge. Shown when the
                         message was tagged at send time. NULL = legacy
@@ -1289,8 +1363,8 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                       )}
                     </p>
                   </div>
-                  {/* Reply button — right side for other's messages */}
-                  {!isOwn && (
+                  {/* Reply button — right side for other's messages (not in the client iPhone app: see above) */}
+                  {!isOwn && !appMode && (
                     <>
                       <FastTooltip label={t('portalChat.reply')}>
                         <button
@@ -1324,11 +1398,44 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                     </>
                   )}
                 </div>
+                {/* Client iPhone app: the one small action row of the TAPPED message (Reply / Pin / Mark unread; React is the smiley just below). Full-size
+                    buttons (Apple's 44-point rule) but only ever one row, for one message, instead of three icons beside every message. */}
+                {appMode && actionsFor === msg.id && (
+                  <div data-testid="app-message-actions" className={cn('mb-1 flex flex-wrap items-center gap-2 px-1', isOwn ? 'justify-end' : 'justify-start')}>
+                    <button
+                      type="button"
+                      onClick={() => { setReplyTo({ id: msg.id, message: msg.message, sender_type: msg.sender_type, attachments: msg.attachments }); setActionsFor(null) }}
+                      className="flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-3.5 text-[13px] font-medium text-zinc-700"
+                    >
+                      <Reply className="h-4 w-4" aria-hidden="true" />
+                      {t('portalChat.reply')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { togglePin(msg.id, !msg.pinned_at); setActionsFor(null) }}
+                      className={cn('flex items-center gap-1.5 rounded-full border bg-white px-3.5 text-[13px] font-medium', msg.pinned_at ? 'border-amber-300 text-amber-700' : 'border-zinc-200 text-zinc-700')}
+                    >
+                      <Pin className={cn('h-4 w-4', msg.pinned_at && 'fill-amber-400')} aria-hidden="true" />
+                      {msg.pinned_at ? t('portalChat.unpin') : t('portalChat.pin')}
+                    </button>
+                    {!isOwn && msg.sender_type === 'admin' && (
+                      <button
+                        type="button"
+                        onClick={() => { toggleKeepUnread(msg.id, !msg.client_kept_unread); setActionsFor(null) }}
+                        className={cn('flex items-center gap-1.5 rounded-full border bg-white px-3.5 text-[13px] font-medium', msg.client_kept_unread ? 'border-blue-300 text-blue-700' : 'border-zinc-200 text-zinc-700')}
+                      >
+                        <MailOpen className="h-4 w-4" aria-hidden="true" />
+                        {msg.client_kept_unread ? t('portalChat.markRead') : t('portalChat.markUnread')}
+                      </button>
+                    )}
+                  </div>
+                )}
                 {/* Emoji reactions strip — under the bubble, aligned to the message side.
                     Skipped for system messages (e.g. the office-closed auto-reply): the CRM
                     renders those as centered pills with no reaction strip, so allowing a
-                    reaction here would be invisible to staff. */}
-                {msg.sender_type !== 'system' && (
+                    reaction here would be invisible to staff. Client iPhone app: only the reactions that already exist
+                    (and no strip at all when there are none) until the message is tapped; the add-reaction smiley then shows. */}
+                {msg.sender_type !== 'system' && (!appMode || actionsFor === msg.id || (msg.reactions?.length ?? 0) > 0) && (
                   <div className={cn('px-1 mb-1', isOwn ? 'flex justify-end' : 'flex justify-start')}>
                     <MessageReactions
                       messageId={msg.id}
@@ -1339,6 +1446,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                       staffLabel={t('chat.team')}
                       seenKeys={isOwn ? seenReactionKeys : undefined}
                       onReactionsSeen={onReactionsSeen}
+                      hideAdd={appMode && actionsFor !== msg.id}
                     />
                   </div>
                 )}
@@ -1350,12 +1458,14 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
       </div>
       {/* Jump to latest — floating pill, bottom-center of the messages area.
           Inverted styling vs the "Older messages" pill. Shows when scrolled
-          >200px from the bottom, smooth-scrolls to newest, hides at bottom. */}
+          >200px from the bottom, smooth-scrolls to newest, hides at bottom.
+          The position classes sit on the FastTooltip wrapper (which is `relative inline-flex`): put on the button inside, they were placed
+          against that near-empty wrapper at the left edge and the pill hung half off the screen (found live 2026-11-12). */}
       {showJumpToLatest && (
-        <FastTooltip label={t('portalChat.jumpToLatest')}>
+        <FastTooltip label={t('portalChat.jumpToLatest')} className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10">
           <button
             onClick={jumpToLatest}
-            className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 px-3 py-1.5 text-xs text-white bg-zinc-800 rounded-full shadow-lg hover:bg-zinc-700 transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-white bg-zinc-800 rounded-full shadow-lg hover:bg-zinc-700 transition-colors"
             aria-label={t('portalChat.jumpToLatest')}
           >
             <ChevronDown className="h-3 w-3" />
@@ -1496,59 +1606,6 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
               </button>
               <button type="button" disabled={leaveBusy} onClick={leaveDiscard} data-testid="portal-leave-discard" className="h-11 rounded-full border border-zinc-200 text-sm font-semibold text-zinc-800 active:bg-zinc-100 disabled:opacity-60">{t('portalChat.voice.leaveDiscard')}</button>
               <button type="button" disabled={leaveBusy} onClick={abortLeave} data-testid="portal-leave-keep" className="h-11 rounded-full text-sm font-medium text-zinc-600 active:bg-zinc-100 disabled:opacity-60">{isRecording ? t('portalChat.voice.leaveKeepRecording') : t('portalChat.voice.leaveStay')}</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Company chooser popup — "Which company is this message about?" */}
-      {popupOpen && (
-        <div
-          className="absolute inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
-          onClick={() => { setPopupOpen(false); abortLeave() }}
-        >
-          <div
-            className="w-full max-w-sm bg-white rounded-2xl shadow-xl border overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="px-4 py-3 border-b">
-              <h3 className="text-sm font-semibold text-zinc-900">
-                {t('portalChat.whichCompanyTitle')}
-              </h3>
-              <p className="text-[11px] text-zinc-500 mt-0.5">
-                {t('portalChat.whichCompanyDesc')}
-              </p>
-            </div>
-            <div className="max-h-72 overflow-y-auto py-1">
-              {entities.map((e) => (
-                <button
-                  key={e.id}
-                  type="button"
-                  onClick={() => chooseEntity(e)}
-                  className="w-full flex items-start gap-2.5 px-4 py-2.5 text-left hover:bg-zinc-50 transition-colors"
-                >
-                  <span className="mt-0.5 shrink-0">
-                    {e.kind === 'formation'
-                      ? <Sparkles className="h-4 w-4 text-amber-500" />
-                      : e.kind === 'personal'
-                        ? <UserIcon className="h-4 w-4 text-zinc-500" />
-                        : e.isShared
-                          ? <Users className="h-4 w-4 text-blue-600" />
-                          : <Building2 className="h-4 w-4 text-blue-600" />}
-                  </span>
-                  <span className="flex-1 min-w-0">
-                    <span className="flex items-center gap-1.5">
-                      <span className="text-sm font-medium text-zinc-900 truncate">{entityLabel(e)}</span>
-                      {e.id === selectedEntityId && <Check className="h-3.5 w-3.5 text-blue-600 shrink-0" />}
-                    </span>
-                    {e.isShared && (
-                      <span className="block text-[10px] text-amber-700 mt-0.5">
-                        {t('portalChat.sharedEntityNote')}
-                      </span>
-                    )}
-                  </span>
-                </button>
-              ))}
             </div>
           </div>
         </div>

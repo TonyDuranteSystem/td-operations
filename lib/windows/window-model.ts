@@ -71,12 +71,12 @@ export const EMPTY_STATE: WindowsState = { windows: [], topZ: 0 }
  * opened by someone else just redirects to the home page inside the window.)
  */
 export const WINDOW_PAGE_ROOTS: readonly string[] = [
-  'accounts', 'addresses', 'audit', 'bofa-intake', 'calendar', 'captures', 'cases', 'catalog', 'client-health',
+  'accounts', 'address-book', 'addresses', 'audit', 'bofa-intake', 'booking', 'calendar', 'captures', 'cases', 'catalog', 'client-health',
   'clients', 'code-tasks', 'config', 'contacts', 'conversations', 'dashboard', 'dev-board',
   'dev-tools', 'email-templates', 'exceptions', 'finance', 'flows', 'forms', 'inbox', 'intake',
   'invoice-aging', 'invoice-settings', 'leads', 'marketing-leads', 'new-calendar', 'notes', 'onboarding-review', 'owner', 'partners',
   'payments', 'pipeline', 'pipeline-overview', 'portal-chats', 'portal-launch', 'reconciliation',
-  'referrals', 'research', 'sandbox-mail', 'service-catalog', 'services', 'shared', 'storage', 'storage-app',
+  'referrals', 'releases', 'research', 'sandbox-mail', 'service-catalog', 'services', 'shared', 'storage', 'storage-app',
   'system-health', 'tasks', 'tax-returns', 'td-talk', 'team-chat', 'team-management', 'tools', 'trackers',
   'workflow-issues', 'workflows',
 ]

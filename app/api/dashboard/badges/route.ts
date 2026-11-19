@@ -8,6 +8,8 @@ import { adminMemberContext } from '@/lib/marketing/guard'
 import { marketingChatUnread } from '@/lib/marketing/menu-unread'
 import { getWhatsappUnread } from '@/lib/inbox/whatsapp-unread'
 import { NextResponse } from 'next/server'
+import { countInvoicesDue } from '@/lib/plan-invoices/load'
+import { getOfficeDateString } from '@/lib/portal/office-hours'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -21,6 +23,20 @@ function getDb() {
 }
 
 /**
+ * The red number on the Portal Chats menu row: unread client messages. ONE definition, used by the full check and by the light one
+ * (`?only=portalChats`), so the two can never disagree. A failed read counts as 0 (and is logged), as it always did.
+ */
+async function getPortalChatsUnread(): Promise<number> {
+  // select('id') + limit instead of head:true — the count is the number of rows returned (capped at 500)
+  const { data, error } = await getDb().from('portal_messages').select('id').eq('sender_type', 'client').is('read_at', null).limit(500)
+  if (error) {
+    console.error('[badges] portal_messages error:', JSON.stringify(error))
+    return 0
+  }
+  return data?.length ?? 0
+}
+
+/**
  * GET /api/dashboard/badges
  * Returns unread counts for sidebar badges.
  * Portal Chats = unread client messages in portal_messages.
@@ -31,14 +47,17 @@ function getDb() {
 export async function GET(request: Request) {
   // The LIGHT question — `?only=whatsapp`: just the WhatsApp number (one cheap lookup; no Gmail, no other counts). The menu asks this
   // when a chat message arrives, so a burst of messages never costs a full badge check per message per open tab.
-  if (new URL(request.url).searchParams.get('only') === 'whatsapp') {
+  // `?only=portalChats` is the same kind of question for the Portal Chats number: the menu asks it when a client message is READ or arrives
+  // (a window left open must learn at once that someone read it), never a full check with Gmail per tab per event.
+  const only = new URL(request.url).searchParams.get('only')
+  if (only === 'whatsapp' || only === 'portalChats') {
     try {
       const { data: { user } } = await createServerClient().auth.getUser()
       if (!user || !isDashboardUser(user)) return NextResponse.json({ error: 'Not authorized' }, { status: 403 })
     } catch {
       return NextResponse.json({ error: 'Not authorized' }, { status: 403 })
     }
-    return NextResponse.json({ whatsapp: await getWhatsappUnread() })
+    return NextResponse.json(only === 'whatsapp' ? { whatsapp: await getWhatsappUnread() } : { portalChats: await getPortalChatsUnread() })
   }
 
   try {
@@ -60,13 +79,8 @@ export async function GET(request: Request) {
 
     // Run all queries in parallel
     const [portalResult, teamThreadsResult, gmailSupportResult, gmailAntonioResult, tasksResult, overdueResult, reconReviewResult] = await Promise.allSettled([
-      // Portal chats: count unread client messages using select('id') instead of head:true
-      getDb()
-        .from('portal_messages')
-        .select('id')
-        .eq('sender_type', 'client')
-        .is('read_at', null)
-        .limit(500),
+      // Portal chats: unread client messages (see getPortalChatsUnread)
+      getPortalChatsUnread(),
       // Internal team chat: per-user unread via get_team_threads (the real
       // read model — internal_thread_reads). The old `read_at IS NULL` count was
       // always 0 because every message is inserted with read_at=now().
@@ -98,14 +112,7 @@ export async function GET(request: Request) {
     ])
 
     // Portal chats count (client messages only — internal team chat has its own badge)
-    let portalClientCount = 0
-    if (portalResult.status === 'fulfilled') {
-      if (portalResult.value.error) {
-        console.error('[badges] portal_messages error:', JSON.stringify(portalResult.value.error))
-      } else {
-        portalClientCount = portalResult.value.data?.length ?? 0
-      }
-    }
+    const portalClientCount = portalResult.status === 'fulfilled' ? portalResult.value : 0
 
     const portalChats = portalClientCount
 
@@ -182,7 +189,10 @@ export async function GET(request: Request) {
       } catch (e) { console.error('[badges] marketing unread failed:', e instanceof Error ? e.message : e) }
     }
 
-    return NextResponse.json({ portalChats, teamChat, talk, inbox, whatsapp, tasks, overdueInvoices, reconciliationReview, devBoard, marketing, _debug: { supportUnread, antonioUnread } })
+    // Invoices the Calendar says are due to raise (later parts of a payment plan). Never allowed to break the other badges: null = could not be read, left out.
+    const invoicesToRaise = await countInvoicesDue(getOfficeDateString())
+
+    return NextResponse.json({ portalChats, teamChat, talk, inbox, whatsapp, tasks, overdueInvoices, reconciliationReview, devBoard, marketing, ...(invoicesToRaise !== null ? { invoicesToRaise } : {}), _debug: { supportUnread, antonioUnread } })
   } catch (err) {
     console.error('[dashboard/badges] Error:', err)
     return NextResponse.json({ portalChats: 0, inbox: 0, tasks: 0, overdueInvoices: 0, reconciliationReview: 0 })

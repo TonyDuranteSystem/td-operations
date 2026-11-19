@@ -2,11 +2,12 @@
 
 import { useState, useCallback } from 'react'
 import type { WizardType } from '@/lib/portal/wizard-map'
-import { CheckCircle2, Download, Clock, AlertTriangle } from 'lucide-react'
+import { CheckCircle2, Download, Clock, AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { BankReferralsPanel, type BankReferralEntry } from './bank-referrals-panel'
+import { journeyHeaderSummary, type JourneyFlag, type JourneyTone } from '@/lib/accounts/journey-summary'
 import { HelpDot } from '@/components/help/help-dot'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { listOrEmpty } from '@/lib/offers/json-list'
 
 // --- Types ---
 
@@ -17,6 +18,9 @@ interface JourneyStep {
   status: JourneyStepStatus
   detail?: string
   tooltip?: string[]  // lines shown on hover
+  /** Set only where the step holds real dates; the closed header reads it (lib/accounts/journey-summary.ts). */
+  flag?: JourneyFlag
+  days?: number
 }
 
 export interface AccountJourneyProps {
@@ -66,8 +70,8 @@ export interface AccountJourneyProps {
   hasSetupPayment?: boolean
   /** Whether any payment on this account has been confirmed paid (derived from payments table) */
   hasPaidPayment?: boolean
-  /** Partner-bank referrals (enabled banks + this account's click status) */
-  bankReferrals?: BankReferralEntry[]
+  /** Only for tests: the page always starts the card closed. */
+  startOpen?: boolean
 }
 
 // --- Constants ---
@@ -100,7 +104,7 @@ function formatDateTime(dateStr: string): string {
 
 // --- Derivation logic ---
 
-function deriveAccountJourneySteps(props: AccountJourneyProps): JourneyStep[] {
+export function deriveAccountJourneySteps(props: AccountJourneyProps): JourneyStep[] {
   const { offer, pendingActivation, wizardProgress, serviceDeliveries, accountType, portalTier, accountStatus, accountCreatedAt, hasSetupPayment, hasPaidPayment } = props
   const steps: JourneyStep[] = []
 
@@ -130,7 +134,8 @@ function deriveAccountJourneySteps(props: AccountJourneyProps): JourneyStep[] {
     tooltip.push(`Sent ${daysOut}d ago (${formatShortDate(offer.created_at)})`)
     if (offer.contract_type) tooltip.push(`Type: ${offer.contract_type}`)
     if (offer.cost_summary) {
-      const totals = offer.cost_summary.filter(g => g.total).map(g => `${g.label}: ${g.total}`)
+      // read through the shared reader: an old offer has this saved as text, and `.filter` on text would crash the page
+      const totals = listOrEmpty<{ label: string; total?: string }>(offer.cost_summary).filter(g => g.total).map(g => `${g.label}: ${g.total}`)
       if (totals.length > 0) tooltip.push(...totals)
     }
     steps.push({
@@ -196,9 +201,9 @@ function deriveAccountJourneySteps(props: AccountJourneyProps): JourneyStep[] {
     const tooltip = [`Signed ${daysSinceSigning}d ago`, 'Waiting for payment confirmation']
     if (daysSinceSigning > 7) {
       tooltip.push('⚠ Payment overdue — follow up with client')
-      steps.push({ label: 'Paid', status: 'issue', detail: `${daysSinceSigning}d since signing`, tooltip })
+      steps.push({ label: 'Paid', status: 'issue', detail: `${daysSinceSigning}d since signing`, tooltip, flag: 'awaiting_payment', days: daysSinceSigning })
     } else {
-      steps.push({ label: 'Paid', status: 'current', detail: 'Awaiting payment', tooltip })
+      steps.push({ label: 'Paid', status: 'current', detail: 'Awaiting payment', tooltip, flag: 'awaiting_payment', days: daysSinceSigning })
     }
   } else if (isSigned) {
     steps.push({ label: 'Paid', status: 'current', detail: 'Awaiting payment', tooltip: ['Waiting for payment confirmation'] })
@@ -243,6 +248,8 @@ function deriveAccountJourneySteps(props: AccountJourneyProps): JourneyStep[] {
         status: 'issue',
         detail: `Not started (${daysSincePaid}d)`,
         tooltip: [`Paid ${daysSincePaid}d ago but wizard not started`, '⚠ Send a reminder to the client'],
+        flag: 'onboarding_not_started',
+        days: daysSincePaid,
       })
     } else {
       steps.push({
@@ -250,6 +257,8 @@ function deriveAccountJourneySteps(props: AccountJourneyProps): JourneyStep[] {
         status: 'current',
         detail: 'Not started',
         tooltip: ['Payment confirmed — waiting for client to start the onboarding wizard'],
+        // Only a real payment date counts as "waiting": without one this is an old client with no form records.
+        ...(pendingActivation?.payment_confirmed_at ? { flag: 'onboarding_not_started' as const, days: daysSincePaid } : {}),
       })
     }
   } else {
@@ -331,9 +340,28 @@ function StepTooltip({ lines, visible }: { lines: string[]; visible: boolean }) 
 
 // --- Component ---
 
+/** The closed-header chip, per tone: same colours as the form badges inside the card. */
+const SUMMARY_TONE: Record<JourneyTone, string> = {
+  good: 'bg-emerald-100 text-emerald-700',
+  info: 'bg-blue-100 text-blue-700',
+  warn: 'bg-amber-100 text-amber-700',
+  neutral: 'bg-zinc-100 text-zinc-600',
+}
+
 export function AccountJourney(props: AccountJourneyProps) {
   const steps = deriveAccountJourneySteps(props)
   const [hoveredStep, setHoveredStep] = useState<string | null>(null)
+  // Starts closed (Antonio, 2026-11-14): a finished client has nothing here staff need to read, and a stuck one says so in the header.
+  const [open, setOpen] = useState(props.startOpen ?? false)
+
+  const wizardEntries = buildWizardEntries(props.allWizards, props.serviceDeliveries)
+  const summary = journeyHeaderSummary({
+    steps,
+    forms: wizardEntries.map(e => ({ label: e.label, status: e.status })),
+    portalTier: props.portalTier,
+    accountType: props.accountType,
+    accountStatus: props.accountStatus,
+  })
 
   // Show journey for any active account or any account with an offer
   const hasServices = props.serviceDeliveries.length > 0
@@ -341,14 +369,31 @@ export function AccountJourney(props: AccountJourneyProps) {
   if (!props.offer && !hasServices && !isActive) return null
 
   return (
-    <div className="bg-white rounded-lg border p-5">
-      <div className="flex items-center gap-1.5 mb-3">
-        <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">
-          Account Journey
-        </h3>
+    <div className="bg-white rounded-lg border p-5" data-testid="account-journey-card">
+      <div className="flex items-center gap-1.5">
+        <button
+          type="button"
+          onClick={() => setOpen(v => !v)}
+          aria-expanded={open}
+          data-testid="account-journey-toggle"
+          className="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1.5 text-left"
+        >
+          <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+            {open ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
+            Account Journey
+          </h3>
+          {!open && (
+            <span className="flex flex-wrap items-center gap-2 text-xs text-zinc-500" data-testid="account-journey-summary">
+              <span className={cn('rounded-full px-2 py-0.5 text-[11px] font-semibold', SUMMARY_TONE[summary.tone])}>{summary.label}</span>
+              {summary.detail && <span>{summary.detail}</span>}
+            </span>
+          )}
+        </button>
         <HelpDot helpKey="account.journey" />
       </div>
 
+      {open && (
+      <div className="mt-3" data-testid="account-journey-body">
       {/* Desktop horizontal */}
       <div className="hidden sm:flex items-start gap-0">
         {steps.map((step, i) => {
@@ -452,11 +497,8 @@ export function AccountJourney(props: AccountJourneyProps) {
       </div>
 
       {/* Wizard Submissions */}
-      <WizardCards wizards={props.allWizards ?? []} serviceDeliveries={props.serviceDeliveries} />
-
-      {/* Partner Bank Referrals — one card per enabled bank */}
-      {props.bankReferrals && props.bankReferrals.length > 0 && (
-        <BankReferralsPanel entries={props.bankReferrals} />
+      <WizardCards entries={wizardEntries} />
+      </div>
       )}
     </div>
   )
@@ -499,7 +541,7 @@ const WIZARD_EXPECTED: Record<string, string[]> = {
   'Company Closure': ['closure'],
 }
 
-interface WizardCardEntry {
+export interface WizardCardEntry {
   wizard_type: string
   label: string
   status: 'submitted' | 'in_progress' | 'pending'
@@ -507,10 +549,11 @@ interface WizardCardEntry {
   data: Record<string, unknown> | null
 }
 
-function WizardCards({ wizards, serviceDeliveries }: {
-  wizards: AccountJourneyProps['allWizards']
-  serviceDeliveries: AccountJourneyProps['serviceDeliveries']
-}) {
+/** The forms list: real submissions, plus the forms an active service still expects. Shared by the open card and the closed header. */
+export function buildWizardEntries(
+  wizards: AccountJourneyProps['allWizards'],
+  serviceDeliveries: AccountJourneyProps['serviceDeliveries'],
+): WizardCardEntry[] {
   // Build list: completed wizards + pending wizards (from services that expect a wizard)
   const entries: WizardCardEntry[] = []
   const coveredTypes = new Set<string>()
@@ -546,18 +589,21 @@ function WizardCards({ wizards, serviceDeliveries }: {
     }
   }
 
-  if (entries.length === 0) return null
-
   // Sort: submitted first, then in_progress, then pending
   const order = { submitted: 0, in_progress: 1, pending: 2 }
   entries.sort((a, b) => order[a.status] - order[b.status])
+  return entries
+}
+
+function WizardCards({ entries }: { entries: WizardCardEntry[] }) {
+  if (entries.length === 0) return null
 
   return (
     <div className="mt-4 border-t pt-4">
       <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
         Client Wizard Submissions
       </h4>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-1.5">
         {entries.map((entry) => (
           <WizardCard key={entry.wizard_type} entry={entry} />
         ))}
@@ -599,22 +645,19 @@ function WizardCard({ entry }: { entry: WizardCardEntry }) {
   const config = statusConfig[entry.status]
   const Icon = config.icon
 
+  // One slim row (Antonio, 2026-11-14): name, status and date on one line instead of a tall box.
   return (
-    <div className={cn('flex items-center gap-3 rounded-lg border px-3 py-2.5', config.bg)}>
-      <Icon className={cn('h-4 w-4 shrink-0', config.text)} />
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium truncate">{entry.label}</span>
-          <span className={cn('text-[10px] px-1.5 py-0.5 rounded-full font-medium', config.badge)}>
-            {config.label}
-          </span>
-        </div>
-        {entry.updated_at && (
-          <span className="text-[10px] text-muted-foreground">
-            {formatShortDate(entry.updated_at)}
-          </span>
-        )}
-      </div>
+    <div className={cn('flex min-h-9 flex-wrap items-center gap-x-2 gap-y-1 rounded-md border px-2.5 py-1.5', config.bg)} data-testid="wizard-row">
+      <Icon className={cn('h-3.5 w-3.5 shrink-0', config.text)} />
+      <span className="min-w-0 flex-1 truncate text-sm font-medium">{entry.label}</span>
+      <span className={cn('text-[10px] px-1.5 py-0.5 rounded-full font-medium', config.badge)}>
+        {config.label}
+      </span>
+      {entry.updated_at && (
+        <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+          {formatShortDate(entry.updated_at)}
+        </span>
+      )}
       {entry.status === 'submitted' && entry.data && Object.keys(entry.data).length > 0 && (
         <FastTooltip label="Download submitted data">
           <button

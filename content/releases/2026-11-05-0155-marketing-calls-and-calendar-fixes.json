@@ -1,0 +1,10 @@
+{
+  "title": "Marketing: fixes for booked calls, call results and the Calendar",
+  "tag": "fixed",
+  "text": "The Marketing Calendar no longer shows events that the calendar's owner declined in Google. In lead actions, a result that ends the sale (Not in target, Archive, Not ready now, Not closed) while a call is still booked ahead now warns you with Cancel the call or Keep the call, and never cancels for you. Two leads can no longer hold the same call time on one calendar, and a repeated cancel or an out-of-date page is refused as changed by someone else.",
+  "points": [
+    "Cancelling a call after Not ready now and booking again puts the lead back to Not ready now with its saved come-back day.",
+    "Not in target is refused while a payment link is out or the lead is already paid.",
+    "Booking a call for a lead that is out of target is refused; booking an archived lead reopens it."
+  ]
+}

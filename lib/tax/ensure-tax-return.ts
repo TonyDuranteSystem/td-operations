@@ -51,6 +51,8 @@ export interface EnsureTaxReturnParams {
   entityType?: string | null
   formationDate?: string | null
   paid?: boolean
+  /** Why the record exists, written on it. Defaults to the installment chain's text; another creator (an offer paid for a stated year) says its own. */
+  note?: string
 }
 
 export interface EnsureTaxReturnResult {
@@ -113,7 +115,7 @@ export async function ensureTaxReturnRecord(p: EnsureTaxReturnParams): Promise<E
       deadline,
       data_received: false,
       paid: p.paid ?? true,
-      notes: `Record auto-created by the installment chain on ${today} (renewal-chain fix, dev job e6136a5e).`,
+      notes: p.note ?? `Record auto-created by the installment chain on ${today} (renewal-chain fix, dev job e6136a5e).`,
     } as never)
     .select("id")
     .single()

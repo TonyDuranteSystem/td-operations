@@ -1,4 +1,6 @@
+import { Fragment, type ReactNode } from 'react'
 import type { StageLayout, StageComponent } from '@/lib/flows/stage-layout'
+import { startNewCompanyPanelSlot } from '@/lib/flows/start-new-company-panel'
 import type { WorkspaceServiceDelivery, WorkspaceAccount, WorkspaceInvoice } from './types'
 import { InfoPanel } from './info-panel'
 import { DocumentUpload } from './document-upload'
@@ -43,6 +45,11 @@ interface StageRendererProps {
   needsDocument?: boolean
   /** The year the job is for (Tax Return: the tax year, as the page title shows it) — the {year} of an e-sign panel's document name. */
   flowYear?: number | null
+  /**
+   * A panel the PAGE decides to show on top of the step's own layout (today: "The state refused the company name?" on a Company Formation
+   * step from Articles Received onward). Placed by lib/flows/start-new-company-panel.ts: after the SS-4 correction panel, else above the chat.
+   */
+  extraPanel?: ReactNode
 }
 
 /** The standard upload box added to a "needs a document" step whose layout has none (N1a C2). */
@@ -218,7 +225,7 @@ function renderComponent(
  * layout (e.g. CMRA, not yet migrated), degrades to a default Overview panel so
  * the Workspace is never blank.
  */
-export function StageRenderer({ layout, serviceDelivery, account, secondInstallment, needsDocument, flowYear }: StageRendererProps) {
+export function StageRenderer({ layout, serviceDelivery, account, secondInstallment, needsDocument, flowYear, extraPanel }: StageRendererProps) {
   const components = layout?.components ?? []
   const addUpload = !!needsDocument && !components.some(c => c.type === 'document_upload')
 
@@ -228,6 +235,7 @@ export function StageRenderer({ layout, serviceDelivery, account, secondInstallm
         {layout?.description && <p className="text-sm text-zinc-500">{layout.description}</p>}
         <InfoPanel serviceDelivery={serviceDelivery} account={account} secondInstallment={secondInstallment} />
         {addUpload && <RequiredDocumentUpload serviceDelivery={serviceDelivery} account={account} />}
+        {extraPanel}
         <StubPanel type="(no stage_layout)" note="This stage has no layout configured yet." />
       </div>
     )
@@ -239,10 +247,18 @@ export function StageRenderer({ layout, serviceDelivery, account, secondInstallm
     (c) => c.type === 'action_buttons' && (c.actions ?? []).some((a) => (typeof a === 'string' ? a : a.key) === 'request_changes'),
   )
 
+  const extraAt = startNewCompanyPanelSlot(components.map((c) => c.type))
+
   return (
     <div className="space-y-4">
       {layout?.description && <p className="text-sm text-zinc-500">{layout.description}</p>}
-      {components.map((c, i) => renderComponent(c, i, serviceDelivery, account, secondInstallment, flowYear, requestsEnabled))}
+      {components.map((c, i) => (
+        <Fragment key={i}>
+          {extraPanel && i === extraAt && extraPanel}
+          {renderComponent(c, i, serviceDelivery, account, secondInstallment, flowYear, requestsEnabled)}
+        </Fragment>
+      ))}
+      {extraPanel && extraAt >= components.length && extraPanel}
       {addUpload && <RequiredDocumentUpload serviceDelivery={serviceDelivery} account={account} />}
     </div>
   )

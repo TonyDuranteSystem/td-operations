@@ -25,6 +25,11 @@ type DashboardPushToggleProps = {
    * ONE instance per dashboard render (we mount it on the desktop header).
    */
   refreshOnMount?: boolean
+  /**
+   * One full-width button per line (Notifications, then Test below it) instead of the two sitting side by side.
+   * Used by the header's "..." menu, which lists every entry vertically.
+   */
+  stacked?: boolean
 }
 
 /**
@@ -32,7 +37,7 @@ type DashboardPushToggleProps = {
  * Allows ALL authenticated dashboard users to subscribe to push notifications.
  * Uses the dashboard service worker and /api/admin/push endpoints.
  */
-export function DashboardPushToggle({ compact = false, refreshOnMount = false }: DashboardPushToggleProps = {}) {
+export function DashboardPushToggle({ compact = false, refreshOnMount = false, stacked = false }: DashboardPushToggleProps = {}) {
   const [supported, setSupported] = useState(false)
   const [permission, setPermission] = useState<NotificationPermission>('default')
   const [subscribed, setSubscribed] = useState(false)
@@ -172,8 +177,9 @@ export function DashboardPushToggle({ compact = false, refreshOnMount = false }:
   }
 
   return (
-    <div className="flex items-center gap-2">
+    <div className={stacked ? 'flex flex-col items-stretch gap-2' : 'flex items-center gap-2'}>
       <FastTooltip
+        className={stacked ? 'w-full' : undefined}
         label={
           permission === 'denied'
             ? 'Notifications blocked in browser settings'
@@ -185,7 +191,7 @@ export function DashboardPushToggle({ compact = false, refreshOnMount = false }:
         <button
           onClick={subscribed ? handleDisable : handleEnable}
           disabled={loading || permission === 'denied'}
-          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md transition-colors ${
+          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md transition-colors ${stacked ? 'w-full' : ''} ${
             subscribed
               ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
               : permission === 'denied'
@@ -209,10 +215,10 @@ export function DashboardPushToggle({ compact = false, refreshOnMount = false }:
         </button>
       </FastTooltip>
       {subscribed && (
-        <FastTooltip label="Send a test notification">
+        <FastTooltip label="Send a test notification" className={stacked ? 'w-full' : undefined}>
           <button
             onClick={handleTest}
-            className="flex items-center gap-1 px-2 py-1.5 text-xs rounded-md border border-zinc-200 text-zinc-500 hover:bg-zinc-50 transition-colors"
+            className={`flex items-center py-1.5 text-xs rounded-md border border-zinc-200 text-zinc-500 hover:bg-zinc-50 transition-colors ${stacked ? 'w-full gap-1.5 px-3' : 'gap-1 px-2'}`}
             aria-label="Send a test notification"
           >
             <Send className="h-3 w-3" />

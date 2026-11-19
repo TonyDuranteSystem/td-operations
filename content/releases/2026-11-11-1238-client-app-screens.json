@@ -1,0 +1,11 @@
+{
+  "title": "The client portal looks and works differently inside the new iPhone app",
+  "tag": "new",
+  "text": "Only inside the new MyLLC Manager app (the website is unchanged), the portal has its own frame: a round Menu button at the top right, no website sidebar, and a company chooser on the Overview. Chat has one Topic button and opens on the newest unread answer, with no Journey Log. Invoices opens on a list of areas with tappable set-up steps, TD Billing is its own screen, and the Pay Invoice pop-up works inside the app.",
+  "points": [
+    "The Menu button stays at the top while the page scrolls, and its red number counts waiting items that are not in the bottom bar.",
+    "Pay Now leaves in the app's own window, and the card page returns the client to TD Billing.",
+    "A switch can hide Pay inside the app if Apple objects. The website is never affected.",
+    "Paying inside the app had not been tried with a real card on a real phone yet."
+  ]
+}

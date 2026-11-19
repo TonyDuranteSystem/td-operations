@@ -1,0 +1,11 @@
+{
+  "title": "Storage warns you when a case step is waiting for the document you are saving",
+  "tag": "new",
+  "text": "If you save a document in Storage, or with Upload Document on a contact page, while an open case has a workspace step waiting for exactly that document, a pop-up now stops you first. Open the workspace takes you to the case with a step-by-step guide and saves nothing; Save in Storage only keeps the file hidden and leaves a record on the case and on the person or company.",
+  "points": [
+    "The guide is a small card plus a glowing green frame on the next click. It never clicks for you; Stop guide and Don't guide me again are on the card.",
+    "Covers the ITIN documents (signed package, mailing receipt, IRS approval letter) and the Company Formation documents (state Articles, SS-4 fax confirmation, EIN letter CP 575).",
+    "A matching rule for Company Change Name (the state's stamped document) was prepared as well.",
+    "A case that is not at a stage where the document is expected only gets a warning, no guide."
+  ]
+}

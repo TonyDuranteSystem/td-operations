@@ -1,0 +1,7 @@
+{
+  "title": "Passport on File now follows the real files",
+  "tag": "fixed",
+  "text": "On a contact's page (Identity & Tax) and in the Contacts list, \"Passport on File\" now says Yes whenever the person's passport is really there: in their Storage folder, or among their older documents. Before, it only looked at a saved Yes/No that most Storage uploads never set, so people with a passport on file showed No.",
+  "points": ["Open a contact whose passport is in their Storage folder: it now says Yes.", "Nothing is changed on the contact; it only shows the real answer."],
+  "screenshot": "passport-on-file.png"
+}

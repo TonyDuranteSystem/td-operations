@@ -2,7 +2,7 @@ import { NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import type { InboxConversation } from "@/lib/types"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
-import { resolveChatName } from "@/lib/messaging/chat-name"
+import { isJunkChatName, pickSenderName, resolveChatName } from "@/lib/messaging/chat-name"
 
 export const dynamic = "force-dynamic"
 
@@ -88,6 +88,26 @@ export async function GET() {
       }
     }
 
+    // Chats nobody has named (no CRM link, no usable name saved on the phone) fall back to the name the sender writes under.
+    // Read only for those chats; a failure just leaves the bare number, as before.
+    const nameless = groups.filter((g) => !g.contact_id && !g.lead_id && !g.account_id && isJunkChatName(g.group_name, g.external_group_id)).map((g) => g.id)
+    const senderNamesByGroup = new Map<string, string[]>()
+    if (nameless.length > 0) {
+      const { data: senderRows } = await supabaseAdmin
+        .from("messages")
+        .select("group_id, sender_name")
+        .in("group_id", nameless)
+        .eq("direction", "inbound")
+        .not("sender_name", "is", null)
+        .order("created_at", { ascending: false })
+        .limit(600)
+      for (const r of senderRows ?? []) {
+        const list = senderNamesByGroup.get(r.group_id) ?? []
+        list.push(r.sender_name as string)
+        senderNamesByGroup.set(r.group_id, list)
+      }
+    }
+
     const conversations: InboxConversation[] = groups.map((group) => {
       const preview = previewMap.get(group.id)
       return {
@@ -98,6 +118,7 @@ export async function GET() {
           leadName: group.lead_id ? leadNames.get(group.lead_id) : null,
           accountName: group.account_id ? accountNames.get(group.account_id) : null,
           savedName: group.group_name,
+          senderName: pickSenderName(senderNamesByGroup.get(group.id) ?? [], group.external_group_id),
           externalGroupId: group.external_group_id,
         }),
         preview: preview?.content_text ?? "",

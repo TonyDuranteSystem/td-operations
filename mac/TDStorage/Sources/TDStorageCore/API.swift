@@ -147,6 +147,10 @@ public final class StorageAPI: @unchecked Sendable {
     public func item(kind: String, id: String) async throws -> ItemInfo {
         try await get("api/storage-app/item", query: [URLQueryItem(name: "kind", value: kind), URLQueryItem(name: "id", value: id)])
     }
+    /// The "company › 2. Contacts" places that show each of these person storages (so a change can be told to Finder under the company too). An older CRM without this answers notFound.
+    public func routes(owners: [String]) async throws -> [RouteEntry] {
+        (try await get("api/storage-app/routes", query: [URLQueryItem(name: "owner", value: owners.joined(separator: ","))]) as RoutesResponse).routes
+    }
     /// Take the head BEFORE walking the whole tree; changes made during the walk then arrive from it.
     public func head() async throws -> String? { (try await get("api/storage-app/changes", query: [URLQueryItem(name: "head", value: "1")]) as HeadResponse).cursor }
     /// `wait` > 0: the CRM keeps the question open up to that many seconds and answers the moment something changes (the always-running app uses it).

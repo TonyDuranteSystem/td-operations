@@ -43,7 +43,7 @@ export function isGroupId(id: string): boolean {
 export const STANDARD_GROUPS: ReadonlyArray<{ id: string; name: string; children: readonly string[] }> = [
   { id: 'g-social', name: 'TD Social', children: ['td-talk', 'inbox', 'marketing-chat', 'whatsapp', 'team-chat', 'portal-chats'] },
   { id: 'g-accounting', name: 'Accounting', children: ['finance', 'owner'] },
-  { id: 'g-network', name: 'Network', children: ['leads', 'contacts', 'accounts'] },
+  { id: 'g-network', name: 'Network', children: ['booking', 'contacts', 'address-book', 'accounts'] },
 ]
 
 const page = (id: string): PageRow => ({ type: 'page', id })

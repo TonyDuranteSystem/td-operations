@@ -1,0 +1,12 @@
+{
+  "title": "The small chat icon opens the client's chat in a window",
+  "tag": "improved",
+  "text": "Clicking the small chat icon beside a person in the Contacts list, beside a company in the Accounts list, or the Message button on a Contact page now opens that person's or company's Portal Chats in a floating window, with all the chat tools. The page behind stays where it is. This replaces the earlier change that put the window on the Contact page's Chat tab and on the Activity box links: both work as they did before.",
+  "points": [
+    "Clicking the icon again brings the same window to the front instead of opening a second one.",
+    "Hold Ctrl or Cmd while clicking to get the small quick-message pop-up instead. On a small screen, or where windows are off, the icon shows the pop-up too.",
+    "For a person, the window opens on their own chat. Their companies' chats are one click away in its list.",
+    "A company whose chat the client cannot see keeps its greyed-out icon."
+  ],
+  "screenshot": "chat-icon-window.png"
+}

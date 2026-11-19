@@ -1,0 +1,10 @@
+{
+  "title": "Portal Chats: Save to Storage opens the client's Storage screen, or Business",
+  "tag": "improved",
+  "text": "The Save to Storage button under a client's chat file used to open a card made only for ITIN letters. It now opens the client's own Storage screen in a pop-up with the chat file already loaded, so any file type works and you choose the folder, type, name, Show to client and Tell the client as in a normal upload. A Save in switch lets you file it in the firm's Business folders instead.",
+  "points": [
+    "The ITIN letter card is still there, one click away.",
+    "In Business, open a folder first. The upload button stays disabled until you do.",
+    "A tax number in the file's name is replaced by x's in the saved name. The chat keeps the original name."
+  ]
+}

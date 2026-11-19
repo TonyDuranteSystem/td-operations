@@ -1,0 +1,11 @@
+{
+  "title": "TD Marketing: times in each person's own time zone, plus clocks on every lead",
+  "tag": "new",
+  "text": "Every time on a Marketing screen is now shown in the time zone of the person looking, and each lead has its own zone, worked out from its phone number or set by hand when a country has several clocks. A thin banner with Rocco's and Antonio's time stays on top of every screen for people who take calls, and a lead shows a slim strip of clocks.",
+  "points": [
+    "The setter never sees Antonio's time or calendar, only Rocco's.",
+    "A saved zone updates by itself when someone connects from a different zone; View as never changes anyone's zone, and the sidebar says which role you are viewing as.",
+    "Google Calendar parts are built but switched off for now: Antonio's events on the Calendar, Rocco's busy time for the setter, and calls written into Rocco's calendar.",
+    "The Team page has a new section for zones, call hours, booking links and calendars."
+  ]
+}

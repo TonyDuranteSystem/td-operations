@@ -23,6 +23,8 @@ interface DocumentListProps {
   categoryLabels: Record<number, string>
   /** Ids of documents that are "new" (unopened) for the current contact. */
   newDocIds?: string[]
+  /** Ids of the client's own uploads that staff have not shown yet: listed by name, tagged, and not openable. */
+  waitingIds?: string[]
 }
 
 const CATEGORY_COLORS: Record<number, string> = {
@@ -33,7 +35,7 @@ const CATEGORY_COLORS: Record<number, string> = {
   5: 'bg-zinc-100 text-zinc-700',
 }
 
-export function DocumentList({ documents, categoryLabels, newDocIds = [] }: DocumentListProps) {
+export function DocumentList({ documents, categoryLabels, newDocIds = [], waitingIds = [] }: DocumentListProps) {
   const { t } = useLocale()
   const [search, setSearch] = useState('')
   const [selectedCategory, setSelectedCategory] = useState<number | null>(null)
@@ -47,6 +49,8 @@ export function DocumentList({ documents, categoryLabels, newDocIds = [] }: Docu
   const newSet = new Set(newDocIds)
   const isNew = (id: string) => newSet.has(id) && !seenIds.has(id)
   const newLabel = t('documents.new')
+  const waitingSet = new Set(waitingIds)
+  const isWaiting = (id: string) => waitingSet.has(id)
   const markViewed = (docId: string) => {
     if (!newSet.has(docId) || seenIds.has(docId)) return
     setSeenIds(prev => new Set(prev).add(docId))
@@ -237,13 +241,16 @@ export function DocumentList({ documents, categoryLabels, newDocIds = [] }: Docu
                       {categoryLabels[doc.category] ?? 'Other'}
                     </span>
                   )}
+                  {isWaiting(doc.id) && (
+                    <span data-testid="doc-waiting-review" className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">{t('taxDocs.waitingReview')}</span>
+                  )}
                   <span className="text-xs text-zinc-400">
                     {format(parseISO(doc.created_at), 'MMM d, yyyy')}
                   </span>
                 </div>
               </div>
               <div className="flex items-center gap-1 shrink-0">
-                {doc.drive_file_id && isPreviewable(doc.file_name) && (
+                {doc.drive_file_id && !isWaiting(doc.id) && isPreviewable(doc.file_name) && (
                   <FastTooltip label="Preview">
                     <button
                       onClick={() => handlePreview(doc.id, doc.file_name)}
@@ -255,7 +262,7 @@ export function DocumentList({ documents, categoryLabels, newDocIds = [] }: Docu
                     </button>
                   </FastTooltip>
                 )}
-                {doc.drive_file_id && (
+                {doc.drive_file_id && !isWaiting(doc.id) && (
                   <FastTooltip label="Download">
                     <button
                       onClick={() => handleDownload(doc.id, doc.file_name)}

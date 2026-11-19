@@ -1,4 +1,7 @@
 import type { MessageReaction } from './portal/reactions'
+import type { InstallmentChip } from './billing/installment-invoices'
+import type { PersonCardSource } from './crm-lists/hover-cards'
+import type { ContractMismatch } from './signed-contracts/types'
 
 export interface TaskAttachment {
   /** Publicly accessible URL (typically a Google Drive file URL). */
@@ -100,6 +103,9 @@ export interface Account {
   // the migration ships. Access yields `undefined` when the column is missing;
   // the `?` keeps callers safe via `??` fallback.
   client_since?: string | null
+  became_client_how?: string | null
+  became_client_how_checked_at?: string | null
+  became_client_how_checked_by?: string | null
   ra_switch_date?: string | null
   /** The legal name before the most recent name change (Change Name). Absent in production until migration 20261019-1400 runs. */
   previous_name?: string | null
@@ -277,14 +283,34 @@ export interface AccountListItem {
   id: string
   company_name: string
   entity_type: string | null
+  /** Client / One-Time / Partner */
+  account_type: string | null
   status: string | null
   state_of_formation: string | null
-  formation_date: string | null
-  client_health: string | null
   contact_name: string | null
   contact_email: string | null
-  service_count: number
+  /** Live invoices that are Overdue and past due. */
   payment_overdue: number
+  installment_1_amount: number | null
+  installment_1_currency: string | null
+  installment_2_amount: number | null
+  installment_2_currency: string | null
+  /** The company's updated_at, sent back with every list edit so a stale screen is refused, not overwritten. */
+  updated_at: string
+  /** The chosen year's invoice chip for each installment. */
+  chip_1: InstallmentChip
+  chip_2: InstallmentChip
+  /** When they became a client, already worded ("13 Mar 2026") — for the hover card. */
+  client_since: string | null
+  /** The main contact's details for the hover card (null when the company has none). */
+  contact_card: PersonCardSource | null
+  /** Signed contracts whose amounts differ from this company's own installment amounts (the amber flag); empty = nothing to check. */
+  contract_mismatches: ContractMismatch[]
+  /**
+   * Display text for the extra fields this person chose (formation date, EIN, address…), by field id. Only the chosen fields are filled
+   * in: a field nobody asked for (the EIN above all) is never sent to the screen.
+   */
+  extras: Record<string, string | null>
 }
 
 // ─── Lead & Contact List Types ───────────────────────────
@@ -327,6 +353,30 @@ export interface LeadListItem {
   follow_up_date?: string | null
 }
 
+/** One company line under a person on the Contacts list. */
+export interface ContactCompanyLine {
+  account_id: string
+  company_name: string
+  entity_type: string | null
+  account_type: string | null
+  status: string | null
+  installment_1_amount: number | null
+  installment_1_currency: string | null
+  installment_2_amount: number | null
+  installment_2_currency: string | null
+  setup_fee_amount: number | null
+  setup_fee_currency: string | null
+  updated_at: string
+  chip_1: InstallmentChip
+  chip_2: InstallmentChip
+  /** For the company's hover card. */
+  state_of_formation: string | null
+  client_since: string | null
+  contact_name: string | null
+  contact_email: string | null
+  payment_overdue: number
+}
+
 export interface ContactListItem {
   id: string
   full_name: string
@@ -336,11 +386,17 @@ export interface ContactListItem {
   citizenship: string | null
   portal_tier: string | null
   status: string | null
-  itin_number: string | null
+  /** Only whether an ITIN is on file; the number itself never goes to the list. */
+  itin_on_file: boolean
   passport_on_file: boolean | null
+  portal_role: string | null
   account_count: number
   account_names: string | null
   created_at: string
+  /** One line per linked company (empty when the person has none). */
+  companies: ContactCompanyLine[]
+  /** The amber findings about this person's signed contracts (a contract that does not match its company); empty = nothing to flag. */
+  contract_mismatches: ContractMismatch[]
 }
 
 // ─── Contact Detail Types ────────────────────────────────

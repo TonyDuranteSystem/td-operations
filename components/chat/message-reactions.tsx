@@ -34,6 +34,7 @@ export function MessageReactions({
   onReacted,
   seenKeys,
   onReactionsSeen,
+  hideAdd = false,
 }: {
   messageId: string
   reactions: MessageReaction[] | null | undefined
@@ -48,6 +49,8 @@ export function MessageReactions({
   seenKeys?: ReadonlySet<string>
   /** Called once a pulsing reaction has been visible long enough to count as seen (with its keys). */
   onReactionsSeen?: (keys: string[]) => void
+  /** Client iPhone app only: do not draw the add-reaction smiley (it is shown once the message is tapped). The reactions that exist still show. */
+  hideAdd?: boolean
 }) {
   const [showPicker, setShowPicker] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -117,7 +120,7 @@ export function MessageReactions({
 
       {/* Add a reaction — opens the full picker (which surfaces recently-used
           emojis at the top for fast re-use). */}
-      <div className="relative" ref={pickerRef}>
+      {!hideAdd && <div className="relative" ref={pickerRef}>
         <FastTooltip label={locale === 'it' ? 'Aggiungi reazione' : 'Add reaction'}>
           <button
             type="button"
@@ -142,7 +145,7 @@ export function MessageReactions({
             />
           </div>
         )}
-      </div>
+      </div>}
     </div>
   )
 }

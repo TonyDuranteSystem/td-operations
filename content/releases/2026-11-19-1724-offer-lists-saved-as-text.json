@@ -1,0 +1,10 @@
+{
+  "title": "A contact page no longer breaks when an old offer was saved in a different format",
+  "tag": "fixed",
+  "text": "Opening a contact whose offer had its price breakdown saved as plain text showed the red \"Errore di caricamento\" screen instead of the page. The page now opens and the Offers card shows that price breakdown as normal. Going forward, when a price breakdown, the services or another list on an offer is sent to the system as pre-packed text, it is turned into a proper list before it is saved; text that is not a list is refused with a clear message, so a new offer cannot be saved this way.",
+  "points": [
+    "Open the contact page of a person whose offer was saved as text: the page opens instead of the red error",
+    "The Offers card shows the offer's price breakdown, the same as for any other offer"
+  ],
+  "screenshot": "contact-page-offer-saved-as-text.png"
+}

@@ -143,9 +143,11 @@ describe("the red numbers are split", () => {
     expect(sidebar).toContain("fetch('/api/dashboard/badges?only=whatsapp')")
     expect(sidebar).toContain("Math.max(1000, 10_000 - (Date.now() - lastRun))")
     const route = read("app/api/dashboard/badges/route.ts")
-    const light = route.slice(route.indexOf("searchParams.get('only') === 'whatsapp'"), route.indexOf("try {\n    // Who is asking"))
+    // the light branch answers BOTH light questions (WhatsApp and, since 2026-11-17, Portal Chats): staff only, never Gmail, no direct table read
+    const light = route.slice(route.indexOf("only === 'whatsapp' || only === 'portalChats'"), route.indexOf("try {\n    // Who is asking"))
     expect(light).toContain("isDashboardUser(user)")
     expect(light).toContain("getWhatsappUnread()")
+    expect(light).toContain("getPortalChatsUnread()")
     expect(light).not.toContain("gmailGet")
     expect(light).not.toContain("getDb()")
     expect(sidebar).not.toMatch(/setLiveInbox\(prev => prev \+ 1\)/)

@@ -48,6 +48,7 @@ export default async function PartnerClientDetailPage({
 
   // Contacts linked to this account
   const { data: accountContacts } = await supabaseAdmin
+    // portal-access-ok: partner view of the roster of a client company
     .from('account_contacts')
     .select('contacts(id, first_name, last_name, full_name, email, phone)')
     .eq('account_id', accountId)

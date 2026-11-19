@@ -1,0 +1,12 @@
+{
+  "title": "Installment amounts in the Accounts and Contacts lists",
+  "tag": "new",
+  "text": "The Accounts and Contacts lists now show what the CRM says for each company's installments. 1st Inst and 2nd Inst can be edited right in the list: click the amount, type, press Enter. Per year adds them up and changes at once. The Account page, both lists and the June billing all read the same saved amount. Closed, Cancelled and Offboarding companies show their amounts greyed and locked. A small chip next to each amount shows this year's invoice: Paid, Pending, Overdue or Not invoiced.",
+  "points": [
+    "Accounts: pick Status, Client kind (Client or One-time) and Company type. The number on each choice is how many companies you would get.",
+    "Contacts: one line per company, and a Companies filter for people linked to a company or not. Setup fee is on this list only and can be edited there.",
+    "A changed amount applies to billing from now on. The signed contract and invoices already created stay as they were.",
+    "The Overdue column on Accounts now fills in. The Services column is gone from that list."
+  ],
+  "screenshot": "accounts-contacts-installments.png"
+}

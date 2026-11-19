@@ -11,3 +11,10 @@ import { releaseIdFrom } from '@/lib/release/release-check'
  * check stays off.
  */
 export const OWN_RELEASE_ID = releaseIdFrom(process.env.NEXT_PUBLIC_BUILD_SHA, process.env.NEXT_PUBLIC_BUILD_TIME)
+
+/**
+ * The newest release note this build carries (dev job 616dc839; next.config.js reads content/releases/ at build time). A page sends it
+ * as `since` to /api/release/notes so the update bar can say what is new BEYOND what the page already has. Empty = a build with no
+ * notes → the bar simply offers no description. Keep the name literal (Next.js only inlines NEXT_PUBLIC names as written).
+ */
+export const OWN_NEWEST_NOTE = (process.env.NEXT_PUBLIC_NEWEST_NOTE ?? '').trim()

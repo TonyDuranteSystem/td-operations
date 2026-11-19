@@ -10,6 +10,8 @@ import { TdPayModal } from './td-pay-modal'
 import { markExpensePaid } from '@/app/portal/invoices/expense-actions'
 import { useLocale } from '@/lib/portal/use-locale'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { AppStatusPill } from '@/components/portal/app-status-pill'
+import { expenseStatusTone, groupByMonth } from '@/lib/portal-app/invoices'
 
 export interface Expense {
   id: string
@@ -68,11 +70,14 @@ export function ExpenseList({
   expenses,
   initialFilter = 'All',
   hidePay = false,
+  compact = false,
 }: {
   expenses: Expense[]
   initialFilter?: 'All' | 'Pending' | 'Paid' | 'Overdue'
   /** The client iPhone app's Pay switch is off: the Pay button is not offered (the website never sets this). */
   hidePay?: boolean
+  /** The client iPhone app's look (gray chips, compact rows grouped by month); the website never sets this. */
+  compact?: boolean
 }) {
   const { t } = useLocale()
   const router = useRouter()
@@ -132,6 +137,7 @@ export function ExpenseList({
 
   return (
     <div className="space-y-4">
+      {!compact && (<>
       {/* Filters */}
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">
@@ -285,6 +291,112 @@ export function ExpenseList({
           })
         )}
       </div>
+      </>)}
+
+      {compact && (
+        <div className="space-y-3" data-testid="app-expense-list">
+          <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
+            {STATUS_TABS.map(tab => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setStatusFilter(tab)}
+                className={cn(
+                  'shrink-0 rounded-full border px-3.5 py-2 text-[13px] font-semibold',
+                  statusFilter === tab ? 'border-zinc-800 bg-zinc-800 text-white' : 'border-zinc-200 bg-white text-zinc-700',
+                )}
+              >
+                {STATUS_TAB_LABEL_KEYS[tab] ? t(STATUS_TAB_LABEL_KEYS[tab]) : tab}
+              </button>
+            ))}
+          </div>
+          <div className="relative">
+            <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" aria-hidden="true" />
+            <input
+              type="search"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder={t('expenseList.searchPlaceholder')}
+              className="w-full rounded-[14px] border border-zinc-200 bg-white py-3 pl-10 pr-3 text-[15px] focus:outline-none focus:ring-2 focus:ring-zinc-400"
+            />
+          </div>
+          {filtered.length === 0 ? (
+            <div className="rounded-[18px] border border-zinc-200 bg-white p-6 text-center text-sm text-zinc-500">{t('expenseList.noExpensesFound')}</div>
+          ) : (
+            groupByMonth(filtered).map((group, gi) => (
+              <div key={`${group.label}-${gi}`} className="space-y-2">
+                {group.label && <p className="px-1 pt-1 text-xs font-bold text-zinc-500">{group.label}</p>}
+                <div className="overflow-hidden rounded-[18px] border border-zinc-200 bg-white">
+                  {group.rows.map((exp, i) => {
+                    const credit = Number(exp.total) < 0
+                    const symbol = exp.currency === 'EUR' ? '\u20AC' : '$'
+                    const open = exp.status === 'Pending' || exp.status === 'Overdue'
+                    const canPay = !hidePay && exp.source === 'td_invoice' && !!exp.td_payment_id && open
+                    const canMarkPaid = exp.source !== 'td_invoice' && open
+                    const canDownload = !!exp.td_payment_id || !!exp.attachment_url
+                    return (
+                      <div key={exp.id} data-testid="app-expense-row" className={cn('grid grid-cols-[1fr_auto] items-center gap-x-3 gap-y-1 px-4 py-3', i > 0 && 'border-t border-zinc-200')}>
+                        <div className="min-w-0">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <span className="truncate text-[15px] font-semibold text-zinc-900">{exp.vendor_name}</span>
+                            {exp.scope_label && <span className="shrink-0 rounded-full bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-600">{exp.scope_label}</span>}
+                          </div>
+                          <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-zinc-500">
+                            {exp.source === 'td_invoice' && <span className="rounded bg-zinc-200 px-1.5 py-px text-[10px] font-bold text-zinc-700">TD</span>}
+                            {exp.source === 'upload' && <span className="rounded bg-zinc-100 px-1.5 py-px text-[10px] font-semibold text-zinc-600">{SOURCE_CONFIG.upload.label}</span>}
+                            {exp.source === 'manual' && <span className="rounded bg-zinc-100 px-1.5 py-px text-[10px] font-semibold text-zinc-600">{SOURCE_CONFIG.manual.label}</span>}
+                            <span>{exp.invoice_number || exp.internal_ref || '\u2014'} · {fmtDate(exp.issue_date)}</span>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          {credit ? (
+                            <span className="text-[15px] font-bold tabular-nums text-emerald-700">{'\u2212'}{symbol}{Math.abs(Number(exp.total)).toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                          ) : (
+                            <>
+                              <span className="text-[15px] font-bold tabular-nums text-zinc-900">{symbol}{Number(exp.amount_due ?? exp.total).toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                              {exp.amount_due != null && exp.amount_due < exp.total && (
+                                <span className="ml-1 text-[10px] text-zinc-400 line-through">{symbol}{Number(exp.total).toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                              )}
+                            </>
+                          )}
+                          <div className="mt-0.5">
+                            {credit ? <AppStatusPill tone="ok">{t('expenseList.credit')}</AppStatusPill> : <AppStatusPill tone={expenseStatusTone(exp.status)}>{exp.status}</AppStatusPill>}
+                          </div>
+                        </div>
+                        {(canPay || canMarkPaid || canDownload) && (
+                          <div className="col-span-2 flex items-center justify-end gap-2 pt-1">
+                            {canDownload && (exp.td_payment_id ? (
+                              <button type="button" onClick={() => handleDownloadPdf(exp)} disabled={downloadingId === exp.id} aria-label={t('expenseList.downloadPdf')} className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-100 text-zinc-600 disabled:opacity-50">
+                                {downloadingId === exp.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                              </button>
+                            ) : (
+                              <a href={exp.attachment_url ?? '#'} target="_blank" rel="noopener noreferrer" aria-label={t('expenseList.downloadPdf')} className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-100 text-zinc-600">
+                                <Download className="h-4 w-4" />
+                              </a>
+                            ))}
+                            {canMarkPaid && (
+                              <button type="button" onClick={() => setConfirmingPaidExpense(exp)} disabled={markingPaidId === exp.id} className="flex min-h-9 items-center gap-1.5 rounded-full bg-zinc-100 px-3.5 text-[13px] font-semibold text-zinc-800 disabled:opacity-50">
+                                {markingPaidId === exp.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Banknote className="h-4 w-4" />}
+                                {t('expenseList.markPaid')}
+                              </button>
+                            )}
+                            {canPay && (
+                              <button type="button" onClick={() => setPayingExpense(exp)} className="flex min-h-9 items-center gap-1.5 rounded-full bg-zinc-800 px-4 text-[13px] font-bold text-white">
+                                <CreditCard className="h-4 w-4" aria-hidden="true" />
+                                {t('expenseList.pay')}
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
 
       {/* TD Invoice Pay Modal */}
       {payingExpense && payingExpense.td_payment_id && (

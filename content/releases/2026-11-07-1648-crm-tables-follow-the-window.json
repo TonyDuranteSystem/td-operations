@@ -1,0 +1,9 @@
+{
+  "title": "CRM tables keep names, dates and amounts whole and pin the first and Actions columns",
+  "tag": "improved",
+  "text": "Many CRM tables used to split words over several lines or hide columns when the window was narrow. Names, dates, amounts, status chips and e-mails now stay on one line, and the first column and the Actions column stay pinned while you scroll sideways. It was done in three rounds: Finance All Invoices, Invoice aging and My Finances; then Bank applications, Marketing Money and Audit log, Cases, Catalog, Team management, Referrals, Workflows and Fax history; then Portal launch, Teams, Partners, Client health and Tasks.",
+  "points": [
+    "Euro amounts keep their euro sign whole.",
+    "Only the layout changed; no data or behaviour."
+  ]
+}

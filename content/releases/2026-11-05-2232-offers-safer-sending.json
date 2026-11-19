@@ -1,0 +1,9 @@
+{
+  "title": "Offers: Send can no longer email a client twice, and Activate Lead is gone",
+  "tag": "improved",
+  "text": "Sending an offer is safer. If two Sends start at the same moment, only one email goes to the client. Send marks the offer as sent only when it is still a draft, and a step that fails after the email went out is shown as a warning instead of being lost. An offer can only become sent through Send: Claude's offer edit tool can no longer set the status to sent by hand.",
+  "points": [
+    "When Claude edits an offer that is already out (sent, viewed, signed or completed), it now needs a written reason of at least 15 characters, which is logged.",
+    "The Activate Lead button on the lead page was removed. It was a second way to send a draft offer with fewer checks and had never been used; Send Offer covers drafts."
+  ]
+}

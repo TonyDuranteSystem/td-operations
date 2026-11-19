@@ -1,0 +1,5 @@
+{
+  "title": "Company Formation workspace: the document type you pick for an upload is now kept",
+  "tag": "fixed",
+  "text": "Uploads in the Company Formation workspace used to be filed under the type of the stage the case was at, ignoring the Document type you chose in the list. The type you pick now wins; if you pick nothing, the stage's usual type is still used. The welcome package also recognises the specific EIN types, so a picked type never hides the EIN letter."
+}

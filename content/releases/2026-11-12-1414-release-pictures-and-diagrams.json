@@ -1,0 +1,11 @@
+{
+  "title": "Every release now shows what it does with a picture or a diagram",
+  "tag": "new",
+  "text": "Each release on the Releases page, and in the blue update bar's panel, now carries a screenshot when something on screen changed, or a diagram of the steps when it is a workspace or a process. New steps, locked steps and steps that move on by themselves are marked. Fourteen of the older workflow releases got a diagram too, for example Company Closure, Tax Return signing and fax, and the bank application review.",
+  "points": [
+    "Open Releases from the left menu or the three-dots menu",
+    "In See what's new the diagram is a row of small boxes so it fits the panel",
+    "A change nobody can see is marked Behind the scenes and has no picture"
+  ],
+  "screenshot": "releases-card-steps.png"
+}

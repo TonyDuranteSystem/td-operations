@@ -32,6 +32,8 @@ import { isTaxSeasonPaused } from "@/lib/settings"
 import { TIER_ORDER, type PortalTier } from "@/lib/portal/tier-config"
 import { normalizeFormationState, DEFAULT_FORMATION_STATE } from "@/lib/formation/states"
 import { offerSellsTaxReturn } from "@/lib/offers/compute-offer-totals"
+import { taxYearOfOffer, taxReturnServiceName } from "@/lib/offers/tax-year"
+import { ensureTaxReturnRecord } from "@/lib/tax/ensure-tax-return"
 
 // Auto-execute all steps immediately. Previous supervised mode with threshold
 // silently blocked Valerio Sicari and Antonio Truocchio — pending_activations stayed
@@ -229,6 +231,9 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
     .single()
 
   const contractType = offer?.contract_type || "formation"
+  // The tax year a short-contract Tax Return line states ("Tax Return 2026"), or null. Only this kind of offer's year is read: on a formation / onboarding
+  // offer a bundled Tax Return keeps paying the previous year (dev job 0a60f416, part B).
+  const offerTaxYear = contractType === "tax_return" ? taxYearOfOffer(offer?.services).year : null
   // A "formation" contract that clearly sells something else (DF Commerce: a
   // name change; SupraEmerge: a closure) gets NONE of the formation experience
   // — no formation SD, tier, wizard, welcome or label (workspace-only plan S1,
@@ -904,7 +909,9 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
           // here: the legacy emailed closure form adopts only a closure with no
           // offer reference (closure-form-completed, dev job 77b66080).
           const stampOffer = existingOfferCount + unitIndex === 0 && pipeline !== "Company Closure"
-          const sdName = `${pipeline} - ${activation.client_name}${unitSuffix}`
+          const sdName = pipeline === "Tax Return"
+            ? `${taxReturnServiceName(activation.client_name, offerTaxYear)}${unitSuffix}`
+            : `${pipeline} - ${activation.client_name}${unitSuffix}`
 
           // Route through P1.6 operation layer (createSD).
           // Tax Return has context-dependent entry points — pass target_stage
@@ -1027,27 +1034,55 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   if (taxReturnSd?.id && offer?.services && autoAccountId) {
     // Sold on this paid offer = paid, whatever its price (Antonio 2026-09-27).
     if (offerSellsTaxReturn(offer.services, (offer as { selected_services?: unknown }).selected_services)) {
-      const today = new Date().toISOString().split("T")[0]
-      // Check if tax_returns record exists for this account + current year
-      const currentYear = new Date().getFullYear()
+      // The tax year this line is for: the year the offer's Tax Return line states (short-contract tax return offers), else last year as before
+      // (e.g. the 2025 return filed in 2026). Dev job 0a60f416, part B.
+      const trYear = offerTaxYear ?? new Date().getFullYear() - 1
       const { data: existingTr } = await supabase
         .from("tax_returns")
         .select("id")
         .eq("account_id", autoAccountId)
-        .eq("tax_year", currentYear - 1) // Tax return is for previous year (e.g., 2025 return filed in 2026)
+        .eq("tax_year", trYear)
         .limit(1)
 
       if (existingTr && existingTr.length > 0) {
-        await dbWriteSafe(
-          supabase
-            .from("tax_returns")
-            .update({ paid: true, paid_date: today })
-            .eq("id", existingTr[0].id),
+        // tax_returns has no paid_date column — the old update wrote one, failed silently and still reported success.
+        const upd = await dbWriteSafe(
+          supabase.from("tax_returns").update({ paid: true }).eq("id", existingTr[0].id),
           "tax_returns.update"
         )
-        steps.push({ step: "tax_return_paid", status: "updated", detail: `tax_returns ${existingTr[0].id.slice(0, 8)} marked paid (included in deal)` })
+        steps.push(upd.error
+          ? { step: "tax_return_paid", status: "error", detail: `tax_returns ${existingTr[0].id.slice(0, 8)} (${trYear}) could NOT be marked paid: ${upd.error} — mark it by hand` }
+          : { step: "tax_return_paid", status: "updated", detail: `tax_returns ${existingTr[0].id.slice(0, 8)} (${trYear}) marked paid (included in deal)` })
+      } else if (offerTaxYear !== null) {
+        // The offer states the year and nothing is tracked for it yet (a closing company's last year, a first-year company...): create the record, paid —
+        // a paid year must never be left untracked (the season's extension batch and the wizard both work from the row).
+        const { data: acct } = await supabase
+          .from("accounts")
+          .select("company_name, formation_date, member_structure, entity_type")
+          .eq("id", autoAccountId)
+          .maybeSingle()
+        const ensured = acct
+          ? await ensureTaxReturnRecord({
+              accountId: autoAccountId,
+              companyName: acct.company_name,
+              taxYear: offerTaxYear,
+              status: "Paid - Not Started",
+              memberStructure: acct.member_structure,
+              entityType: acct.entity_type,
+              formationDate: acct.formation_date,
+              paid: true,
+              note: `Record created when offer ${activation.offer_token} was paid: its Tax Return line states tax year ${offerTaxYear}.`,
+            })
+          : { action: "error" as const, detail: "company not found" }
+        if (ensured.action === "created" || ensured.action === "exists") {
+          steps.push({ step: "tax_return_paid", status: "done", detail: `tax_returns for ${offerTaxYear} ${ensured.action === "created" ? "created" : "already existed"} (paid, from the offer's stated year)${ensured.bornAfterDeadline ? " — created after its filing deadline: check the extension" : ""}` })
+        } else {
+          const detail = `tax_returns for ${offerTaxYear} NOT created (${ensured.action}${ensured.detail ? `: ${ensured.detail}` : ""}) — the year is paid on the offer but not tracked; add it by hand`
+          steps.push({ step: "tax_return_paid", status: "error", detail })
+          reportSystemError({ source: "server", route: "lib/operations/activate-service", message: `${detail} (offer ${activation.offer_token})`, context: { offerToken: activation.offer_token, taxYear: offerTaxYear } }).catch(() => {})
+        }
       } else {
-        steps.push({ step: "tax_return_paid", status: "skipped", detail: `No tax_returns record found for ${currentYear - 1}` })
+        steps.push({ step: "tax_return_paid", status: "skipped", detail: `No tax_returns record found for ${trYear}` })
       }
     }
   }

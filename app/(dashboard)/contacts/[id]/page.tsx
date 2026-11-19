@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
+import { findAuthUserByEmail, findAuthUsersByContactId } from '@/lib/auth-admin-helpers'
 import { notFound } from 'next/navigation'
 import { ContactDetail } from '@/components/contacts/contact-detail'
 import { ContactCallsSection } from '@/components/contacts/contact-calls-section'
@@ -11,8 +11,11 @@ import { ItinWorkspaceBanner } from '@/components/flows/itin-workspace-banner'
 import { ClosureWorkspaceBanner } from '@/components/flows/closure-workspace-banner'
 import { OnboardingWorkspaceBanner } from '@/components/flows/onboarding-workspace-banner'
 import { resolveOnboardingWorkspaceForContact } from '@/lib/flows/resolve-onboarding-workspace'
-import { isDashboardUser } from '@/lib/auth'
+import { isDashboardUser, isOwnerOnly } from '@/lib/auth'
+import { loadSignedContractsForContact } from '@/lib/signed-contracts/load'
+import type { SignedContractEntry } from '@/lib/signed-contracts/types'
 import { ViewAsClientButton } from '@/components/accounts/view-as-client-button'
+import { contactsWithPassportFile, passportOnFile } from '@/lib/contacts/passport-on-file'
 import type { LinkedAccount, ServiceDelivery, ConversationEntry } from '@/lib/types'
 import type { OfferPackageOption } from '@/lib/types/offer'
 
@@ -29,6 +32,10 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
     .single()
 
   if (!contact) notFound()
+
+  // "Passport on file" follows the real files (Storage, then old documents), not only the saved flag.
+  const hasPassportFile = (await contactsWithPassportFile([params.id])).has(params.id)
+  contact.passport_on_file = passportOnFile(contact.passport_on_file, hasPassportFile)
 
   // Fetch related data in parallel
   const [accountsResult, sdsResult, conversationsResult, leadResult, docsResult, offersResult, pendingActivationsResult, wizardProgressResult] = await Promise.all([
@@ -240,8 +247,8 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
   }
 
   // Portal auth status
-  let portalAuth: { exists: boolean; lastLogin: string | null; createdAt: string | null; suspended: boolean } = {
-    exists: false, lastLogin: null, createdAt: null, suspended: false,
+  let portalAuth: { exists: boolean; lastLogin: string | null; createdAt: string | null; suspended: boolean; loginEmail: string | null } = {
+    exists: false, lastLogin: null, createdAt: null, suspended: false, loginEmail: null,
   }
   if (contact.email) {
     try {
@@ -256,11 +263,21 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
           lastLogin: authUser.last_sign_in_at ?? null,
           createdAt: authUser.created_at ?? null,
           suspended: !!bannedUntil && new Date(bannedUntil) > new Date(),
+          loginEmail: null,
         }
       }
     } catch {
       // Auth query failed — non-critical
     }
+  }
+
+  // The REAL login email, found by the CONTACT ID (never by email), so a contact whose email drifted from its login still
+  // shows the address the client really signs in with (dev job beb43385, step 3).
+  try {
+    const byContact = (await findAuthUsersByContactId(params.id)).find((u) => (u.app_metadata as { role?: string } | undefined)?.role === 'client')
+    portalAuth.loginEmail = byContact?.email ?? null
+  } catch {
+    // non-critical
   }
 
   // "View as client" (admin + staff): only when this contact actually has a portal login.
@@ -287,6 +304,16 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
   // Onboarding workspace — the client's submitted data awaiting review, and/or
   // a just-reviewed company still needing its Registered Agent switched.
   const onboardingWorkspace = await resolveOnboardingWorkspaceForContact(params.id)
+
+  // Signed contracts card: read from where the signed files already are. A failure shows a plain note in the card and never
+  // takes the page down.
+  let signedContracts: SignedContractEntry[] = []
+  let signedContractsError: string | null = null
+  try {
+    signedContracts = await loadSignedContractsForContact(params.id, contact.email ?? null)
+  } catch (err) {
+    signedContractsError = err instanceof Error ? err.message : 'Please reload the page.'
+  }
 
   return (
     <div className="p-6 lg:p-8">
@@ -344,6 +371,9 @@ export default async function ContactDetailPage({ params }: { params: { id: stri
         stepperDeliveries={stepperDeliveries}
         stagesByServiceType={stagesByServiceType}
         flows={contactFlows}
+        signedContracts={signedContracts}
+        signedContractsError={signedContractsError}
+        canEditSignedAmounts={isOwnerOnly(user)}
       />
     </div>
   )

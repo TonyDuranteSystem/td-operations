@@ -1,0 +1,12 @@
+{
+  "title": "Client app: a floating banner for new announcements, and the Chat Latest button back in the middle",
+  "tag": "new",
+  "text": "When the team publishes an announcement in the CRM, the client's iPhone app now shows a small floating banner on the Overview: tap it to read the news, or tap the X to make it go away on that phone. The announcement stays under the News button until the client closes it there. Only announcements the team wrote pop up, not the built-in guides. Announcements with a start or end date now start and stop on those days on the client home page, website included. Also fixed: the \"Latest\" button in the client Chat sat half off the left edge; it is back in the middle, in the app and on the website.",
+  "points": [
+    "Publish an announcement in the CRM (Config, Announcements), then open the client app's Overview",
+    "Tap the banner: the News list opens and the banner is gone",
+    "Tap the X instead: only the banner goes, the News button keeps its number",
+    "In Chat, scroll up: the Latest button is centred"
+  ],
+  "screenshot": "client-app-news-banner.png"
+}

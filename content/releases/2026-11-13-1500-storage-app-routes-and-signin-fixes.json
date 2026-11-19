@@ -1,0 +1,15 @@
+{
+  "title": "TD Storage on the Mac: files missing under a company, and sign-in problems",
+  "tag": "fixed",
+  "text": "Three Mac app fixes. A new file now shows under the company as well as under People, even if Finder had already opened that company folder, because the CRM now tells the app where each person is shown. A short database hiccup no longer signs a Mac out for good. The 30-day sign-in stays, but the app now warns you in its window and with a notification during the last 5 days, and says why when a Mac is signed out. These need the new Mac app, which the team gets when it is offered.",
+  "points": [
+    "Works for any person shown under several companies",
+    "Warning: last 5 days, in the app window and as a notification once a day",
+    "A Mac signed out by the CRM now shows the reason"
+  ],
+  "steps": [
+    { "name": "A file is added to a person", "detail": "From the CRM or from People in Finder", "flag": "new" },
+    { "name": "The CRM names every company showing them", "detail": "Asked once, then remembered by the Mac", "flag": "auto" },
+    { "name": "Finder is told in each place", "detail": "People and every company route", "flag": "auto" }
+  ]
+}

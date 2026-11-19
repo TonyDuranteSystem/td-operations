@@ -1,0 +1,12 @@
+{
+  "title": "Client app: Invoices redrawn in gray, with labelled invoice items and a setup gear",
+  "tag": "improved",
+  "text": "In the client iPhone app the Invoices area is redrawn in gray. The home shows what customers owe you, the latest invoices, and links to Customers, Expenses and Vendors. A company that is not set up yet sees its three steps first. Invoice setup (logo, bank accounts, payment link) now sits behind the gear on the home card. Sales and Expenses are compact lists grouped by month, with one slim summary on Expenses. In New invoice every item box says what it is (also in a phone browser), and a bar at the bottom shows the total. The website looks as before.",
+  "points": [
+    "App: open Invoices and tap the gear for Invoice setup",
+    "App: Sales and Expenses, tap the round + for a new one",
+    "New invoice: each item has What is it for, Quantity, Price each",
+    "The Create invoice bar stays at the bottom while you scroll"
+  ],
+  "screenshot": "client-app-invoices-gray.png"
+}

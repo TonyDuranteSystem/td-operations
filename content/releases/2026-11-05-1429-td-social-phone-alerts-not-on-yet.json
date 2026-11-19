@@ -1,0 +1,9 @@
+{
+  "title": "TD Social phone alerts are built but not turned on yet",
+  "tag": "behind-the-scenes",
+  "text": "The parts that let the TD Social iPhone app show alerts were added: a switch per person for each kind of alert, counts per tab and the number on the app icon, Apple alert sending for staff and Marketing alerts, and phone alerts for new WhatsApp messages and new emails. All of it stays off until the Apple key and a setting are put in place, so nobody receives phone alerts yet. Browser alerts work exactly as before.",
+  "points": [
+    "On the lock screen an alert says who wrote, never what.",
+    "Each person's own switches decide what reaches their phone."
+  ]
+}

@@ -129,6 +129,10 @@
       "schedule": "*/15 * * * *"
     },
     {
+      "path": "/api/cron/file-zoom-calls",
+      "schedule": "*/10 * * * *"
+    },
+    {
       "path": "/api/cron/wa-bridge-watch",
       "schedule": "*/5 * * * *"
     },
@@ -227,10 +231,6 @@
     {
       "path": "/api/cron/plan-referrer-notify",
       "schedule": "*/15 * * * *"
-    },
-    {
-      "path": "/api/cron/plan-part-auto-raise",
-      "schedule": "0 9 * * *"
     },
     {
       "path": "/api/cron/card-autopay-charge",

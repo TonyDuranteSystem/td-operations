@@ -1,0 +1,17 @@
+{
+  "title": "Booking: paid calls are booked and paid on our own page",
+  "tag": "new",
+  "text": "A paid link now works entirely in our system. You make the link as before (Booking, Links and calls, Paid, the amount). The person opens it on our own page, picks one of your free times, types their name and email, and the call is booked right then. The same page takes them straight to the card payment. They never see Calendly. If someone books and never pays, the card in Calls to check still lets you cancel the call or send them the payment link. A paid call is 30 minutes for now.",
+  "points": [
+    "Make a paid link and open it yourself to see the page",
+    "Paid calls are 30 minutes: the other lengths are greyed out when Paid is chosen"
+  ],
+  "stepsTitle": "How a paid call works now",
+  "steps": [
+    { "name": "Make a paid link", "detail": "Choose Paid, type the amount, make the link and share it.", "flag": "new" },
+    { "name": "They pick a time", "detail": "They open the link on our own page and pick one of your free times.", "flag": "new" },
+    { "name": "The call is booked", "detail": "As soon as they confirm, the call is in your calendar.", "flag": "auto" },
+    { "name": "They pay by card", "detail": "The same page takes them to the card payment.", "flag": "new" },
+    { "name": "It is recorded", "detail": "A paid invoice, plus a credit for a new person. The card clears.", "flag": "auto" }
+  ]
+}

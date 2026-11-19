@@ -1,0 +1,9 @@
+{
+  "title": "Leads: a real filter bar, live search, and a Follow-up filter",
+  "tag": "improved",
+  "text": "The Leads page, table and board, has a new filter bar: every real status, plus offer, call, source, referrer and a Follow-up filter (sent, not sent yet, due). There is a live search dropdown by name, email or phone, and three quick buttons with live counts: call happened but still Call Scheduled, Call Done with no offer, and offer sent with no change in 5+ days.",
+  "points": [
+    "Leads with a call today or later are listed first in the table, soonest on top; everyone else keeps the old order.",
+    "The banner about new calls from existing clients now counts only calls made after they became a client, and an Already a client badge appears when the email matches a client."
+  ]
+}

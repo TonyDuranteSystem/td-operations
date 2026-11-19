@@ -62,6 +62,11 @@ public final class LoopbackSignIn: @unchecked Sendable {
         continuation?.resume(with: result); continuation = nil
     }
 
+    /// The query of the sign-in return address as a dictionary. A key that appears twice (/cb?state=a&state=b) must never crash the app: the first one counts.
+    static func queryValues(_ items: [URLQueryItem]?) -> [String: String] {
+        Dictionary((items ?? []).compactMap { i in i.value.map { (i.name, $0) } }, uniquingKeysWith: { first, _ in first })
+    }
+
     private func handle(_ conn: NWConnection) {
         conn.start(queue: queue)
         conn.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, _, _ in
@@ -70,7 +75,7 @@ public final class LoopbackSignIn: @unchecked Sendable {
             let parts = first.split(separator: " ")
             var ok = false
             if parts.count >= 2, parts[0] == "GET", let comps = URLComponents(string: "http://127.0.0.1" + parts[1]), comps.path == "/cb" {
-                let q = Dictionary(uniqueKeysWithValues: (comps.queryItems ?? []).compactMap { i in i.value.map { (i.name, $0) } })
+                let q = LoopbackSignIn.queryValues(comps.queryItems)
                 if q["state"] == self.expectedState, let code = q["code"], !code.isEmpty { ok = true; self.reply(conn, ok: true); self.finish(.success(code)) }
                 else if q["state"] != self.expectedState { self.reply(conn, ok: false); self.finish(.failure(SignInError.stateMismatch)) }
                 else { self.reply(conn, ok: false); self.finish(.failure(SignInError.noCode)) }

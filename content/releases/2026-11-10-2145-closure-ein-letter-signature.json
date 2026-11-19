@@ -1,0 +1,10 @@
+{
+  "title": "Company Closure now writes the EIN closure letter to the IRS, signed by the client",
+  "tag": "new",
+  "text": "The IRS Closure step in the Company Closure workspace now makes the EIN closure letter for you, with the same wording as past closure letters, and puts a copy of the client's EIN letter behind it when there is one. The closure form the client fills in now has a box to draw their signature, and the letter uses it. The signature is required, so the form cannot be sent without it.",
+  "points": [
+    "The return address on the letter is our Seminole office.",
+    "The letter fits on one page. If a name or address is too long, or has characters the letter cannot print, it says so instead of cutting text.",
+    "Closure forms the client had already sent before this keep the old way: a blank line to sign by hand."
+  ]
+}

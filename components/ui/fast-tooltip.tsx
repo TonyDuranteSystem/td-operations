@@ -35,6 +35,8 @@ import { tooltipPosition, type TooltipPosition } from '@/lib/ui/tooltip-position
 const TOOLTIP_Z_INDEX = 10001
 /** Room reserved below the anchor for a summary card (about five lines). */
 const CARD_HEIGHT_PX = 150
+/** How long an interactive card waits after the pointer leaves before closing: long enough to cross the small gap from the name to the card. */
+const CLOSE_GRACE_MS = 250
 
 export function FastTooltip({
   label,
@@ -42,6 +44,9 @@ export function FastTooltip({
   children,
   align = 'right',
   className,
+  delayMs = 0,
+  cardHeightPx = CARD_HEIGHT_PX,
+  interactive = false,
 }: {
   /** Falsy (empty string / undefined) renders no label at all — e.g. a
    * `title={cond ? 'reason' : undefined}` conditional-explanation pattern
@@ -64,17 +69,96 @@ export function FastTooltip({
    * in a flex bar. Leave unset for a plain icon/button wrap.
    */
   className?: string
+  /**
+   * Wait this long after the pointer arrives before showing (default 0 = instant). A list of names uses a short wait so a card does not
+   * flash open for every name the mouse merely sweeps across. Keyboard focus is never delayed.
+   */
+  delayMs?: number
+  /** Room reserved for the card (px) when deciding whether it opens below or above the anchor. */
+  cardHeightPx?: number
+  /**
+   * Let the person move onto the card and copy text from it (Antonio 2026-11-15: "I want to copy an information"). The card then takes the
+   * mouse instead of ignoring it, stays open while the pointer is on the name or on the card, closes a moment after the pointer leaves both
+   * (or on Escape), and stays open while text inside it is selected so the copy can finish. A click inside it never reaches the row behind.
+   * Off by default: a plain one-line label or card stays click-through.
+   */
+  interactive?: boolean
 }) {
   const [show, setShow] = useState(false)
   const [canHover, setCanHover] = useState(false)
   const [pos, setPos] = useState<TooltipPosition | null>(null)
+  // An interactive card stays open on purpose while text inside it is selected (until a click elsewhere or Escape).
+  const [held, setHeld] = useState(false)
   const wrapperRef = useRef<HTMLDivElement>(null)
+  const cardRef = useRef<HTMLSpanElement | null>(null)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  const clearTimer = () => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current)
+      timerRef.current = null
+    }
+  }
+  const clearCloseTimer = () => {
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current)
+      closeTimerRef.current = null
+    }
+  }
+  const close = () => {
+    clearTimer()
+    clearCloseTimer()
+    setHeld(false)
+    setShow(false)
+  }
+  /** True while some text inside the card is selected (the person is mid-copy). */
+  const selectionInCard = () => {
+    const sel = window.getSelection()
+    const el = cardRef.current
+    return !!sel && !sel.isCollapsed && !!el && !!sel.anchorNode && el.contains(sel.anchorNode)
+  }
+  const leaveFromPointer = () => {
+    if (!interactive || !card) {
+      close()
+      return
+    }
+    clearTimer() // a card that has not opened yet never opens now
+    clearCloseTimer()
+    closeTimerRef.current = setTimeout(() => {
+      closeTimerRef.current = null
+      if (selectionInCard()) setHeld(true)
+      else close()
+    }, CLOSE_GRACE_MS)
+  }
+  const enterFromPointer = () => {
+    clearCloseTimer()
+    if (!show) openFromPointer()
+  }
   const open = () => {
+    clearTimer()
     const r = wrapperRef.current?.getBoundingClientRect()
-    if (r) setPos(tooltipPosition(r, align, window.innerHeight, card ? CARD_HEIGHT_PX : undefined))
+    if (r) setPos(tooltipPosition(r, align, window.innerHeight, card ? cardHeightPx : undefined))
     setShow(true)
   }
+  const openFromPointer = () => {
+    if (!canHover) return
+    if (delayMs > 0) {
+      clearTimer()
+      timerRef.current = setTimeout(open, delayMs)
+    } else {
+      open()
+    }
+  }
+
+  // A leftover wait must never fire after the row is gone.
+  useEffect(
+    () => () => {
+      if (timerRef.current) clearTimeout(timerRef.current)
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
+    },
+    [],
+  )
 
   useEffect(() => {
     const mq = window.matchMedia('(hover: hover) and (pointer: fine)')
@@ -86,7 +170,11 @@ export function FastTooltip({
 
   useEffect(() => {
     if (!show) return
-    const hide = () => setShow(false)
+    const hide = () => {
+      clearCloseTimer()
+      setHeld(false)
+      setShow(false)
+    }
     window.addEventListener('scroll', hide, true)
     window.addEventListener('resize', hide)
     return () => {
@@ -95,26 +183,53 @@ export function FastTooltip({
     }
   }, [show])
 
+  // An interactive card closes on Escape, and — once it is being held open for a copy — on the next click anywhere outside it.
+  useEffect(() => {
+    if (!show || !interactive) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close()
+    }
+    const onDown = (e: MouseEvent) => {
+      if (!held) return
+      const t = e.target as Node | null
+      if (t && cardRef.current?.contains(t)) return
+      close()
+    }
+    window.addEventListener('keydown', onKey)
+    document.addEventListener('mousedown', onDown, true)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.removeEventListener('mousedown', onDown, true)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [show, interactive, held])
+
   return (
     <div
       ref={wrapperRef}
       className={cn('relative inline-flex', className)}
-      onMouseEnter={() => canHover && open()}
-      onMouseLeave={() => setShow(false)}
+      onMouseEnter={enterFromPointer}
+      onMouseLeave={leaveFromPointer}
       onFocus={open}
-      onBlur={() => setShow(false)}
-      onClick={() => setShow(false)}
+      onBlur={close}
+      onClick={close}
     >
       {children}
       {show && (label || card) && pos && typeof document !== 'undefined' &&
         createPortal(
           <span
+            ref={cardRef}
             role="tooltip"
             style={{ position: 'fixed', top: pos.top, left: pos.left, transform: `translate(${pos.translateX}, ${pos.translateY})`, zIndex: TOOLTIP_Z_INDEX }}
             className={cn(
-              'pointer-events-none rounded-md bg-zinc-900 text-xs text-white',
+              'rounded-md bg-zinc-900 text-xs text-white',
+              interactive && card ? 'cursor-text select-text' : 'pointer-events-none',
               card ? 'block w-max max-w-[22rem] whitespace-normal px-3 py-2 shadow-lg' : 'whitespace-nowrap px-2 py-1',
             )}
+            // The card is drawn at body level but belongs to the row in React's tree, so a click inside it would otherwise reach the row
+            // behind it (and open the record) and the wrapper's own click-to-close.
+            onClick={interactive && card ? (e) => e.stopPropagation() : undefined}
+            onMouseEnter={interactive && card ? clearCloseTimer : undefined}
           >
             {card ?? label}
           </span>,

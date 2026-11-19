@@ -1,0 +1,33 @@
+{
+  "title": "Portal Chats: Save to Storage files a client's ITIN letters from a chat message",
+  "tag": "new",
+  "text": "A Save to Storage button now appears under the attachments of a client's message in Portal Chats. It opens a card that shows each scan next to what was read from it (the ITIN and the notice date), proposes whose letter it is and where it goes, and saves only what you confirm. Nothing is saved, changed or sent until you press Save.",
+  "points": [
+    "Only the member the letter itself names is proposed, never just the sender.",
+    "The letter is filed in that person's own Storage, in the ITIN folder, hidden from the client by default. You can instead show it quietly or show it and notify the client.",
+    "A value the reader is unsure about must be ticked as checked against the scan, or edited, before you can save."
+  ],
+  "stepsTitle": "How a letter is saved from a chat",
+  "steps": [
+    {
+      "name": "Save to Storage",
+      "detail": "The button under a client's message attachments"
+    },
+    {
+      "name": "Card opens",
+      "detail": "Each scan next to what was read from it (the ITIN and the notice date)"
+    },
+    {
+      "name": "A place is proposed",
+      "detail": "Whose letter it is and where it goes; only the member the letter names"
+    },
+    {
+      "name": "You confirm and press Save",
+      "detail": "Nothing is saved, changed or sent before that"
+    },
+    {
+      "name": "Filed",
+      "detail": "In that person's ITIN folder, hidden from the client by default"
+    }
+  ]
+}

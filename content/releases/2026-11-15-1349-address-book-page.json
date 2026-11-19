@@ -1,0 +1,18 @@
+{
+  "title": "Address book: everyone we know in one list, plus people who have no place in the CRM",
+  "tag": "new",
+  "text": "A new Address book page, in the left menu under Network next to Contacts. It lists every person and partner already in the CRM (read only, nothing on Contacts changes) together with people you save there yourself: a supplier, a lawyer, a banker you met at an event. Filter by what people are, search by name, company, phone or email, and use Add to address book to save someone new. You make the types yourself in Manage types, with the extra boxes each type needs. If a phone or email is already known, you see that person first. For people the CRM leaves unsorted you can say what they are, and that answer stays in the address book.",
+  "points": [
+    "Left menu: Network, then Address book",
+    "Manage types: make a type and give it its own boxes",
+    "Add to address book: type a phone the CRM already has, and it shows who",
+    "Not sorted yet: click the label to say what someone is"
+  ],
+  "stepsTitle": "What the new page gives you",
+  "steps": [
+    { "name": "Everyone in one list", "detail": "CRM people (read only) and people you saved", "flag": "new" },
+    { "name": "Filter and search", "detail": "By what they are, or by name, company, phone, email", "flag": "new" },
+    { "name": "Save people the CRM does not have", "detail": "Warns first if the phone or email is known", "flag": "new" },
+    { "name": "Your own types", "detail": "You choose the names and the extra boxes", "flag": "new" }
+  ]
+}

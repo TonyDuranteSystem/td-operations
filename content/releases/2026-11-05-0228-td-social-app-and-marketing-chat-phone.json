@@ -1,0 +1,9 @@
+{
+  "title": "TD Social iPhone app: CRM screens fit the app, and Marketing Chat fits a phone",
+  "tag": "improved",
+  "text": "TD Social is the planned iPhone app for TD Talk, Portal chats, WhatsApp, the Inbox and Marketing Chat; the app itself is not part of this release. The CRM screens now adjust only when opened inside that app. In a normal browser the one visible change is Marketing Chat on a narrow screen (under 768 px wide): it shows the chat list, then the open chat with a back arrow, one at a time.",
+  "points": [
+    "Inside the app only: no side menu or top bar, bigger tap areas, larger small text, light mode only. Normal browsers are unchanged.",
+    "The part that decides what each person sees in the app and keeps the phone list is built but switched off until it is turned on."
+  ]
+}

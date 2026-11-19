@@ -9,6 +9,7 @@ import { cookies } from 'next/headers'
 import { DocumentList } from '@/components/portal/document-list'
 import { getNewDocumentIds } from '@/lib/portal/document-alerts'
 import { isPersonalDocumentHiddenFrom } from '@/lib/documents/visibility-guard'
+import { placeWaitingUploads } from '@/lib/portal/own-uploads-waiting'
 import { filterByHistoryCutoff, isHiddenByHistoryCutoff } from '@/lib/documents/history-cutoff'
 import { filterCorrespondenceForViewer, getHistoryCutoff, getHistoryView } from '@/lib/portal/history-cutoff'
 import { DocumentUploadButton } from '@/components/portal/document-upload-button'
@@ -71,6 +72,8 @@ export default async function PortalDocumentsPage() {
   // route), grouped into per-flow sections ("Tax Return 2025", etc.). These are
   // pulled OUT of the Company/My lists below so they never appear twice.
   let flowGroups: { id: string; title: string; docs: DocRow[] }[] = []
+  // The client's own fresh uploads that staff have not shown yet: listed by name with "Waiting for review" (they stay unopenable).
+  let waitingIds = new Set<string>()
 
   if (selectedAccountId) {
     // A person added to a company that already had history may see only what comes from a date on (dev job d14e823f).
@@ -212,6 +215,53 @@ export default async function PortalDocumentsPage() {
         docs: byId.get(id)!.map(d => { const { contact_id: _omit, ...rest } = d as DocRow & { contact_id?: string | null }; return rest as DocRow }),
       }))
     }
+
+    // The client's OWN uploads are saved hidden until staff review them, so by the visibility rule alone one vanishes from this page the
+    // moment it is uploaded. List them by name, tagged "Waiting for review" (the Tax page does the same). Only the signed-in person's own
+    // uploads: the same check the Tax page uses (lib/portal/client-store-docs.ts listDocsWithOwnUploads).
+    {
+      const hiddenCols = 'id, file_name, document_type_name, category, contact_id, drive_file_id, processed_at, created_at, service_delivery_id, flow_stage, portal_visible, visible_to_new_owners'
+      const { data: hiddenCompany } = await supabaseAdmin
+        .from('documents')
+        .select(hiddenCols)
+        .eq('account_id', selectedAccountId)
+        .or('portal_visible.is.null,portal_visible.eq.false')
+        .like('drive_file_id', 'store:%')
+        .is('service_delivery_id', null)
+        .order('created_at', { ascending: false })
+        .limit(50)
+      // a personal upload is filed in the person's own storage, so its row may not carry the company
+      const { data: hiddenPersonal } = contactId
+        ? await supabaseAdmin
+            .from('documents')
+            .select(hiddenCols)
+            .eq('contact_id', contactId)
+            .eq('category', 2)
+            .or('portal_visible.is.null,portal_visible.eq.false')
+            .like('drive_file_id', 'store:%')
+            .is('service_delivery_id', null)
+            .order('created_at', { ascending: false })
+            .limit(20)
+        : { data: [] }
+      const seenHidden = new Set<string>()
+      const hiddenRows = [...(hiddenCompany ?? []), ...(hiddenPersonal ?? [])].filter(r => (seenHidden.has(r.id) ? false : (seenHidden.add(r.id), true)))
+      if (hiddenRows.length > 0) {
+        const { listDocsWithOwnUploads } = await import('@/lib/portal/client-store-docs')
+        const { docs: ownDocs, waitingIds: ownWaiting } = await listDocsWithOwnUploads(hiddenRows, { contactId, userId: user.id, accountId: selectedAccountId })
+        const waiting = ownDocs
+          .filter(d => ownWaiting.has(d.id) && !isHiddenByHistoryCutoff(d, historyCutoff, contactId))
+          // only what the page draws: no contact id, flow stage or visibility flag goes to the browser
+          .map(d => ({
+            id: d.id, file_name: d.file_name, document_type_name: d.document_type_name, category: d.category, drive_file_id: d.drive_file_id,
+            processed_at: d.processed_at, created_at: d.created_at, service_delivery_id: d.service_delivery_id,
+          })) as DocRow[]
+        const alreadyListed = new Set([...companyDocs, ...myDocs, ...flowGroups.flatMap(g => g.docs)].map(d => d.id))
+        const placed = placeWaitingUploads({ companyDocs, myDocs, waiting, alreadyListedIds: alreadyListed, hasPersonalList: !!contactId })
+        companyDocs = placed.companyDocs
+        myDocs = placed.myDocs
+        waitingIds = placed.waitingIds
+      }
+    }
   } else {
     // Contact-only clients (ITIN, no LLC) — all docs are personal
     const { data } = await supabaseAdmin
@@ -273,7 +323,7 @@ export default async function PortalDocumentsPage() {
 
   // Which documents are "new" (alert-eligible + unopened) for THIS contact —
   // drives the "New" pill + tinted row. Teammates have no per-person state.
-  const allDocIds = [...companyDocs, ...myDocs, ...flowGroups.flatMap(g => g.docs)].map(d => d.id)
+  const allDocIds = [...companyDocs, ...myDocs, ...flowGroups.flatMap(g => g.docs)].map(d => d.id).filter(id => !waitingIds.has(id))
   const newDocIds = contactId
     ? Array.from(await getNewDocumentIds(allDocIds, contactId))
     : []
@@ -336,7 +386,7 @@ export default async function PortalDocumentsPage() {
                 <Building2 className="h-4 w-4 text-zinc-500" />
                 <h2 className="text-sm font-semibold text-zinc-700">Company Documents</h2>
               </div>
-              <DocumentList documents={companyDocs} categoryLabels={CATEGORY_LABELS} newDocIds={newDocIds} />
+              <DocumentList documents={companyDocs} categoryLabels={CATEGORY_LABELS} newDocIds={newDocIds} waitingIds={Array.from(waitingIds)} />
             </div>
           )}
 
@@ -346,7 +396,7 @@ export default async function PortalDocumentsPage() {
                 <User className="h-4 w-4 text-zinc-500" />
                 <h2 className="text-sm font-semibold text-zinc-700">My Documents</h2>
               </div>
-              <DocumentList documents={myDocs} categoryLabels={CATEGORY_LABELS} newDocIds={newDocIds} />
+              <DocumentList documents={myDocs} categoryLabels={CATEGORY_LABELS} newDocIds={newDocIds} waitingIds={Array.from(waitingIds)} />
             </div>
           )}
         </>

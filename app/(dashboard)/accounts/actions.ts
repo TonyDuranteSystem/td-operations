@@ -9,6 +9,8 @@ import { normalizeEIN } from '@/lib/jobs/validation'
 import { triggerEINReceivedWorkflow } from '@/lib/operations/ein-received'
 import { syncTier, syncContactTiersForAccount } from '@/lib/operations/sync-tier'
 import { syncPortalLoginEmail } from '@/lib/operations/portal-login-email'
+import { contactHasClientLogin } from '@/lib/portal/login-email-change-staff'
+import { LOGIN_LINKED_ERROR } from '@/lib/portal/login-email-change-staff-shared'
 import { createSD } from '@/lib/operations/service-delivery'
 import { createAccount as createAccountOp, createAndLinkContact as createAndLinkContactOp } from '@/lib/operations/account'
 import { setAccountRenewalDate, type RenewalDateColumn } from '@/lib/operations/renewal-dates'
@@ -43,6 +45,33 @@ export async function fixAccountNameSpelling(accountId: string, newName: string)
   return { success: true }
 }
 
+/**
+ * "How they became our client" (Formed by us / Onboarded) on the account's Company Info. `change` saves the new answer after the
+ * pop-up asked a person to check the dates; `confirm` marks the current guess as checked ("It's correct"). Either way the save stamps
+ * who and when, and is written to the audit log. Staff only.
+ */
+export async function setBecameClientHow(
+  accountId: string,
+  value: string | null,
+  mode: 'change' | 'confirm',
+  updatedAt: string,
+): Promise<{ success: boolean; error?: string; warning?: string }> {
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user || !isStaffUser(user)) return { success: false, error: 'Not allowed.' }
+  const { writeBecameClientHow } = await import('@/lib/operations/account-became-client')
+  const result = await writeBecameClientHow(supabaseAdmin, {
+    accountId,
+    mode,
+    value,
+    expectedUpdatedAt: updatedAt || null,
+    actor: await getDashboardActor(),
+  })
+  if (!result.success) return { success: false, error: result.error }
+  revalidatePath(`/accounts/${accountId}`)
+  return { success: true, warning: result.warning }
+}
+
 export async function updateAccountField(
   accountId: string,
   field: string,
@@ -55,6 +84,9 @@ export async function updateAccountField(
     'registered_agent_provider', 'ra_renewal_date', 'annual_report_due_date', 'ra_switch_date', 'client_since', 'notes',
     'installment_1_amount', 'installment_1_currency',
     'installment_2_amount', 'installment_2_currency',
+    // Setup fee amount: saved from the Contacts list (saveListAmount in list-actions.ts, which also enforces the Closed /
+    // Cancelled / Offboarding lock). The other setup_fee_* columns stay on the Clients Audit page.
+    'setup_fee_amount',
     'communication_email',
     // Path 2 address FK columns
     'business_legal_address_id', 'business_mailing_address_id', 'registered_agent_id', 'shipping_address_id',
@@ -302,6 +334,12 @@ export async function updateContactField(
   const allowedFields = ['full_name', 'email', 'phone', 'language', 'role']
   if (!allowedFields.includes(field)) {
     return { success: false, error: `Field '${field}' is not editable` }
+  }
+
+  // A contact that HAS a portal login gets its email changed only through "Change login email" (login + contact + both
+  // mailboxes together). The screen sees this marker and opens that dialog (dev job beb43385, step 3).
+  if (field === 'email' && await contactHasClientLogin(contactId)) {
+    return { success: false, error: LOGIN_LINKED_ERROR }
   }
 
   return safeAction(async () => {

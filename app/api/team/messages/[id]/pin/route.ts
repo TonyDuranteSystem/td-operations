@@ -7,9 +7,13 @@ import { NextRequest, NextResponse } from 'next/server'
 /**
  * POST /api/team/messages/[id]/pin  — toggle pin on a message.
  * Any staff member can pin/unpin. Body: {} (toggles based on current state).
+ *
+ * Optional `pinned: boolean` = SET instead of toggle: "I want this message pinned / unpinned". If it is already in that state nothing
+ * is written and the current pin is returned. TD Talk sends this, so a double-tap or an answer that was lost can never flip a pin back.
+ * Without `pinned` (the CRM Team Chat page sends no body) the behaviour is exactly the old toggle.
  */
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const supabase = createClient()
@@ -22,7 +26,7 @@ export async function POST(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: existing } = await (supabaseAdmin as any)
     .from('internal_messages')
-    .select('id, thread_id, pinned_at, deleted_at')
+    .select('id, thread_id, pinned_at, pinned_by, deleted_at')
     .eq('id', msgId)
     .single()
   if (!existing) return NextResponse.json({ error: 'Message not found' }, { status: 404 })
@@ -32,7 +36,16 @@ export async function POST(
   }
   if (existing.deleted_at) return NextResponse.json({ error: 'Cannot pin a deleted message' }, { status: 400 })
 
-  const nowPinned = !existing.pinned_at
+  // An explicit target (TD Talk) is read from the body; the CRM sends no body at all, so a missing or unreadable body means "toggle".
+  const body = await request.json().catch(() => null)
+  const wanted: boolean | null = body && typeof body.pinned === 'boolean' ? body.pinned : null
+  const isPinned = !!existing.pinned_at
+  if (wanted !== null && wanted === isPinned) {
+    // already in the state asked for: change nothing (keeps who pinned it and when)
+    return NextResponse.json({ message: { id: existing.id, pinned_at: existing.pinned_at ?? null, pinned_by: existing.pinned_by ?? null }, pinned: isPinned })
+  }
+
+  const nowPinned = wanted ?? !isPinned
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: updated, error } = await (supabaseAdmin as any)
     .from('internal_messages')

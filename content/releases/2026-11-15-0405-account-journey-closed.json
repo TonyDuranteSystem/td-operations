@@ -1,0 +1,13 @@
+{
+  "title": "The Account journey card on a company's page now starts closed",
+  "tag": "improved",
+  "text": "The Account journey card used to take a big part of the screen even for a client whose offer and forms were long finished. It now starts closed, with one line saying where the client is right now: Active client and how many forms came in, or the one thing that is waiting, such as a payment or a form still open. Click the line to see the six steps and the forms, each form now one slim row with its Export button. Partner Bank Applications is now its own closed card under Signed contracts, with its red number still in the header.",
+  "points": [
+    "Open a company and look at the first card, Account journey.",
+    "A finished client reads Active client. A form the client has not finished shows in blue or amber, with its name.",
+    "A signed offer that is not paid yet shows Waiting for payment, with the days since signing.",
+    "Click the line to see the steps and forms. Export is still on each submitted form.",
+    "Partner Bank Applications is the last card in the row, closed, with the red number of banks clicked."
+  ],
+  "screenshot": "account-journey-closed.png"
+}

@@ -23,6 +23,9 @@ import { ClientConversationsPanel } from '@/components/conversations/client-conv
 import { ActivityFeed } from '@/components/accounts/activity-feed'
 import { DeliveryRowActions } from '@/components/trackers/delivery-row-actions'
 import { ComposeEmailButton } from '@/components/inbox/compose-email-button'
+import { MessageContactButton, CONTACT_CHAT_SENT_EVENT } from '@/components/contacts/message-contact-button'
+import { MessageTargetFields, useMessageTarget, type MessageSelection, type MessageTargetContext } from '@/components/storage/message-target-fields'
+import { buildShareChatBody } from '@/lib/crm-store/document-share-client'
 import { NewWhatsAppConversationDialog } from '@/components/messaging/new-whatsapp-conversation-dialog'
 import { ThreadEmailPanel } from '@/components/portal-chats/thread-email-panel'
 import { ChainAuditDialog } from '@/components/contacts/chain-audit-dialog'
@@ -32,6 +35,10 @@ import { ContactHealthPanel } from '@/components/contacts/contact-health-panel'
 import { ReferralsGivenCard } from '@/components/referrals/referrals-given-card'
 import { ConfirmPaymentDialog } from '@/app/(dashboard)/leads/[id]/components/confirm-payment-dialog'
 import { AccountOfferPanel, type OfferData } from '@/components/offers/account-offer-panel'
+import { listOrEmpty } from '@/lib/offers/json-list'
+import { SignedContractsCard } from '@/components/contacts/signed-contracts-card'
+import { replaceEntry } from '@/lib/signed-contracts/list'
+import type { SignedContractEntry } from '@/lib/signed-contracts/types'
 import type { OfferPackageOption } from '@/lib/types/offer'
 import { ServiceDeliveriesSection, type ServiceDeliveryForStepper } from '@/components/accounts/service-deliveries-section'
 import type { PipelineStage } from '@/components/accounts/sd-pipeline-stepper'
@@ -48,6 +55,8 @@ import { StoreDocumentsPanel } from '@/components/accounts/store-documents-panel
 import { StoreBusyScope, useStoreBusy, STORE_BUSY_HINT } from '@/components/accounts/store-busy'
 import { ClosureNotifyCheckbox, isClosureServiceType, showClosurePromptToast } from '@/components/services/closure-notify'
 import { updateContactField, updateContactName, addContactNote } from '@/app/(dashboard)/contacts/[id]/actions'
+import { ChangeLoginEmailStaffDialog } from '@/components/contacts/change-login-email-staff-dialog'
+import { LOGIN_LINKED_ERROR } from '@/lib/portal/login-email-change-staff-shared'
 import { updateAccountContactRole, toggleDocumentPortalVisibility } from '@/app/(dashboard)/accounts/actions'
 import { useShareMessagePrompt, suppressesAutoChat, isSilentShow, type ShareDecision } from '@/components/storage/use-share-message-prompt'
 import { useWorkspaceStepPrompt } from '@/components/storage/use-workspace-step-prompt'
@@ -187,6 +196,8 @@ interface PortalAuth {
   lastLogin: string | null
   createdAt: string | null
   suspended: boolean
+  /** The email the client really signs in with (found by the contact id), or null when no client login is linked. */
+  loginEmail?: string | null
 }
 
 interface ContactDocumentRecord {
@@ -293,6 +304,11 @@ interface ContactDetailProps {
   stagesByServiceType?: Record<string, PipelineStage[]>
   /** Contact-scoped flows (ITIN, …) — rendered as flow chips. */
   flows?: ResolvedFlow[]
+  /** Signed contracts card (Overview): the contracts this person signed, read from where they already are. */
+  signedContracts?: SignedContractEntry[]
+  signedContractsError?: string | null
+  /** Only an owner may correct a saved installment amount. */
+  canEditSignedAmounts?: boolean
 }
 
 // ─── Main Component ───
@@ -312,9 +328,15 @@ export function ContactDetail({
   stepperDeliveries = [],
   stagesByServiceType = {},
   flows = [],
+  signedContracts = [],
+  signedContractsError = null,
+  canEditSignedAmounts = false,
 }: ContactDetailProps) {
   const router = useRouter()
   const [activeTab, setActiveTab] = useState('overview')
+  // the Signed contracts lines live here, not inside the card: the Overview tab (and the card) is dropped when another tab opens,
+  // so a corrected amount held only in the card would show the old one again on coming back
+  const [signedEntries, setSignedEntries] = useState(signedContracts)
   // an upload / group action is running in the Documents tab's storage screen: leaving the tab would close it mid-way
   const [storeBusy, setStoreBusy] = useState(false)
   const [showChainAudit, setShowChainAudit] = useState(false)
@@ -323,8 +345,16 @@ export function ContactDetail({
   const [showWhatsApp, setShowWhatsApp] = useState(false)
   const [chatUnread, setChatUnread] = useState(0)
 
+  // "Change login email" (staff): opened from the Portal tab, or from the Email box when the contact HAS a portal login
+  const [loginEmailDialog, setLoginEmailDialog] = useState<{ initial?: string } | null>(null)
+
   const makeContactSaver = (field: string) => async (value: string) => {
     const result = await updateContactField(contact.id, field, value, contact.updated_at)
+    // The contact has a portal login: the Email box must not change the contact alone, so open the real change instead
+    if (field === 'email' && !result.success && result.error === LOGIN_LINKED_ERROR) {
+      setLoginEmailDialog({ initial: value })
+      return { success: true }
+    }
     if (result.success) toast.success('Saved')
     else toast.error(result.error ?? 'Failed')
     return result
@@ -408,6 +438,7 @@ export function ContactDetail({
             to={contact.email || undefined}
             linkLabel={contact.full_name || contact.email || undefined}
           />
+          <MessageContactButton contactId={contact.id} contactName={contact.full_name || ''} />
           {(contact.phone || contact.phone_2 || contact.phone_3 || contact.phone_4) && (
             <button
               onClick={() => setShowWhatsApp(true)}
@@ -532,6 +563,10 @@ export function ContactDetail({
           offers={offers}
           pendingActivations={pendingActivations}
           wizardProgress={wizardProgress}
+          signedContracts={signedEntries}
+          onSignedContractCorrected={(next) => setSignedEntries((prev) => replaceEntry(prev, next))}
+          signedContractsError={signedContractsError}
+          canEditSignedAmounts={canEditSignedAmounts}
         />
       )}
       {activeTab === 'services' && (
@@ -559,7 +594,7 @@ export function ContactDetail({
         <ChatTab contactId={contact.id} onUnreadChange={setChatUnread} />
       )}
       {activeTab === 'portal' && (
-        <PortalTab contact={contact} portalAuth={portalAuth} accounts={accounts} />
+        <PortalTab contact={contact} portalAuth={portalAuth} accounts={accounts} onChangeLoginEmail={() => setLoginEmailDialog({})} />
       )}
       {activeTab === 'health' && (
         <ContactHealthPanel contactId={contact.id} contactName={contact.full_name} />
@@ -591,6 +626,15 @@ export function ContactDetail({
           contactId={contact.id}
           name={contact.full_name || contact.email || 'this contact'}
           phone={(contact.phone || contact.phone_2 || contact.phone_3 || contact.phone_4) as string}
+        />
+      )}
+
+      {loginEmailDialog && (
+        <ChangeLoginEmailStaffDialog
+          contactId={contact.id}
+          initialEmail={loginEmailDialog.initial}
+          onClose={() => setLoginEmailDialog(null)}
+          onChanged={() => { setLoginEmailDialog(null); router.refresh() }}
         />
       )}
 
@@ -645,6 +689,10 @@ function OverviewTab({
   offers,
   pendingActivations,
   wizardProgress,
+  signedContracts,
+  onSignedContractCorrected,
+  signedContractsError,
+  canEditSignedAmounts,
 }: {
   contact: ContactRecord
   accounts: LinkedAccount[]
@@ -653,6 +701,10 @@ function OverviewTab({
   offers: OfferRecord[]
   pendingActivations: PendingActivationRecord[]
   wizardProgress: WizardProgressRecord[]
+  signedContracts: SignedContractEntry[]
+  onSignedContractCorrected: (next: SignedContractEntry) => void
+  signedContractsError: string | null
+  canEditSignedAmounts: boolean
 }) {
   const [note, setNote] = useState('')
   const [addingNote, setAddingNote] = useState(false)
@@ -854,15 +906,23 @@ function OverviewTab({
         )}
       </div>
 
-      {/* Offer Status Card */}
-      <OfferStatusCard
-        offers={offers}
-        contactId={contact.id}
-        contactName={contact.full_name ?? ''}
-        contactEmail={contact.email ?? ''}
-        contactLanguage={contact.language}
-        pendingActivations={pendingActivations}
-      />
+      {/* Offers, and directly under them the contracts the client signed after reading them (one grid cell, so they stay together) */}
+      <div className="space-y-6">
+        <OfferStatusCard
+          offers={offers}
+          contactId={contact.id}
+          contactName={contact.full_name ?? ''}
+          contactEmail={contact.email ?? ''}
+          contactLanguage={contact.language}
+          pendingActivations={pendingActivations}
+        />
+        <SignedContractsCard
+          entries={signedContracts}
+          onEntryCorrected={onSignedContractCorrected}
+          loadError={signedContractsError}
+          canEditAmounts={canEditSignedAmounts}
+        />
+      </div>
 
       {/* Wizard Progress Card */}
       <WizardProgressCard wizardProgress={wizardProgress} pendingActivations={pendingActivations} contactId={contact.id} />
@@ -1155,7 +1215,10 @@ function QuickActionsBar({
             contract_type: paymentOffer.contract_type,
             bundled_pipelines: paymentOffer.bundled_pipelines,
             currency: paymentOffer.currency ?? null,
-            cost_summary: (paymentOffer.cost_summary ?? null) as Array<{ label: string; total?: string; items?: Array<{ name: string; price: string }> }> | null,
+            // a list saved as text is read as a real list (dev job 20600f18); no breakdown stays null
+            cost_summary: paymentOffer.cost_summary == null
+              ? null
+              : listOrEmpty<{ label: string; total?: string; items?: Array<{ name: string; price: string }> }>(paymentOffer.cost_summary),
           } : null}
         />
       )}
@@ -1481,7 +1544,7 @@ function OfferStatusCard({
   const offersData: OfferData[] = offers.map((o) => ({
     ...o,
     view_count: o.view_count ?? 0,
-    cost_summary: o.cost_summary as OfferData['cost_summary'],
+    cost_summary: o.cost_summary == null ? null : listOrEmpty<NonNullable<OfferData['cost_summary']>[number]>(o.cost_summary),
     required_documents: o.required_documents as OfferData['required_documents'],
   }))
 
@@ -1710,6 +1773,23 @@ interface GmailThread {
   messageCount: number
 }
 
+/**
+ * The Chat tab box's "who and which topic" choices (Antonio 2026-11-16: "change the old box"): the SAME choices as the Message window
+ * (shared state + fields in components/storage/message-target-fields.tsx), shown above the box so the old box keeps its paperclip, AI
+ * polish and suggestions. It reports the chosen destination up (null until one is chosen).
+ */
+function ChatDestination({ ctx, onChange }: { ctx: MessageTargetContext; onChange: (s: MessageSelection | null) => void }) {
+  const t = useMessageTarget(ctx, true)
+  const sel = t.selection
+  const key = sel ? `${sel.target.key}|${sel.topic}|${sel.addressedToMemberId ?? ''}|${sel.addressedToCompany}` : ''
+  useEffect(() => { onChange(sel) }, [key]) // eslint-disable-line react-hooks/exhaustive-deps -- `key` is the identity of `sel`
+  return (
+    <div className="space-y-3 border-t px-3 py-3 text-sm">
+      <MessageTargetFields t={t} ctx={ctx} isMessage />
+    </div>
+  )
+}
+
 function ChatTab({
   contactId,
   onUnreadChange,
@@ -1737,6 +1817,11 @@ function ChatTab({
   // Cross-border advisory notes (dev job 09cc3aec) — INTERNAL ONLY, never
   // auto-inserted into draft. Same contract as the Portal Chats page.
   const [crossBorderNotes, setCrossBorderNotes] = useState<{ lens: string; label: string; status: string; text: string }[]>([])
+  // Who the box writes to: loaded like the Message window's choices. If they cannot be loaded the box behaves as it always did (the
+  // person's own personal chat) rather than refusing to send.
+  const [destCtx, setDestCtx] = useState<MessageTargetContext | null>(null)
+  const [destState, setDestState] = useState<'loading' | 'ready' | 'failed'>('loading')
+  const [destination, setDestination] = useState<MessageSelection | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -1748,6 +1833,15 @@ function ChatTab({
     el.style.height = 'auto'
     el.style.height = Math.min(el.scrollHeight, 120) + 'px'
   }, [draft])
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/contacts/${encodeURIComponent(contactId)}/message-context`, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error('no destinations'))))
+      .then((d) => { if (!cancelled && d?.askable) { setDestCtx(d as MessageTargetContext); setDestState('ready') } else if (!cancelled) setDestState('failed') })
+      .catch(() => { if (!cancelled) setDestState('failed') })
+    return () => { cancelled = true }
+  }, [contactId])
 
   const fetchMessages = useCallback(async () => {
     try {
@@ -1771,6 +1865,15 @@ function ChatTab({
     fetchMessages()
   }, [fetchMessages])
 
+  // A message written from the header's Message button lands in this timeline without a page reload.
+  useEffect(() => {
+    const onSent = (e: Event) => {
+      if ((e as CustomEvent<{ contactId?: string }>).detail?.contactId === contactId) void fetchMessages()
+    }
+    window.addEventListener(CONTACT_CHAT_SENT_EVENT, onSent)
+    return () => window.removeEventListener(CONTACT_CHAT_SENT_EVENT, onSent)
+  }, [contactId, fetchMessages])
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
@@ -1792,6 +1895,12 @@ function ChatTab({
 
   const handleSend = async () => {
     if ((!draft.trim() && pendingFiles.length === 0) || sending) return
+    // With the choices loaded, a destination must be picked first (a message to the wrong chat can reach every member of a company).
+    const dest = destState === 'ready' ? destination : null
+    if (destState === 'ready' && !dest) {
+      toast.error('Pick who the message goes to first.')
+      return
+    }
     setSending(true)
     const filesToSend = pendingFiles
     const msg = draft.trim()
@@ -1804,8 +1913,9 @@ function ChatTab({
       if (filesToSend.length > 0) {
         setUploading(true)
         try {
+          const scope = dest?.target.kind === 'company' ? { accountId: dest.target.accountId } : { contactId }
           uploaded = await Promise.all(filesToSend.map((pf) =>
-            uploadChatAttachment(pf.file, { contactId })
+            uploadChatAttachment(pf.file, scope)
           ))
         } finally {
           setUploading(false)
@@ -1814,11 +1924,11 @@ function ChatTab({
       const res = await fetch('/api/portal/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contact_id: contactId,
-          message: msg,
-          attachments: uploaded,
-        }),
+        body: JSON.stringify(
+          dest
+            ? buildShareChatBody({ ...dest, message: msg, attachments: uploaded })
+            : { contact_id: contactId, message: msg, attachments: uploaded },
+        ),
       })
       if (!res.ok) {
         const err = await res.json()
@@ -2095,6 +2205,9 @@ function ChatTab({
             ))}
           </div>
         )}
+
+        {/* Who and which topic — the same choices as the Message window */}
+        {destState === 'ready' && destCtx && <ChatDestination ctx={destCtx} onChange={setDestination} />}
 
         {/* Send area — portal chat style */}
         <div className="border-t p-3">
@@ -2509,10 +2622,12 @@ function PortalTab({
   contact,
   portalAuth,
   accounts,
+  onChangeLoginEmail,
 }: {
   contact: ContactRecord
   portalAuth: PortalAuth
   accounts: LinkedAccount[]
+  onChangeLoginEmail: () => void
 }) {
   const [loading, setLoading] = useState<string | null>(null)
   const [tier, setTier] = useState(contact.portal_tier ?? '')
@@ -2702,8 +2817,18 @@ function PortalTab({
           )}
 
           <div className="flex items-center justify-between">
-            <span className="text-sm text-muted-foreground">Email</span>
-            <span className="text-sm">{contact.email ?? '—'}</span>
+            <span className="text-sm text-muted-foreground">Login email</span>
+            <span data-testid="portal-login-email" className="text-sm">{portalAuth.loginEmail ?? '—'}</span>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-muted-foreground">Contact email</span>
+            <span
+              data-testid="portal-contact-email"
+              className={cn('text-sm', portalAuth.loginEmail && contact.email && portalAuth.loginEmail.trim().toLowerCase() !== contact.email.trim().toLowerCase() && 'text-amber-700 font-medium')}
+            >
+              {contact.email ?? '—'}
+            </span>
           </div>
         </div>
       </div>
@@ -2794,6 +2919,18 @@ function PortalTab({
               )}
             </div>
           )}
+
+          {/* Change the email the client signs in with — right away, no code, login + contact together, both addresses told
+              (dev job beb43385, step 3). Visible even when the Account row above says "Not created": a login whose email
+              drifted from the contact's is found by the contact id, and the dialog says plainly when there is none. */}
+          <button
+            onClick={onChangeLoginEmail}
+            data-testid="change-login-email-button"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-red-200 bg-red-50 text-red-700 text-sm font-medium hover:bg-red-100 transition-colors mt-3"
+          >
+            <KeyRound className="h-4 w-4" />
+            Change login email
+          </button>
 
           {/* Reconcile Portal Tier — P3.4 #2. Visible regardless of portalExists
               because tier drift (contact vs linked accounts vs auth user) can

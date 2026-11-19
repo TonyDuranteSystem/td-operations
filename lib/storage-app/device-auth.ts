@@ -14,7 +14,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { isStoreStaffUser } from "@/lib/crm-store/access"
 import { resolveMfaGate } from "@/lib/auth/mfa-gate"
 import { getSettings } from "./settings"
-import { isOnAllowList, loadAllowList } from "./allow-list"
+import { isOnAllowList, loadAllowList, loadAllowListStrict } from "./allow-list"
 import {
   ACCESS_TTL_MS, CODE_TTL_MS, DEVICE_MAX_AGE_MS, REFRESH_GRACE_MS,
   hashSecret, newSecret, verifyPkce, isValidChallenge, isValidLoopbackRedirect, cleanDeviceName, truncateIp,
@@ -37,7 +37,7 @@ export async function logAppEvent(event: string, actor: string | null, details: 
 }
 
 export class DeviceAuthError extends Error {
-  constructor(public code: "invalid_request" | "invalid_grant" | "access_denied" | "device_revoked", message: string) { super(message) }
+  constructor(public code: "invalid_request" | "invalid_grant" | "access_denied" | "device_revoked" | "temporarily_unavailable", message: string) { super(message) }
 }
 
 export interface TokenPair { access_token: string; refresh_token: string; token_type: "Bearer"; expires_in: number; device_id: string }
@@ -79,6 +79,59 @@ async function liveUser(userId: string): Promise<User | null> {
   const { data, error } = await supabaseAdmin.auth.admin.getUserById(userId)
   if (error || !data?.user) return null
   return data.user
+}
+
+/** What reading a login from the auth server gave: the person, "this login does not exist", or "could not read it just now". */
+export type UserRead = { kind: "ok"; user: User } | { kind: "gone" } | { kind: "error" }
+
+export async function readUser(userId: string): Promise<UserRead> {
+  try {
+    const { data, error } = await supabaseAdmin.auth.admin.getUserById(userId)
+    if (error) {
+      const status = (error as { status?: number }).status
+      return status === 404 || /not.?found/i.test(error.message ?? "") ? { kind: "gone" } : { kind: "error" }
+    }
+    return data?.user ? { kind: "ok", user: data.user } : { kind: "gone" }
+  } catch { return { kind: "error" } }
+}
+
+export type AccessDecision = { kind: "allowed"; user: User } | { kind: "denied"; reason: string } | { kind: "unavailable" }
+
+/**
+ * PURE (job 1992a087, 2026-11-13): turn what was READ into a decision. A read that FAILED is "unavailable" (try again in a minute) and must never
+ * be treated as "not allowed" — before this, a short database or auth hiccup made every renewal sign the Mac out for good (the refresh token was
+ * already used up), and the person had to be approved again. Only a login that was READ and does not qualify is refused.
+ */
+export function decideAccess(read: UserRead, allowList: string[] | null, requireSecondFactor: boolean): AccessDecision {
+  if (read.kind === "error" || allowList === null) return { kind: "unavailable" }
+  const crm = userMayUseApp(read.kind === "ok" ? read.user : null, requireSecondFactor)
+  if (crm.ok === false) return { kind: "denied", reason: crm.reason }
+  if (read.kind !== "ok") return { kind: "denied", reason: "no such user" }
+  if (!isOnAllowList(read.user.email, allowList)) return { kind: "denied", reason: "not on the allow-list" }
+  return { kind: "allowed", user: read.user }
+}
+
+/** Reads the login, the allow-list and the settings, then decides. Anything that cannot be read is "unavailable", never "denied". */
+export async function checkAccess(userId: string): Promise<AccessDecision> {
+  try {
+    const [read, allowList, settings] = await Promise.all([readUser(userId), loadAllowListStrict(), getSettings()])
+    return decideAccess(read, allowList, settings.requireSecondFactor)
+  } catch { return { kind: "unavailable" } }
+}
+
+export const UNAVAILABLE_MESSAGE = "The CRM could not check this login just now. Try again in a minute."
+
+/** When this Mac must be approved again (the 30-day cap from its first sign-in), or null if the device is unknown. */
+export function signInExpiry(createdAt: string | null | undefined): string | null {
+  const t = createdAt ? new Date(createdAt).getTime() : NaN
+  return Number.isFinite(t) ? new Date(t + DEVICE_MAX_AGE_MS).toISOString() : null
+}
+
+export async function deviceSignInExpiry(deviceId: string): Promise<string | null> {
+  try {
+    const { data } = await db().from("storage_app_devices").select("created_at").eq("id", deviceId).maybeSingle()
+    return signInExpiry(data?.created_at)
+  } catch { return null }
 }
 
 /** Step 1 (called by the approval route, after the CRM login + two-step check): make a single-use code. */
@@ -174,6 +227,13 @@ export async function refreshTokens(p: { refreshToken: unknown; ip?: string | nu
   if (new Date(row.expires_at).getTime() <= Date.now() || new Date(dev.created_at).getTime() + DEVICE_MAX_AGE_MS <= Date.now()) {
     throw new DeviceAuthError("invalid_grant", "This device must be approved again.")
   }
+  // BEFORE the token is used up: a read that failed must not cost the Mac its sign-in (the Mac keeps its tokens and asks again in a minute)
+  const access = await checkAccess(dev.user_id)
+  if (access.kind === "unavailable") throw new DeviceAuthError("temporarily_unavailable", UNAVAILABLE_MESSAGE)
+  if (access.kind === "denied") {
+    await revokeDevice(row.device_id, `user_not_allowed: ${access.reason}`)
+    throw new DeviceAuthError("access_denied", NOT_ALLOWED)
+  }
   const { data: won } = await db().from("storage_app_tokens")
     .update({ used_at: new Date().toISOString() }).eq("id", row.id).is("used_at", null).select("id").maybeSingle()
   if (!won) {
@@ -185,11 +245,6 @@ export async function refreshTokens(p: { refreshToken: unknown; ip?: string | nu
       await revokeDevice(row.device_id, "refresh_token_reuse")
       throw new DeviceAuthError("device_revoked", "This device was signed out (token reused).")
     }
-  }
-  const may = await mayUseAppNow(await liveUser(dev.user_id))
-  if (may.ok === false) {
-    await revokeDevice(row.device_id, `user_not_allowed: ${may.reason}`)
-    throw new DeviceAuthError("access_denied", NOT_ALLOWED)
   }
   await db().from("storage_app_devices").update({ last_seen_at: new Date().toISOString(), last_ip_trunc: truncateIp(p.ip) }).eq("id", row.device_id)
   return issuePair(row.device_id)
@@ -208,8 +263,10 @@ export async function verifyAccessToken(token: string, ip?: string | null): Prom
   if (new Date(row.expires_at).getTime() <= Date.now()) return null
   if (new Date(dev.created_at).getTime() + DEVICE_MAX_AGE_MS <= Date.now()) return null
   if (Date.now() - new Date(dev.last_seen_at ?? dev.created_at).getTime() > (await getSettings()).leaseHours * 3_600_000) return null     // the 24-hour lease, server side
-  const user = await liveUser(dev.user_id)
-  if (!user || !(await mayUseAppNow(user)).ok) return null
+  const access = await checkAccess(dev.user_id)
+  if (access.kind === "unavailable") throw new DeviceAuthError("temporarily_unavailable", UNAVAILABLE_MESSAGE)   // not "signed out": the Mac keeps its tokens and asks again
+  if (access.kind !== "allowed") return null
+  const user = access.user
   // keep "last seen" fresh without a write on every request
   if (!dev.last_seen_at || Date.now() - new Date(dev.last_seen_at).getTime() > 60_000) {
     await db().from("storage_app_devices").update({ last_seen_at: new Date().toISOString(), last_ip_trunc: truncateIp(ip) }).eq("id", row.device_id)

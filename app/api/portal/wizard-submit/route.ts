@@ -26,6 +26,7 @@ import { isClient } from '@/lib/auth'
 import { enqueueJob, completeJob, failJob, type Job } from '@/lib/jobs/queue'
 import { getSubmissionTable, getJobType, isBankingInlineType } from '@/lib/portal/wizard-map'
 import { buildSubmissionRecord, preserveReviewedStatus } from '@/lib/portal/submission-record'
+import { forceLoginEmail } from '@/lib/portal/login-email-field'
 import { buildSubmissionToken } from '@/lib/portal/submission-token'
 import { resolveClosureSubmissionToken } from '@/lib/portal/closure-submission-token'
 import { accountIdForWizardSubmission } from '@/lib/portal/wizard-scope'
@@ -106,7 +107,7 @@ export async function POST(req: NextRequest) {
   // submission could be filed under — and write personal data onto — someone else's record).
   if (identity.kind === 'teammate' && contact_id) {
     const { data: link, error: linkErr } = await supabaseAdmin
-      .from('account_contacts').select('contact_id').eq('account_id', identity.accountId).eq('contact_id', contact_id).limit(1).maybeSingle()
+      .from('account_contacts').select('contact_id').is('access_revoked_at', null).eq('account_id', identity.accountId).eq('contact_id', contact_id).limit(1).maybeSingle()
     if (linkErr || !link) return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
 
@@ -303,6 +304,19 @@ export async function POST(req: NextRequest) {
         { status: 400 },
       )
     }
+  }
+
+  // Formation and onboarding: the owner Email box is the client's portal LOGIN email (dev job beb43385). Whatever the browser
+  // sent for it is replaced by the real login email here, so a hand-made request cannot slip a different address onto the
+  // submission. A team login (no contact) and every other wizard are left exactly as they were.
+  if (typeof data === 'object' && data !== null && !Array.isArray(data)) {
+    const forced = forceLoginEmail({
+      wizardType: wizard_type,
+      contactId: identity.kind === 'contact' ? identity.contactId : null,
+      authEmail: user.email,
+      data: data as Record<string, unknown>,
+    })
+    if (forced !== data) Object.assign(data, forced)
   }
 
   const validation = validateWizardData(wizard_type, data as Record<string, unknown>, entity_type)

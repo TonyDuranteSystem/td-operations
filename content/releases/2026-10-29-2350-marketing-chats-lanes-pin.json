@@ -1,0 +1,11 @@
+{
+  "title": "TD Marketing chats: pin, Mark unread, two chats per lead, and the setter sees less",
+  "tag": "improved",
+  "text": "Marketing chats got the tools of a normal chat: emoji, reply, edit on your own message, Mark unread, and Pin/Unpin with an amber pinned bar at the top. A new message no longer moves a lead card to another column; the card stays in its stage with a blinking New message tag. Every lead now has two chats: Antonio with Rocco, and Rocco with the setter.",
+  "points": [
+    "The setter no longer sees the seller's side of a lead: his notes, the booking and payment links, or that it was paid. Such a lead shows as With the seller.",
+    "View as now shows exactly what that role sees, and it ends by itself when Antonio opens his own Marketing section.",
+    "Voice notes in a lead chat warn \"No sound yet\" after a few seconds of silence and are not sent if the microphone recorded nothing.",
+    "Antonio sees his own Marketing menu on every Marketing screen; Word and Excel files open in Documents; the setter has no Documents by default."
+  ]
+}

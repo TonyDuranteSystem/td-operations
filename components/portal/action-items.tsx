@@ -3,6 +3,7 @@
 import { FileText, CreditCard, PenLine, CheckCircle2, ListChecks } from 'lucide-react'
 import type { ActionItem, ActionItemsResult } from '@/lib/portal/queries'
 import { useLocale } from '@/lib/portal/use-locale'
+import { useAppMode } from '@/lib/app-mode/app-mode-context'
 import { interpolateString } from '@/lib/template-interpolation'
 
 interface ActionItemsProps {
@@ -54,9 +55,20 @@ function timeAgo(dateStr: string, t: (key: string) => string): string {
 export function ActionItems({ data }: ActionItemsProps) {
   const { items, counts } = data
   const { t } = useLocale()
+  const appMode = useAppMode()
 
   // Empty state
   if (items.length === 0) {
+    // Client iPhone app (dev job 056a70d0): one thin line instead of a whole box, so the client's own information stays on the first screen.
+    if (appMode) {
+      return (
+        <div data-testid="app-caught-up" className="flex min-h-[46px] items-center gap-2 rounded-2xl border border-green-200 bg-green-50 px-3.5 text-sm text-green-800">
+          <CheckCircle2 className="h-5 w-5 shrink-0 text-green-600" aria-hidden="true" />
+          <span className="font-semibold">{t('actionItems.allCaughtUp')}</span>
+          <span className="min-w-0 truncate text-green-600">{t('actionItems.noPendingActions')}</span>
+        </div>
+      )
+    }
     return (
       <div className="rounded-xl border border-green-200 bg-green-50 p-6 mb-6">
         <div className="flex items-center gap-3">

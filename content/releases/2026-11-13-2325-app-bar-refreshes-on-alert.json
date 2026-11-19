@@ -1,0 +1,16 @@
+{
+  "title": "Client app: the red numbers on the bottom bar update the moment an alert arrives",
+  "tag": "fixed",
+  "text": "In the client iPhone app, when a message or another alert arrives while the app is open, the numbers on the bottom bar (Chat, Documents, Sign Documents, TD Billing) now update right away. Before, they only changed after the client moved to another screen or came back to the app, so a client could see the alert banner and no red number. This needs the new app build (build 9) from TestFlight. The website is not affected.",
+  "points": [
+    "App: stay on Overview and send the client a chat message",
+    "The Chat tab shows a red 1 a few seconds after the banner",
+    "With the chat open, no number stays on the Chat tab"
+  ],
+  "stepsTitle": "What the app does when an alert arrives",
+  "steps": [
+    { "name": "Alert arrives", "detail": "The app is open; the banner shows." },
+    { "name": "Numbers asked at once", "detail": "The bar updates: a red 1 on Chat.", "flag": "new" },
+    { "name": "Asked again after 4 s", "detail": "So a message already read in the open chat clears.", "flag": "new" }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "title": "TD Storage Mac app 0.2.6 and 0.2.7: Finder stays fresh and changes arrive almost instantly",
+  "tag": "improved",
+  "text": "Two updates for the TD Storage Mac app. Version 0.2.6 fixes Finder staying out of date on an idle Mac, where a file saved on one Mac could be missing on another for hours: the always-running app now nudges Finder and catches up in smaller, faster steps. Version 0.2.7 makes a change reach a Mac in about a second, instead of waiting for the next check, by keeping a question open to the CRM.",
+  "points": [
+    "These are changes to the Mac app itself; a Mac gets them through the app's automatic update once the new version is offered.",
+    "Older versions of the app keep working as before.",
+    "Tested against the CRM; saving on one real Mac and seeing it on another was not yet checked when these shipped."
+  ]
+}

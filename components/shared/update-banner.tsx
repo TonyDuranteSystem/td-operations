@@ -3,6 +3,8 @@
 import { useState } from 'react'
 import { useSwUpdate } from '@/lib/hooks/use-sw-update'
 import { useReleaseCheck } from '@/lib/hooks/use-release-check'
+import { useReleaseNotes } from '@/lib/hooks/use-release-notes'
+import { ReleaseNotesPanel } from '@/components/releases/release-notes-panel'
 import { RefreshCw, X } from 'lucide-react'
 
 /**
@@ -24,6 +26,9 @@ export function UpdateBanner({ swPath, scope, locale, checkRelease = false }: { 
   const { updateAvailable, applyUpdate } = useSwUpdate(swPath, scope)
   const release = useReleaseCheck(checkRelease)
   const [closedFor, setClosedFor] = useState<string | null>(null)
+  // "See what's new" (dev job 616dc839): what the announced release changes, shown BEFORE anyone refreshes. Only the CRM bar carries it.
+  const described = useReleaseNotes(checkRelease && release.show ? release.live : null)
+  const [panelFor, setPanelFor] = useState<string | null>(null)
 
   const announcing = updateAvailable || release.show
   if (!announcing) return null
@@ -38,6 +43,9 @@ export function UpdateBanner({ swPath, scope, locale, checkRelease = false }: { 
     : isItalian ? 'Una nuova versione è disponibile' : 'A new version is available'
   const button = checkRelease ? 'Refresh' : isItalian ? 'Aggiorna ora' : 'Update Now'
 
+  const canDescribe = checkRelease && release.show && !!release.live && described.notes.length > 0
+  const panelOpen = canDescribe && panelFor === key
+
   const onApply = () => {
     if (updateAvailable) applyUpdate()
     // a waiting worker reloads the page when it takes over; without one (or if it does not), reload ourselves
@@ -45,9 +53,21 @@ export function UpdateBanner({ swPath, scope, locale, checkRelease = false }: { 
   }
 
   return (
-    <div data-update-banner="" role="status" className="fixed top-0 left-0 right-0 z-50 bg-blue-600 text-white px-4 py-2.5 flex items-center justify-center gap-3 text-sm shadow-lg animate-in slide-in-from-top-2 duration-300">
+    // one fixed holder: the bar, and under it (when open) the "See what's new" panel — so a bar that wraps on a phone pushes the panel down
+    <div className="fixed top-0 left-0 right-0 z-50">
+    <div data-update-banner="" role="status" className="bg-blue-600 text-white px-4 py-2.5 flex flex-wrap items-center justify-center gap-x-3 gap-y-2 text-sm shadow-lg animate-in slide-in-from-top-2 duration-300">
       <RefreshCw className="h-4 w-4 shrink-0" />
       <span className="font-medium">{text}</span>
+      {canDescribe && (
+        <button
+          type="button"
+          onClick={() => setPanelFor(panelOpen ? null : key)}
+          aria-expanded={panelOpen}
+          className="rounded-full border border-white/70 px-3 py-1 text-xs font-semibold hover:bg-blue-700 transition-colors"
+        >
+          {panelOpen ? 'Hide details' : "See what's new"}
+        </button>
+      )}
       <button
         onClick={onApply}
         className="bg-white text-blue-600 px-3 py-1 rounded-full text-xs font-bold hover:bg-blue-50 transition-colors"
@@ -64,6 +84,8 @@ export function UpdateBanner({ swPath, scope, locale, checkRelease = false }: { 
           <X className="h-4 w-4" />
         </button>
       )}
+    </div>
+    {panelOpen && <ReleaseNotesPanel notes={described.notes} more={described.more} onRefresh={onApply} onClose={() => setPanelFor(null)} />}
     </div>
   )
 }

@@ -107,6 +107,7 @@ export async function POST(request: NextRequest) {
     const { data: primary } = await supabaseAdmin
       .from("account_contacts")
       .select("contact_id")
+      .is("access_revoked_at", null)
       .eq("account_id", accountId)
       .eq("is_primary", true)
       .maybeSingle()

@@ -27,6 +27,7 @@ export async function getClientAccountIds(contactId: string): Promise<string[]> 
   const { data } = await supabaseAdmin
     .from("account_contacts")
     .select("account_id")
+    .is("access_revoked_at", null)
     .eq("contact_id", contactId)
 
   return (data ?? []).map((row) => row.account_id)

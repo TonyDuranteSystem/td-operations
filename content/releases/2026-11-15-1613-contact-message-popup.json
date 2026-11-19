@@ -1,0 +1,12 @@
+{
+  "title": "Write a portal chat message from the Contact page",
+  "tag": "new",
+  "text": "The Contact page has a new Message button next to Email. It opens a small window where you choose who the message goes to (the person's own chat or one of their companies), the topic (General, one already in that chat, or a new one) and, for a company with several members, who it is addressed to. Then you write the message and send it, without leaving the contact or opening Portal Chats. It goes out exactly like any other staff message, so the client gets the usual portal notification.",
+  "points": [
+    "Nothing is picked for you when there are several choices, so a message can't land in the wrong company's chat by accident. A closed company is greyed out and can't be chosen.",
+    "If the person has no portal login yet (or it is suspended), the window says so. The message is still saved in their chat.",
+    "A message you have typed is never thrown away: clicking outside the window does nothing, and if the send fails the window stays open and shows why.",
+    "The Chat tab on the same page updates by itself after you send."
+  ],
+  "screenshot": "contact-message-popup.png"
+}

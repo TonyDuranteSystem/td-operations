@@ -5,7 +5,7 @@ import { getClientTurnItems } from '@/lib/portal/client-turn-items'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
 import { resolveMailingAddress, formatAddressString, principalOfficeForClient, mailingForClient, shippingForClient, companyOfficialRow } from '@/lib/addresses'
 import { resolveMemberAddress, chooseWholeAddress } from '@/lib/members/member-address'
-import { mayIncludePersonalNull } from '@/lib/portal/chat-scope'
+import { hasSeparatePersonalChat, mayIncludePersonalNull } from '@/lib/portal/chat-scope'
 import { isClientVisiblePayment, filterClientVisibleExpenseMirrors } from '@/lib/portal/payment-visibility'
 import type { PortalAccount, PortalService } from '@/lib/types'
 import type { FlowStageRow, FlowStep } from '@/lib/flows/flow-progress'
@@ -26,6 +26,7 @@ export async function getPortalAccounts(contactId: string): Promise<PortalAccoun
   const { data: links } = await supabaseAdmin
     .from('account_contacts')
     .select('account_id, role, is_primary')
+    .is('access_revoked_at', null)
     .eq('contact_id', contactId)
 
   if (!links || links.length === 0) return []
@@ -58,7 +59,7 @@ export async function getPortalAccounts(contactId: string): Promise<PortalAccoun
  * (getPortalAccounts), so this is how the home page can still say "your company has been closed" (lib/portal/closed-company.ts).
  */
 export async function getClosedCompanyNames(contactId: string): Promise<string[]> {
-  const { data: links } = await supabaseAdmin.from('account_contacts').select('account_id').eq('contact_id', contactId)
+  const { data: links } = await supabaseAdmin.from('account_contacts').select('account_id').is('access_revoked_at', null).eq('contact_id', contactId)
   if (!links || links.length === 0) return []
   const { data } = await supabaseAdmin
     .from('accounts')
@@ -73,9 +74,10 @@ export async function getClosedCompanyNames(contactId: string): Promise<string[]
  * A switchable entity in the per-company chat chooser (2026-06-24).
  *  - 'company'  → a real account (its shared thread).
  *  - 'formation'→ an in-progress formation (no account yet) → personal-scope view.
- *  - 'personal' → a synthetic "Personal / General" home for the contact's
- *                 untagged messages, added ONLY when no sole-owned company can
- *                 host them and there's no formation already giving a personal view.
+ *  - 'personal' → the client's personal chat: their company-less messages with the team. Added for a client who belongs
+ *                 to a shared company or owns nothing alone, unless a company being set up already hosts those messages
+ *                 (hasSeparatePersonalChat in lib/portal/chat-scope.ts). It is a chat-only view (?personal=1), never the
+ *                 portal's selected company.
  */
 export interface PortalChatEntity {
   /** accountId | InProgressFormation.id | 'personal' */
@@ -84,9 +86,9 @@ export interface PortalChatEntity {
   label: string
   /** Real account id for company entities; null for formation/personal. */
   accountId: string | null
-  /** True when >1 contact is linked (shared MMLLC) — drives the send-popup warning. */
+  /** True when >1 contact is linked (shared MMLLC) — drives the "other members will see this message" line. */
   isShared: boolean
-  /** Sole-owned company → its view may include the contact's personal NULLs. */
+  /** Sole-owned company with no separate personal chat → its view also shows the contact's private (company-less) messages. */
   includePersonalNull: boolean
 }
 
@@ -97,48 +99,70 @@ export interface PortalChatEntity {
  * classification uses the SAME leak-proof predicate as the chat API
  * (mayIncludePersonalNull) — sole linked contact, never the free-text role.
  */
-export async function getChatEntities(contactId: string): Promise<PortalChatEntity[]> {
+/**
+ * The client's companies and, for each, who is linked to it — the ONE input both the chat entity list and the chat API's
+ * privacy decision read, so the two can never disagree about who owns what alone and who shares (dev job 58cb7a82).
+ */
+export async function getChatMembership(contactId: string): Promise<{
+  accounts: PortalAccount[]
+  membersByAccount: Map<string, string[]>
+  hasSoleOwned: boolean
+  hasShared: boolean
+}> {
   const accounts = await getPortalAccounts(contactId)
-  const entities: PortalChatEntity[] = []
-  let hasSoleOwned = false
-
+  const membersByAccount = new Map<string, string[]>()
   if (accounts.length > 0) {
-    const ids = accounts.map(a => a.id)
     const { data: links } = await supabaseAdmin
       .from('account_contacts')
       .select('account_id, contact_id')
-      .in('account_id', ids)
-    const membersByAccount = new Map<string, string[]>()
+      .is('access_revoked_at', null)
+      .in('account_id', accounts.map(a => a.id))
     for (const l of links ?? []) {
       const arr = membersByAccount.get(l.account_id) ?? []
       arr.push(l.contact_id)
       membersByAccount.set(l.account_id, arr)
     }
-    for (const a of accounts) {
-      const members = membersByAccount.get(a.id) ?? []
-      const includePersonalNull = mayIncludePersonalNull({
+  }
+  let hasSoleOwned = false
+  let hasShared = false
+  for (const a of accounts) {
+    const members = membersByAccount.get(a.id) ?? []
+    if (members.length > 1) hasShared = true
+    else if (members.length === 1 && members[0] === contactId) hasSoleOwned = true
+  }
+  return { accounts, membersByAccount, hasSoleOwned, hasShared }
+}
+
+export async function getChatEntities(contactId: string): Promise<PortalChatEntity[]> {
+  const { accounts, membersByAccount, hasSoleOwned, hasShared } = await getChatMembership(contactId)
+  const entities: PortalChatEntity[] = []
+  const formations = await getInProgressFormations(contactId)
+  // Does this client get a separate personal chat? (hasSeparatePersonalChat in lib/portal/chat-scope.ts holds the rule.)
+  const separatePersonal = hasSeparatePersonalChat({ hasSoleOwned, hasShared, hasFormation: formations.length > 0 })
+
+  for (const a of accounts) {
+    const members = membersByAccount.get(a.id) ?? []
+    entities.push({
+      id: a.id,
+      kind: 'company',
+      label: a.company_name,
+      accountId: a.id,
+      isShared: members.length > 1,
+      // A company owned alone shows the client's private messages inside it, unless they have a separate personal chat.
+      includePersonalNull: mayIncludePersonalNull({
         linkedContactCount: members.length,
         viewerIsSoleLinkedContact: members.length === 1 && members[0] === contactId,
-      })
-      if (includePersonalNull) hasSoleOwned = true
-      entities.push({
-        id: a.id,
-        kind: 'company',
-        label: a.company_name,
-        accountId: a.id,
-        isShared: members.length > 1,
-        includePersonalNull,
-      })
-    }
+        viewerHasSeparatePersonalChat: separatePersonal,
+      }),
+    })
   }
 
-  const formations = await getInProgressFormations(contactId)
   for (const f of formations) {
     entities.push({ id: f.id, kind: 'formation', label: f.label, accountId: null, isShared: false, includePersonalNull: false })
   }
 
-  // Personal home for untagged messages — only when nothing else hosts them.
-  if (!hasSoleOwned && formations.length === 0) {
+  // The personal chat: the client's private messages with the team, tied to the person and to no company.
+  if (separatePersonal) {
     entities.push({ id: 'personal', kind: 'personal', label: 'Personal', accountId: null, isShared: false, includePersonalNull: false })
   }
 
@@ -170,6 +194,7 @@ export async function getFormationAccount(contactId: string) {
   const { data: links } = await supabaseAdmin
     .from('account_contacts')
     .select('account_id')
+    .is('access_revoked_at', null)
     .eq('contact_id', contactId)
 
   if (!links || links.length === 0) return null
@@ -2203,6 +2228,7 @@ export async function getCompanyEmail(accountId: string): Promise<string | null>
   const { data: links } = await supabaseAdmin
     .from('account_contacts')
     .select('role, ownership_pct, contacts(email, created_at)')
+    .is('access_revoked_at', null)
     .eq('account_id', accountId)
 
   if (!links || links.length === 0) return null
@@ -2293,6 +2319,7 @@ export async function getProfileBannerStatus(contactId: string): Promise<Profile
   const { data: links } = await supabaseAdmin
     .from('account_contacts')
     .select('account_id')
+    .is('access_revoked_at', null)
     .eq('contact_id', contactId)
   const accountIds = (links ?? [])
     .map(l => l.account_id)

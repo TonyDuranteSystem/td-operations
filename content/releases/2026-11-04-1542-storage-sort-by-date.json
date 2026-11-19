@@ -1,0 +1,10 @@
+{
+  "title": "Storage: Sort by date puts a long folder into year and month folders",
+  "tag": "new",
+  "text": "A new Sort by date button (on the folder header and in the folder's ... menu) sorts every item whose name starts with a date, such as a pile of Zoom call folders, into real year and month sub-folders. You choose year only, year then month, or month only, how the month is written, and newest or oldest first. A preview shows the plan and nothing moves until you press Confirm. It works in hand-made folders in Business and My files.",
+  "points": [
+    "Items with no date in the name, fixed folders and name clashes stay where they are and are listed with the reason.",
+    "Run it again at any time: existing year and month folders are reused. Nothing is deleted; to undo, move items back by hand.",
+    "The folders are real, so the Mac app shows exactly what the CRM shows."
+  ]
+}

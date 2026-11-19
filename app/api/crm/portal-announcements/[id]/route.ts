@@ -36,6 +36,7 @@ export async function PATCH(
     dismissible?: boolean
     active_from?: string | null
     active_until?: string | null
+    app_only?: boolean
   } | null
   if (!body) return NextResponse.json({ error: 'Invalid body' }, { status: 400 })
 
@@ -51,12 +52,13 @@ export async function PATCH(
   }
   if ('active_from' in body) patch.active_from = body.active_from || null
   if ('active_until' in body) patch.active_until = body.active_until || null
+  if (typeof body.app_only === 'boolean') patch.app_only = body.app_only
 
   const { data, error } = await sb
     .from('portal_announcements')
     .update(patch)
     .eq('id', params.id)
-    .select('id, title, message, title_en, message_en, type, active, dismissible, active_from, active_until, created_at, updated_at')
+    .select('id, title, message, title_en, message_en, type, active, dismissible, active_from, active_until, app_only, created_at, updated_at')
     .single()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })

@@ -1,0 +1,17 @@
+{
+  "title": "A chat message you send now reliably reaches the client's iPhone lock screen",
+  "tag": "fixed",
+  "text": "When the team sends a chat message from the CRM, the portal chat tool or the flow workspaces, the alert to the client's browser and to the client iPhone app was sometimes cut off before it left, because the server stopped as soon as it had answered. The server now waits up to 4 seconds for the alert before it finishes, so a client with the app gets the lock-screen alert and the red number on the icon. The Send button can take up to 4 seconds longer only when the client has the app or a browser alert on. Other automatic alerts (reminders, invoices) are not changed yet.",
+  "points": [
+    "Send a chat message to a client who has the iPhone app",
+    "Their lock screen shows \"New message from Tony Durante LLC\"",
+    "The red number on the app icon goes up by one"
+  ],
+  "stepsTitle": "What happens when you send a chat message",
+  "steps": [
+    { "name": "Message saved", "detail": "The message appears in the client's chat." },
+    { "name": "Alert started", "detail": "To the client's browsers and to the iPhone app." },
+    { "name": "Server waits", "detail": "Up to 4 seconds, so the alert is not cut off.", "flag": "new" },
+    { "name": "Reply to you", "detail": "Send finishes; the client's phone has been told." }
+  ]
+}

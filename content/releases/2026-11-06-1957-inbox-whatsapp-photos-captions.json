@@ -1,0 +1,6 @@
+{
+  "title": "Inbox and WhatsApp fixes: attached photos, captions and Save this number",
+  "tag": "fixed",
+  "text": "Photos a client attaches in Gmail no longer vanish when you open the email from our stored copy: the picture or file chip shows again. The AI Worker can now read those photos too, and the worker's email-thread reader lists attached files. In WhatsApp, 'Save this number as...' starts with the name WhatsApp already gave, captions under photos and videos are shown, and a long message no longer pushes the Edit and Confirm & Send buttons off the screen.",
+  "points": []
+}

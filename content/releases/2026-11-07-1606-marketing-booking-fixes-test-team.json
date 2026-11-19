@@ -1,0 +1,10 @@
+{
+  "title": "Marketing: booking-link fixes, View as calls counted, and a test-team switch",
+  "tag": "improved",
+  "text": "When a client books through the booking link, the calendar entry a person made earlier for that lead is now removed from the seller's calendar instead of staying beside the new one. 'Change time' shows 'Loading times...' instead of briefly saying there are no free times. A call booked or cancelled in View as now counts, so the page no longer says there is no call when there is one. A team can also be marked as a test team that never receives real leads.",
+  "points": [
+    "The call warning no longer shows the same message twice.",
+    "Nine refusal messages that were English only now have Italian.",
+    "Lead intake skips a test team, it cannot be assigned leads, and it is hidden from the assign list."
+  ]
+}

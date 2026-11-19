@@ -55,13 +55,42 @@ export interface ChatNameInput {
   accountName?: string | null
   /** messaging_groups.group_name — the phone's saved contact name (or the sender's WhatsApp name). */
   savedName?: string | null
+  /** The newest real name the sender wrote under (see `pickSenderName`) — used only when nothing better exists. */
+  senderName?: string | null
   externalGroupId?: string | null
 }
 
-export function resolveChatName(i: ChatNameInput): string {
-  for (const linked of [i.contactName, i.leadName, i.accountName]) {
-    if (linked && linked.trim()) return linked.trim()
+export type ChatNameSource = "crm" | "phone" | "whatsapp" | "number"
+
+/** A name a sender gave themselves is usable only if it is a real name — not empty, a bare number, our own business name, or "TD Team". */
+export function isUsableSenderName(name: string | null | undefined, externalGroupId?: string | null): boolean {
+  return !isJunkChatName(name, externalGroupId) && (name ?? "").trim().toLowerCase() !== "td team"
+}
+
+/**
+ * The newest name the OTHER side wrote under (inbound messages, newest first), if it is a real name.
+ * A sender picks their own WhatsApp name, so it is only ever the last resort before the bare number — never proof of who they are.
+ */
+export function pickSenderName(senderNamesNewestFirst: Array<string | null | undefined>, externalGroupId?: string | null): string | null {
+  for (const n of senderNamesNewestFirst) {
+    if (isUsableSenderName(n, externalGroupId)) return (n as string).trim()
   }
-  if (!isJunkChatName(i.savedName, i.externalGroupId)) return (i.savedName as string).trim()
-  return formatChatPhone(i.externalGroupId)
+  return null
+}
+
+/**
+ * Name + where it came from, so the screen can mark a name that only the sender vouches for ("whatsapp") — the CRM link, then the name
+ * saved on the phone, then the sender's own WhatsApp name, then the bare number.
+ */
+export function resolveChatNameWithSource(i: ChatNameInput): { name: string; source: ChatNameSource } {
+  for (const linked of [i.contactName, i.leadName, i.accountName]) {
+    if (linked && linked.trim()) return { name: linked.trim(), source: "crm" }
+  }
+  if (!isJunkChatName(i.savedName, i.externalGroupId)) return { name: (i.savedName as string).trim(), source: "phone" }
+  if (isUsableSenderName(i.senderName, i.externalGroupId)) return { name: (i.senderName as string).trim(), source: "whatsapp" }
+  return { name: formatChatPhone(i.externalGroupId), source: "number" }
+}
+
+export function resolveChatName(i: ChatNameInput): string {
+  return resolveChatNameWithSource(i).name
 }

@@ -18,8 +18,8 @@ const createSD = vi.fn()
 vi.mock("@/lib/operations/service-delivery", () => ({ createSD: (...a: unknown[]) => createSD(...a) }))
 
 // Query router: which table + filters decide the fixture.
-let byOfferRows: Array<{ id: string; status: string }> = []
-let byOfferAfterCreateRows: Array<{ id: string }> | null = null
+let byOfferRows: Array<{ id: string; status: string; notes?: string | null }> = []
+let byOfferAfterCreateRows: Array<{ id: string; status?: string; notes?: string | null }> | null = null
 let openRows: Array<{ id: string; status: string; account_id: string | null }> = []
 let linkRows: Array<{ account_id: string }> = []
 let openErr: { message: string } | null = null
@@ -196,6 +196,36 @@ describe("createStartAtActivationSDs", () => {
     const steps = await createStartAtActivationSDs({ offerToken: "t", clientName: "X", contactId: "c1", selection: sel })
     expect(createSD).not.toHaveBeenCalled()
     expect(steps[0].status).toBe("existing")
+  })
+
+  it("a job the \"Start a new company\" button cancelled belongs to the replaced company → it does not count, the new company gets its own", async () => {
+    byOfferRows = [{ id: "sd-old-company", status: "cancelled", notes: "2026-11-17 — Service deactivated: The company was replaced by a new one (job new-1)." }]
+    const steps = await createStartAtActivationSDs({ offerToken: "t", clientName: "X", contactId: "c1", selection: sel })
+    expect(createSD).toHaveBeenCalledTimes(1)
+    expect(steps[0].status).toBe("created")
+  })
+
+  it("a job a person cancelled on purpose still counts, even when other notes mention a company", async () => {
+    byOfferRows = [{ id: "sd-staff-cancelled", status: "cancelled", notes: "2026-11-17 — Service deactivated: client changed their mind" }]
+    const steps = await createStartAtActivationSDs({ offerToken: "t", clientName: "X", contactId: "c1", selection: sel })
+    expect(createSD).not.toHaveBeenCalled()
+    expect(steps[0].status).toBe("existing")
+  })
+
+  it("an ACTIVE job whose notes quote the replacement words is still a real job", async () => {
+    byOfferRows = [{ id: "sd-live", status: "active", notes: "The company was replaced by a new one (typed by hand)" }]
+    const steps = await createStartAtActivationSDs({ offerToken: "t", clientName: "X", contactId: "c1", selection: sel })
+    expect(createSD).not.toHaveBeenCalled()
+    expect(steps[0].status).toBe("existing")
+  })
+
+  it("a failed create is NOT mistaken for a race win just because a replaced company's cancelled job exists", async () => {
+    byOfferRows = [{ id: "sd-old-company", status: "cancelled", notes: "Service deactivated: The company was replaced by a new one (job new-1)." }]
+    byOfferAfterCreateRows = [{ id: "sd-old-company", status: "cancelled", notes: "Service deactivated: The company was replaced by a new one (job new-1)." }]
+    createSD.mockImplementation(async () => { createAttempted = true; throw new Error("boom") })
+    const steps = await createStartAtActivationSDs({ offerToken: "t", clientName: "X", contactId: "c1", selection: sel })
+    expect(steps[0].status).toBe("error")
+    expect(reported.length).toBe(1)
   })
 
   it("an open closure added BY HAND (no offer token) → not duplicated, and reported with client + offer", async () => {

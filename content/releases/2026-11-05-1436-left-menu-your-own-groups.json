@@ -1,0 +1,11 @@
+{
+  "title": "Left menu: make your own groups, and WhatsApp is now its own page",
+  "tag": "new",
+  "text": "The left menu can now hold groups that open a submenu on the right. It starts with three: TD Social (TD Talk, Inbox, Marketing Chat, WhatsApp, Team Chat, Portal Chats), Accounting (Finance, My Finances) and Network (Leads, Contacts, Accounts). Each person can make, rename and delete groups and move pages in and out, and the layout is saved per login. WhatsApp now has its own page and the Inbox shows email only.",
+  "points": [
+    "Use Edit menu (bottom left) to drag pages and groups, or the three-dot menu on any page and Move to... (this also works on a phone).",
+    "Reset goes back to the standard groups.",
+    "The red Inbox number now counts only the mailboxes your login may open.",
+    "On a phone, the red Supabase warning bar no longer covers the menu."
+  ]
+}

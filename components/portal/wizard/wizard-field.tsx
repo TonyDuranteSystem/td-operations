@@ -1,9 +1,11 @@
 'use client'
 
 import { useId, useState } from 'react'
-import { Loader2, CheckCircle, AlertCircle, X } from 'lucide-react'
+import { Loader2, CheckCircle, AlertCircle, X, Lock } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useLocale } from '@/lib/portal/use-locale'
+import { MustReadBlock } from '@/components/portal/must-read-block'
+import { mustReadAckKey } from '@/lib/portal/login-email-field'
 import { interpolateString } from '@/lib/template-interpolation'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { MoneyInput } from '@/components/forms/money-input'
@@ -29,6 +31,19 @@ export interface FieldConfig {
   /** Always-visible strong (red) warning box above the field. Used to steer a
    *  high-stakes choice — e.g. "don't upload PDFs, they're slow and lossy". */
   danger?: { text: string; textIt?: string }
+  /** The big red "Read well before proceeding" block under the field, with an "I read it"
+   *  tick the step gate waits for (dev job beb43385). `lead` is the key sentence (bold),
+   *  `text` the rest. `extra*` is shown only when the wizard says so (a client who already
+   *  has a company). The tick is stored in the form data under `${name}_read`.
+   *  The wizard turns this on per client; a field without a locked value ignores it. */
+  lockedLabel?: string
+  lockedLabelIt?: string
+  mustRead?: {
+    lead: string; leadIt?: string
+    text?: string; textIt?: string
+    extraLead?: string; extraLeadIt?: string
+    extraText?: string; extraTextIt?: string
+  }
   prefilled?: boolean
   /** Domain minimum for `number` fields (e.g. 0 on money amounts — a negative
    *  dollar figure is never legitimate). Rendered as the input's min attribute
@@ -79,8 +94,15 @@ interface WizardFieldProps {
   onAiAssist?: (field: FieldConfig, currentValue: string) => Promise<string | null>
   locale: 'en' | 'it'
   error?: string
-  /** The answers given so far — only the `signature` field reads them (its letter preview names the company, EIN and owner). */
+  /** The answers given so far — the `signature` field reads them (its letter preview names the company, EIN and owner),
+   *  and a `mustRead` field reads its own "I read it" tick from them. */
   context?: Record<string, unknown>
+  /** The value is fixed by the system (the portal login email): drawn read-only with a lock, and a way to ask us to change it. */
+  locked?: boolean
+  /** Show the second paragraph of a `mustRead` block (a client who already has a company). */
+  showExtraNote?: boolean
+  /** A locked field can be changed by the client themselves (the login email: code sent to the new address). Given = a "Change" button; absent = the old "message us in chat" link. */
+  onChangeLocked?: () => void
 }
 
 // Full ISO 3166-1 country list (195 countries)
@@ -107,7 +129,7 @@ const COUNTRIES = [
   'United States','Uruguay','Uzbekistan','Vanuatu','Vatican City','Venezuela','Vietnam','Yemen','Zambia','Zimbabwe',
 ].sort()
 
-export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, locale, error, context }: WizardFieldProps) {
+export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, locale, error, context, locked = false, showExtraNote = false, onChangeLocked }: WizardFieldProps) {
   // Any language beyond en/it (dev job 12cab351) — loaded translations are
   // keyed by the field's own English text (lib/portal/wizard-translatable-
   // text.ts), so this MUST be layered under the existing it/en choice, not
@@ -141,7 +163,8 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
       setAiBusy(false)
     }
   }
-  const label = pick(field.label, field.labelIt)
+  const useLockedLabel = locked && !!field.lockedLabel
+  const label = pick(useLockedLabel ? field.lockedLabel : field.label, useLockedLabel ? field.lockedLabelIt : field.labelIt)
   const placeholder = pick(field.placeholder, field.placeholderIt)
   const hint = pick(field.hint, field.hintIt)
 
@@ -457,6 +480,18 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
             </div>
           )
         })()
+      ) : locked ? (
+        <div className="relative">
+          <input
+            type={field.type}
+            value={String(value ?? '')}
+            readOnly
+            disabled
+            aria-readonly="true"
+            className="w-full px-3 py-2 pr-9 text-sm border border-zinc-200 rounded-lg bg-zinc-50 text-zinc-600"
+          />
+          <Lock aria-hidden="true" className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+        </div>
       ) : isMoney ? (
         <MoneyInput
           id={inputId}
@@ -489,6 +524,48 @@ export function WizardField({ field, value, onChange, onFileUpload, onAiAssist, 
           className={inputClass}
         />
       )}
+
+      {locked && (
+        <p className="text-sm">
+          {onChangeLocked ? (
+            <button type="button" onClick={onChangeLocked} className="font-medium text-blue-600 hover:underline" data-testid="wizard-change-login-email">
+              {pick('Change login email', 'Cambia email di accesso')}
+            </button>
+          ) : (
+            <a href="/portal/chat" className="font-medium text-blue-600 hover:underline">
+              {pick('To change it, message us in chat.', 'Per cambiarla, scrivici in chat.')}
+            </a>
+          )}
+        </p>
+      )}
+
+      {field.mustRead && (() => {
+        const ackKey = mustReadAckKey(field.name)
+        const acked = context?.[ackKey] === true
+        const mr = field.mustRead
+        return (
+          <div className="pt-1">
+            <MustReadBlock
+              title={pick('Read well before proceeding.', 'Leggi bene prima di procedere.')!}
+              ackLabel={pick('I read it', 'Ho letto')!}
+              checked={acked}
+              invalid={!!error}
+              onCheckedChange={v => onChange(ackKey, v)}
+            >
+              <p>
+                <strong className="font-bold">{pick(mr.lead, mr.leadIt)}</strong>
+                {mr.text ? <> {pick(mr.text, mr.textIt)}</> : null}
+              </p>
+              {showExtraNote && mr.extraLead && (
+                <p>
+                  <strong className="font-bold">{pick(mr.extraLead, mr.extraLeadIt)}</strong>
+                  {mr.extraText ? <> {pick(mr.extraText, mr.extraTextIt)}</> : null}
+                </p>
+              )}
+            </MustReadBlock>
+          </div>
+        )
+      })()}
 
       {!isMoney && field.type === 'number' && field.min !== undefined && value !== '' && value !== null && value !== undefined &&
         !Number.isNaN(Number(value)) && Number(value) < field.min && (

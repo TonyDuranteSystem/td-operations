@@ -1,0 +1,11 @@
+{
+  "title": "Paid installments show their status even without an invoice number",
+  "tag": "fixed",
+  "text": "In the Accounts and Contacts lists, the small chip next to 1st Inst and 2nd Inst was blank for installments that were paid, overdue or waived but never got an invoice number (mostly the records brought over in March and April). They now show Paid, Overdue or Waived like any other installment. On the company page, the Annual Installments box shows the same status with \"No invoice number\", and no longer offers to create an invoice for an installment that is already paid.",
+  "points": [
+    "A $0 companion record and a placeholder still waiting for its invoice are ignored, so nothing shows Paid by mistake.",
+    "If a company has a numbered invoice, that invoice is the one shown.",
+    "Nothing about how a payment is marked paid, numbered or receipted changed."
+  ],
+  "screenshot": "paid-installments-show-their-chip.png"
+}

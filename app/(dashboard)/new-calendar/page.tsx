@@ -14,6 +14,8 @@ import { loadWaitingPayments } from '@/lib/incoming-payments/load'
 import type { WaitingRow } from '@/lib/incoming-payments/classify'
 import { canUseForms } from '@/lib/auth'
 import { loadWaitingApplications, type WaitingApplication } from '@/lib/bofa-intake/waiting'
+import { loadInvoicesToRaise, type InvoicesToRaise } from '@/lib/plan-invoices/load'
+import { getOfficeDateString } from '@/lib/portal/office-hours'
 
 /**
  * New Calendar (dev job 40235e3c, child of be7da01a): the day-by-day work list the team opens every morning — what is on us,
@@ -53,6 +55,15 @@ export default async function NewCalendarPage({ searchParams }: { searchParams: 
   }
   // Bank applications a client submitted that nobody has sent on yet. Same tolerance as the payments: if it cannot be read the
   // Calendar still opens, and only that tab says so.
+  // Later parts of a payment plan that need a person to raise an invoice (dev job ae3c19db). Read on EVERY tab (the tab shows a red count,
+  // and blinks when something is due), tolerant like the others: if it cannot be read the Calendar still opens, and only that tab says so.
+  let invoices: InvoicesToRaise | null = null
+  try {
+    invoices = await loadInvoicesToRaise(getOfficeDateString(now))
+  } catch (err) {
+    console.error('[new-calendar] invoices to raise could not be read:', err)
+    Sentry.captureException(err, { tags: { area: 'new-calendar-invoices' } })
+  }
   let applications: WaitingApplication[] | null = null
   if (seesApplications) {
     try {
@@ -98,5 +109,5 @@ export default async function NewCalendarPage({ searchParams }: { searchParams: 
     )
   }
 
-  return <NewCalendarView model={model} params={params} greeting={greeting} payments={payments} applications={applications} showApplications={seesApplications} />
+  return <NewCalendarView model={model} params={params} greeting={greeting} payments={payments} applications={applications} showApplications={seesApplications} invoices={invoices} />
 }

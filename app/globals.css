@@ -124,6 +124,18 @@
    the whole height it is given instead of leaving a dead strip at the bottom. */
 [data-app-mode="true"] .app-fill { height: 100%; }
 
+/* Invoicing in gray (dev job 056a70d0): inside the client iPhone app the invoicing screens (the Invoices page and the invoice form carry
+   data-app-gray) drop the website's blue for graphite grays. Only colours; every rule starts with the app marker. */
+[data-app-mode="true"] [data-app-gray] .text-blue-600,
+[data-app-mode="true"] [data-app-gray] .text-blue-700 { color: #374151; }
+[data-app-mode="true"] [data-app-gray] .text-blue-800,
+[data-app-mode="true"] [data-app-gray] .text-blue-900 { color: #1f2937; }
+[data-app-mode="true"] [data-app-gray] .bg-blue-600 { background-color: #2b2f36; }
+[data-app-mode="true"] [data-app-gray] .bg-blue-50,
+[data-app-mode="true"] [data-app-gray] .bg-blue-100 { background-color: #f3f4f6; }
+[data-app-mode="true"] [data-app-gray] .border-blue-200 { border-color: #e5e7eb; }
+[data-app-mode="true"] [data-app-gray] .focus\:ring-blue-500:focus { --tw-ring-color: #9ca3af; }
+
 /* Client iPhone app (dev job 056a70d0, Step 3): the website's always-visible cookie-preferences button floats in the bottom-right corner
    on every portal page and would sit on top of page content, just above the app's own bottom bar. Only that button is hidden inside the
    app; the cookie notice itself is not touched (it shows only when the consent tool decides to ask), and what the app says about cookies
@@ -131,6 +143,17 @@
 /* The consent tool's own rule is `display: inline-block !important` with three class-level parts, so this one names `body` and both of the
    button's classes to be more specific than it (a plain `.iubenda-tp-btn` rule loses). */
 [data-app-mode="true"] body .iubenda-tp-btn.iubenda-cs-preferences-link { display: none !important; }
+
+/* Client iPhone app (dev job 056a70d0, Antonio's phone test 12 Nov 2026): the consent tool also draws a "Notice at collection" + "Your Privacy Choices"
+   box at the very end of every page. On a phone it stacks into two big bordered boxes (and the app's 44 px button rule made them taller) and took
+   a fifth of the Chat screen. Inside the app it becomes ONE slim line of small links (still there: they are the privacy-law links), and on the Chat
+   screen, which is exactly one screen tall, it is not drawn at all (the Chat page carries data-app-screen="chat"). The tool's own phone rules
+   set the stacking and borders, so these name `body` and use !important where it also does or where the 44 px rule would win. */
+[data-app-mode="true"] body .iub__us-widget { padding: 4px 16px 12px; font-size: 12px; justify-content: flex-start; }
+[data-app-mode="true"] body .iub__us-widget__wrapper { flex-direction: row !important; flex-wrap: wrap; background: transparent; border: 0 !important; border-radius: 0; }
+[data-app-mode="true"] body .iub__us-widget__link { font-size: 12px; font-weight: 500; padding: 10px 14px 10px 0 !important; border: 0 !important; min-height: 0 !important; }
+[data-app-mode="true"] body .iub__us-widget__link--privacy-choices { flex-direction: row !important; margin-left: 0 !important; }
+[data-app-mode="true"]:has([data-app-screen="chat"]) body .iub__us-widget { display: none !important; }
 
 /* TD Social phone app, Portal chats (dev job 2072bc3e, Step 1b, fix-list item 6): the row of six tabs (Messages, What's New,
    Idea request, To Do, Email, Worker) does not fit 390 px, so inside the app it scrolls sideways and each tab keeps its own

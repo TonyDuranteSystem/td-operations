@@ -1,0 +1,30 @@
+{
+  "title": "Bank application: staff review it before it goes out (Reviewed, Submit, Send back)",
+  "tag": "new",
+  "text": "A bank application a client sends in is no longer emailed on its own. It waits under Calendar > Applications to review and on the Forms page; staff press Reviewed, then Submit to the bank contact after a confirmation box that shows exactly what leaves and where. Send back to client makes a new one-time link and emails the client a note, or Create link only to share it yourself. Only the owner can change the two address settings on the Forms card.",
+  "points": [
+    "Undo send back cancels the new link and restores the application, while nobody has opened the new link.",
+    "Staff are notified with \"Bank application RESUBMITTED\" when a client sends back a corrected application.",
+    "On the client form the Seminole shipping address is just a heading and three lines; the client never sees where the application goes.",
+    "iPhone photos are named by what is stored (.jpg); if a Submit may not have reached Gmail, staff are asked to check Sent mail first."
+  ],
+  "stepsTitle": "How a bank application goes out",
+  "steps": [
+    {
+      "name": "Client sends the application",
+      "detail": "It is no longer emailed on its own"
+    },
+    {
+      "name": "Waits for review",
+      "detail": "Calendar > Applications to review, and the Forms page. Or Send back to client with a new link."
+    },
+    {
+      "name": "Reviewed",
+      "detail": "Staff press Reviewed"
+    },
+    {
+      "name": "Submit",
+      "detail": "To the bank contact, after a confirmation box that shows what leaves and where"
+    }
+  ]
+}

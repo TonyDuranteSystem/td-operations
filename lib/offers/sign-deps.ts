@@ -7,6 +7,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { processOfferSigned } from '@/lib/offers/process-offer-signed'
 import { processAgreementSigned } from '@/lib/offers/process-agreement-signed'
 import type { SignDeps } from '@/lib/offers/sign-public-offer'
+import { multiAgreementsEnabled } from '@/lib/offers/multi-agreements-switch'
 import { sniffFileKind, MAX_SIGNED_PDF_BYTES, type SniffedKind } from '@/lib/offers/upload-sniff'
 
 /**
@@ -61,5 +62,6 @@ export const realSignDeps: SignDeps = {
   },
   processOfferSigned,
   processAgreementSigned,
+  multiAgreementsEnabled: () => multiAgreementsEnabled(),
   now: () => new Date(),
 }

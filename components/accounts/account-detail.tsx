@@ -41,13 +41,22 @@ import { PlaceClientWizard } from '@/app/(dashboard)/accounts/[id]/components/pl
 import { FileManager } from './file-manager'
 import { MoveToStorePanel } from '@/components/storage/move-to-store-panel'
 import { AccountDocumentsList } from './account-documents-list'
+import { BecameClientRow } from './became-client-row'
+import { SignedContractsCard } from './signed-contracts-card'
+import { ContractMismatchNote } from './contract-mismatch-note'
+import type { ContractMismatch } from '@/lib/signed-contracts/types'
+import type { AccountContractLine } from '@/lib/signed-contracts/account-lines'
+import type { GuessSummary } from '@/lib/accounts/became-client'
 import { StoreBusyScope, STORE_BUSY_HINT } from './store-busy'
 import { CorrespondenceUpload } from './correspondence-upload'
 import { AccountOfferPanel, type OfferData } from '@/components/offers/account-offer-panel'
 import { AccountJourney } from './account-journey'
+import { BankReferralsPanel } from './bank-referrals-panel'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { ClosureNotifyCheckbox, isClosureServiceType, showClosurePromptToast } from '@/components/services/closure-notify'
+import { ChangeLoginEmailStaffDialog } from '@/components/contacts/change-login-email-staff-dialog'
+import { LOGIN_LINKED_ERROR } from '@/lib/portal/login-email-change-staff-shared'
 import { updateAccountField as updateAccountFieldRaw, updateContactField as updateContactFieldRaw, addAccountNote, updateAccountContactRole as updateAccountContactRoleRaw, promoteAccountToActive, createDBA, updateDBADetails } from '@/app/(dashboard)/accounts/actions'
 import { StorageCheckBanner } from './storage-check-banner'
 import { notifyStorageCheck } from '@/lib/crm-store/storage-check-events'
@@ -74,7 +83,7 @@ import { differenceInDays, parseISO, format } from 'date-fns'
 import { HistoryOpeningsPanel } from '@/components/accounts/history-openings-panel'
 import type { Account, Contact, Service, Payment, Deal, TaxReturn } from '@/lib/types'
 import { resolveExtensionDeadline, type TaxReturnType } from '@/lib/tax/extension-deadline'
-import { isInstallment } from '@/lib/billing/payment-classification'
+import { findInstallmentInvoice } from '@/lib/billing/installment-invoices'
 import { stagingFileName } from '@/lib/storage/staging-name'
 
 const TABS = [
@@ -167,6 +176,12 @@ interface DocumentRecord {
 // again when the panel's data needs change.
 
 interface AccountDetailProps {
+  /** the guess for "How they became our client" worked out from the contract and dates (null when it could not be read) */
+  becameClientGuess?: GuessSummary | null
+  /** the company's signed contracts for the "Signed contract" line (null = could not be read; undefined = not loaded) */
+  signedContractLines?: AccountContractLine[] | null
+  /** signed contracts whose amounts differ from this company's installment amounts (null = the check could not run; undefined = not loaded) */
+  contractMismatches?: ContractMismatch[] | null
   account: Account
   /** Client-facing base URL for the current environment (server-computed). */
   appBaseUrl?: string
@@ -693,7 +708,7 @@ function ContactsSection({
   )
 }
 
-export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.us', contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offers = [], partnerName = null, pendingActivations = {}, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [], ss4Applications = [], ss4ServiceDeliveries = [], stepperDeliveries = [], stagesByServiceType = {}, dbaServiceDeliveries = [], flows = [] }: AccountDetailProps) {
+export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.us', contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offers = [], partnerName = null, pendingActivations = {}, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [], ss4Applications = [], ss4ServiceDeliveries = [], stepperDeliveries = [], stagesByServiceType = {}, dbaServiceDeliveries = [], flows = [], becameClientGuess = null, signedContractLines, contractMismatches }: AccountDetailProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
   // AccountJourney's progress tracker (Signed/Paid/Activated) still wants
@@ -874,7 +889,6 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
         hasSetupPayment={payments.some(p => p.status === 'Paid' && (p.description?.toLowerCase().includes('setup') || p.period === 'One-Time'))}
         hasPaidPayment={payments.some(p => p.status === 'Paid' && (p.amount_paid ?? 0) > 0)}
         allWizards={allWizards}
-        bankReferrals={bankReferrals}
       />
 
       {/* Offer Panel */}
@@ -887,7 +901,14 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
         offers={offers}
         isAdmin={isAdmin}
         pendingActivations={pendingActivations}
+        startClosed
       />
+
+      {/* Signed contracts — closed by default; opens each contract in the floating window */}
+      {signedContractLines !== undefined && <SignedContractsCard lines={signedContractLines} />}
+
+      {/* Partner Bank Applications: its own closed card (it used to sit inside the Account journey card) */}
+      <BankReferralsPanel entries={bankReferrals} standalone />
 
       {/* Documents to Sign Panel */}
       <DocumentsPanel
@@ -1030,7 +1051,7 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
       {/* Tab content */}
       {activeTab === 'overview' && (
         <>
-          <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} onOpenStatusDialog={() => setShowStatusDialog(true)} dbaServiceDeliveries={dbaServiceDeliveries} stagesByServiceType={stagesByServiceType} />
+          <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} onOpenStatusDialog={() => setShowStatusDialog(true)} dbaServiceDeliveries={dbaServiceDeliveries} stagesByServiceType={stagesByServiceType} becameClientGuess={becameClientGuess} contractMismatches={contractMismatches} />
           {/* Recent emails (auto-matched + linked) — visible without hunting
               for the Emails tab (Antonio 2026-07-08) */}
           <div className="px-4 pb-4">
@@ -1365,7 +1386,7 @@ function PaymentPlanPartsSection({ account }: { account: Account }) {
   )
 }
 
-function InstallmentsSection({ account, payments, makeAccountSaver }: { account: Account; payments: Payment[]; makeAccountSaver: (field: string) => (val: string) => Promise<{ success: boolean; error?: string }> }) {
+function InstallmentsSection({ account, payments, makeAccountSaver, contractMismatches }: { account: Account; payments: Payment[]; makeAccountSaver: (field: string) => (val: string) => Promise<{ success: boolean; error?: string }>; contractMismatches?: ContractMismatch[] | null }) {
   const [openForInst, setOpenForInst] = useState<1 | 2 | null>(null)
 
   const year = new Date().getFullYear()
@@ -1432,6 +1453,8 @@ function InstallmentsSection({ account, payments, makeAccountSaver }: { account:
     <>
       <div className="bg-white rounded-lg border p-5 space-y-4">
         <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">Annual Installments</h3>
+        {/* Amber when a signed contract does not match these amounts (Antonio 2026-11-15); gone by itself once they match. */}
+        {contractMismatches !== undefined && <ContractMismatchNote findings={contractMismatches} />}
         <div className="grid gap-3 text-sm">
           <EditableField icon={CreditCard} label="1st Installment" value={inst1Amount?.toString() ?? ''} onSave={makeAccountSaver('installment_1_amount')} />
           <EditableField icon={Globe} label="1st Currency" value={inst1Currency} type="select" options={[{ label: 'USD', value: 'USD' }, { label: 'EUR', value: 'EUR' }]} onSave={makeAccountSaver('installment_1_currency')} />
@@ -1455,38 +1478,9 @@ function InstallmentsSection({ account, payments, makeAccountSaver }: { account:
   )
 }
 
-/**
- * Which invoice(s) is this account's installment N for `year`? Uses the same
- * structured identity (account + payment_category + year, via isInstallment)
- * as the write-side duplicate guard in createTDInvoice — never amount or
- * description text, which is how the ShoppyVerse duplicate went unnoticed.
- *
- * Returns EVERY REAL match, not just one: when a duplicate invoice exists for
- * the same installment+year (the exact shape this fix is closing off going
- * forward, and the shape ShoppyVerse was already in), silently picking the
- * first one would hide the duplicate from staff instead of surfacing it.
- *
- * "Real" excludes a $0 / no-invoice-number row on top of isInstallment's own
- * live check (which now correctly excludes Cancelled/Voided/Credit — widened
- * 2026-09-01, bug-hunter council review — so a separate Voided/Credit filter
- * here would just be a second copy of the same rule; don't reintroduce one).
- * The $0 exclusion is a genuinely different concern isInstallment must NOT
- * absorb: production has a legitimate pattern (Partner Alliance LLC + Morgan
- * & Taylor International LLC, consolidated first-installment billing) of a
- * $0 companion record on the non-billed account so CRON ELIGIBILITY still
- * sees "installment paid" via isInstallment — but it is not a second REAL
- * invoice and must never trigger the duplicate warning here.
- * `payments` is already scoped to this account by the caller's query.
- */
-function findInstallmentInvoice(payments: Payment[], n: 1 | 2, year: number): Payment[] {
-  return payments.filter(p =>
-    isInstallment(p, n, { year }) &&
-    (Number(p.total) || 0) > 0 &&
-    !!p.invoice_number &&
-    p.invoice_number !== '1.0' &&
-    p.invoice_number !== '2.0'
-  )
-}
+// findInstallmentInvoice (which invoice(s) are this account's installment N for `year`) now lives in
+// lib/billing/installment-invoices.ts, shared with the chip on the Accounts and Contacts lists so the screens cannot disagree.
+// It returns EVERY REAL match (a duplicate must be visible), via the structured isInstallment identity, never amount or text.
 
 function InstallmentBadge({ matches, onInvoice }: { matches: Payment[]; onInvoice?: () => void }) {
   if (matches.length === 0) {
@@ -1516,7 +1510,7 @@ function InstallmentBadge({ matches, onInvoice }: { matches: Payment[]; onInvoic
           const isPaid = status === 'Paid'
           return (
             <div key={m.id} className="flex items-center gap-2">
-              <span className="font-mono text-blue-600">{m.invoice_number}</span>
+              {m.invoice_number ? <span className="font-mono text-blue-600">{m.invoice_number}</span> : <span className="text-muted-foreground">No invoice number</span>}
               <span className={cn('px-1.5 py-0.5 rounded', isPaid ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700')}>
                 {isPaid ? 'Paid' : status}
               </span>
@@ -1532,7 +1526,7 @@ function InstallmentBadge({ matches, onInvoice }: { matches: Payment[]; onInvoic
   const isPaid = status === 'Paid'
   return (
     <div className="flex items-center gap-2 pl-6 text-xs">
-      <span className="font-mono text-blue-600">{match.invoice_number}</span>
+      {match.invoice_number ? <span className="font-mono text-blue-600">{match.invoice_number}</span> : <span className="text-muted-foreground">No invoice number</span>}
       <span className={cn('px-1.5 py-0.5 rounded', isPaid ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700')}>
         {isPaid ? 'Paid' : status}
       </span>
@@ -2522,7 +2516,7 @@ function MembersSection({ accountId, accountCompanyName, contacts, memberCount: 
 
 /* ── Panoramica Tab ───────────────────────────────────── */
 
-function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, partnerName, onOpenStatusDialog, dbaServiceDeliveries = [], stagesByServiceType = {} }: { account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean; partnerName: string | null; onOpenStatusDialog: () => void; dbaServiceDeliveries?: NonNullable<AccountDetailProps['dbaServiceDeliveries']>; stagesByServiceType?: Record<string, PipelineStage[]> }) {
+function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, partnerName, onOpenStatusDialog, dbaServiceDeliveries = [], stagesByServiceType = {}, becameClientGuess = null, contractMismatches }: { contractMismatches?: ContractMismatch[] | null; becameClientGuess?: GuessSummary | null; account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean; partnerName: string | null; onOpenStatusDialog: () => void; dbaServiceDeliveries?: NonNullable<AccountDetailProps['dbaServiceDeliveries']>; stagesByServiceType?: Record<string, PipelineStage[]> }) {
   const router = useRouter()
   const [noteText, setNoteText] = useState('')
   const [addingNote, setAddingNote] = useState(false)
@@ -2538,8 +2532,16 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
     return result
   }
 
+  // "Change login email" (staff): opened from an Email box when that contact HAS a portal login (dev job beb43385, step 3)
+  const [loginEmailDialog, setLoginEmailDialog] = useState<{ contactId: string; initial: string } | null>(null)
+
   const makeContactSaver = (contactId: string, field: string, contactUpdatedAt: string) => async (value: string) => {
     const result = await updateContactField(contactId, field, value, contactUpdatedAt, account.id)
+    // The contact has a portal login: the box must not change the contact alone, so open the real change instead
+    if (field === 'email' && !result.success && result.error === LOGIN_LINKED_ERROR) {
+      setLoginEmailDialog({ contactId, initial: value })
+      return { success: true }
+    }
     if (result.success) toast.success('Saved')
     else toast.error(result.error ?? 'Failed')
     return result
@@ -2570,6 +2572,14 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
 
   return (
     <div className="grid gap-6 lg:grid-cols-2">
+      {loginEmailDialog && (
+        <ChangeLoginEmailStaffDialog
+          contactId={loginEmailDialog.contactId}
+          initialEmail={loginEmailDialog.initial}
+          onClose={() => setLoginEmailDialog(null)}
+          onChanged={() => { setLoginEmailDialog(null); router.refresh() }}
+        />
+      )}
       {/* Company Info */}
       <div className="bg-white rounded-lg border p-5 space-y-4">
         <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">Company Info</h3>
@@ -2593,6 +2603,19 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
           <EditableField icon={Building2} label="Entity Type" value={account.entity_type ?? ''} type="select" options={ENTITY_OPTIONS} onSave={makeAccountSaver('entity_type')} />
           <EditableField icon={Users} label="Member Structure" value={account.member_structure ?? ''} type="select" options={[{ label: 'Single Member', value: 'single_member' }, { label: 'Multi Member', value: 'multi_member' }]} onSave={makeAccountSaver('member_structure')} />
           <EditableField icon={MapPin} label="State" value={account.state_of_formation ?? ''} onSave={makeAccountSaver('state_of_formation')} />
+          <BecameClientRow
+            accountId={account.id}
+            companyName={account.company_name}
+            accountType={account.account_type}
+            updatedAt={account.updated_at}
+            value={account.became_client_how ?? null}
+            checkedAt={account.became_client_how_checked_at ?? null}
+            checkedBy={account.became_client_how_checked_by ?? null}
+            guess={becameClientGuess}
+            formationDate={account.formation_date ?? null}
+            clientSince={account.client_since ?? null}
+            raSwitchDate={account.ra_switch_date ?? null}
+          />
           <EditableField icon={Calendar} label="Formation" value={account.formation_date ?? ''} type="date" onSave={makeAccountSaver('formation_date')} />
           <EditableField icon={Calendar} label="Client Since" value={account.client_since ?? ''} type="date" onSave={makeAccountSaver('client_since')} />
           <EditableField icon={Calendar} label="RA Switch Date" value={account.ra_switch_date ?? ''} type="date" onSave={makeAccountSaver('ra_switch_date')} />
@@ -2692,11 +2715,14 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
       <ReferralsGivenCard accountId={account.id} />
 
       {/* Billing — only for Client-type accounts (vendors/tenants/leads do not have annual installments) */}
-      {account.account_type === 'Client' && (
+      {account.account_type === 'Client' ? (
         <>
           <PaymentPlanPartsSection account={account} />
-          <InstallmentsSection account={account} payments={payments} makeAccountSaver={makeAccountSaver} />
+          <InstallmentsSection account={account} payments={payments} makeAccountSaver={makeAccountSaver} contractMismatches={contractMismatches} />
         </>
+      ) : (
+        // A company that is not a Client has no installments card, but a signed contract that does not match it still has to be seen here.
+        contractMismatches !== undefined && contractMismatches !== null && contractMismatches.length > 0 && <ContractMismatchNote findings={contractMismatches} />
       )}
 
       {/* Contacts */}

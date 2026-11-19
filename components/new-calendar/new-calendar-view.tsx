@@ -39,6 +39,8 @@ import { WhatsNewCount } from '@/components/whats-new/whats-new-count'
 import { PaymentsToConfirmTab } from '@/components/incoming-payments/payments-tab'
 import type { WaitingRow } from '@/lib/incoming-payments/classify'
 import { ApplicationsToReviewTab } from '@/components/bofa-intake/applications-tab'
+import { InvoicesToRaiseTab } from '@/components/plan-invoices/invoices-to-raise-tab'
+import type { InvoicesToRaise } from '@/lib/plan-invoices/types'
 import type { WaitingApplication } from '@/lib/bofa-intake/waiting'
 
 const BASE = '/new-calendar'
@@ -302,9 +304,20 @@ function ApplicationsCount({ applications }: { applications: WaitingApplication[
   )
 }
 
+/** The number of invoices to raise NOW, in red and BLINKING when there is any (a client was promised a bill and nobody has sent it). Nothing when it could not be read. */
+function InvoicesCount({ invoices }: { invoices: InvoicesToRaise | null }) {
+  if (!invoices) return null
+  const due = invoices.dueCount
+  return (
+    <span className={`ml-1 rounded-full px-2 py-0.5 font-mono text-xs ${due > 0 ? 'animate-pulse bg-red-600 text-white motion-reduce:animate-none' : 'bg-zinc-100 text-zinc-600'}`} data-testid="invoices-count">
+      {due}
+    </span>
+  )
+}
+
 /** `model` is null on the What's New tab: that tab does not use the Open services data, so the page does not load it (and a failed
  *  Open services read can never hide the news). */
-export function NewCalendarView({ model, params, greeting, payments, applications = null, showApplications = false }: { model: CalendarModel | null; params: NewCalendarParams; greeting: string; payments: WaitingRow[] | null; applications?: WaitingApplication[] | null; showApplications?: boolean }) {
+export function NewCalendarView({ model, params, greeting, payments, applications = null, showApplications = false, invoices = null }: { model: CalendarModel | null; params: NewCalendarParams; greeting: string; payments: WaitingRow[] | null; invoices?: InvoicesToRaise | null; applications?: WaitingApplication[] | null; showApplications?: boolean }) {
   return (
     <div className="space-y-4 p-6 lg:p-8">
       <LiveRefresh />
@@ -320,7 +333,7 @@ export function NewCalendarView({ model, params, greeting, payments, application
 
       <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
         Every open job, with its step and who the next move belongs to. <b>Open workspace</b> opens the job in a window: act there, and this list updates by itself.
-        What&apos;s New is where you tick a client&apos;s note <b>Handled</b>. Payments to confirm lists Stripe payments nobody has said what they were for.{showApplications && <> Applications to review lists the bank applications clients submitted that we have not sent on yet.</>} Renewals, annual reports and Mark Filed are on the last tab.
+        What&apos;s New is where you tick a client&apos;s note <b>Handled</b>. Payments to confirm lists Stripe payments nobody has said what they were for. Invoices to raise lists the later parts of an offer paid in parts that are due: nothing is raised by itself, you click.{showApplications && <> Applications to review lists the bank applications clients submitted that we have not sent on yet.</>} Renewals, annual reports and Mark Filed are on the last tab.
       </div>
 
       <nav className="flex gap-1 border-b text-sm" aria-label="Calendar pages">
@@ -351,6 +364,15 @@ export function NewCalendarView({ model, params, greeting, payments, application
             Payments to confirm <PaymentsCount payments={payments} />
           </Link>
         )}
+        {params.tab === 'invoices' ? (
+          <span className="-mb-px border-b-2 border-blue-600 px-3 py-2 font-semibold text-foreground" aria-current="page">
+            Invoices to raise <InvoicesCount invoices={invoices} />
+          </span>
+        ) : (
+          <Link href={hrefFor(withTab(params, 'invoices'))} prefetch={false} className="-mb-px border-b-2 border-transparent px-3 py-2 text-zinc-600 hover:text-foreground">
+            Invoices to raise <InvoicesCount invoices={invoices} />
+          </Link>
+        )}
         {showApplications && (params.tab === 'applications' ? (
           <span className="-mb-px border-b-2 border-blue-600 px-3 py-2 font-semibold text-foreground" aria-current="page">
             Applications to review <ApplicationsCount applications={applications} />
@@ -371,6 +393,8 @@ export function NewCalendarView({ model, params, greeting, payments, application
         <PaymentsToConfirmTab rows={payments} />
       ) : params.tab === 'applications' ? (
         <ApplicationsToReviewTab rows={applications} />
+      ) : params.tab === 'invoices' ? (
+        <InvoicesToRaiseTab rows={invoices ? invoices.rows : null} />
       ) : model ? (
         <JobsBody model={model} params={params} />
       ) : null}

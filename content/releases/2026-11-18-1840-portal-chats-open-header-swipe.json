@@ -1,0 +1,16 @@
+{
+  "title": "Portal Chats on the phone: the same swipe tools inside an open conversation",
+  "tag": "new",
+  "text": "On your phone, swipe the top of an open conversation in Portal Chats. Swipe right to mark it read or unread and to pin it; swipe left to make a note or copy its link. Pin and Note were not available inside an open chat before. The computer is unchanged.",
+  "points": [
+    "Swipe the top bar right: Read / Unread and Pin / Unpin",
+    "Swipe it left: Note and Copy link",
+    "Tap the open bar to close it; scrolling the messages works as before"
+  ],
+  "stepsTitle": "Using the swipe tools inside a chat",
+  "steps": [
+    { "name": "Open a conversation", "detail": "Tap it in the list as usual.", "flag": "new" },
+    { "name": "Swipe the name bar at the top", "detail": "Right for Read / Unread and Pin; left for Note and Copy link.", "flag": "new" },
+    { "name": "Press a button", "detail": "It does the action and the bar closes.", "flag": "new" }
+  ]
+}

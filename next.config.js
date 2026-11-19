@@ -1,4 +1,6 @@
+const path = require('path')
 const { withSentryConfig } = require('@sentry/nextjs')
+const { releaseNotesEnv } = require('./scripts/release-notes-env')
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -14,12 +16,14 @@ const nextConfig = {
       // so the traced output preserves their real node_modules layout.
       '@sparticuz/chromium', 'puppeteer-core',
     ],
-    // Ship the repo SOURCE into the serverless functions that expose the
-    // read-only codebase_read / codebase_search tools so they can read it at
-    // runtime. Source is code, not secrets; the tools block .env/secrets/deps.
+    // Ship the repo SOURCE into the serverless functions that expose the read-only codebase_read / codebase_search tools,
+    // so they can read it at runtime. Source is code, not secrets; the tools block .env/secrets/deps.
     //   - /api/[transport]        : MCP server (Hermes connects directly)
-    //   - /api/cron/hermes-bridge : the server-side worker (sonnet) — without
-    //     this, fs.readFile works locally but ENOENTs on Vercel.
+    //   - /api/cron/hermes-bridge : the server-side worker (sonnet) — without this, fs.readFile works locally but ENOENTs on Vercel.
+    // The source ships as ONE packed file (generated/code-snapshot.json.gz, written by `npm run build` through
+    // scripts/build-code-snapshot.js, read by lib/mcp/tools/codebase-read.ts), NOT as ~5,000 loose files. Globbing the whole
+    // tree for these two routes made Next's "Collecting build traces" step run Vercel's 8 GB builder out of memory
+    // (2026-11-18, dev job ad26bd7f): every file is traced once per route. One file is one trace entry.
     outputFileTracingIncludes: {
       // Marking @sparticuz/chromium external (above) stops webpack from relocating it,
       // but Next.js's own file tracer still decides which files actually ship in the
@@ -31,28 +35,15 @@ const nextConfig = {
       '/api/owner/export/pdf': [
         './node_modules/@sparticuz/chromium/bin/**',
       ],
-      '/api/[transport]': [
-        './app/**/*.{ts,tsx,js,jsx,sql,md,css}',
-        './lib/**/*.{ts,tsx,js,jsx,sql}',
-        './components/**/*.{ts,tsx,js,jsx,css}',
-        './scripts/**/*.{ts,js,sql}',
-        './middleware.ts',
-        './next.config.js',
-      ],
-      '/api/cron/hermes-bridge': [
-        './app/**/*.{ts,tsx,js,jsx,sql,md,css}',
-        './lib/**/*.{ts,tsx,js,jsx,sql}',
-        './components/**/*.{ts,tsx,js,jsx,css}',
-        './scripts/**/*.{ts,js,sql}',
-        './middleware.ts',
-        './next.config.js',
-      ],
+      '/api/[transport]': ['./generated/code-snapshot.json.gz'],
+      '/api/cron/hermes-bridge': ['./generated/code-snapshot.json.gz'],
     },
   },
-  // Skip build-trace collection on GitHub Actions only (~4 min of the CI build: two routes
-  // above glob the whole source tree). The trace output only matters when packaging a deploy,
-  // which CI does not do — Vercel builds and traces the full app itself. GITHUB_ACTIONS is set
-  // by GitHub automatically and never on Vercel or a dev machine, so this cannot leak.
+  // Skip build-trace collection on GitHub Actions only (it is slow, and the trace output only matters when
+  // packaging a deploy, which CI does not do — Vercel builds and traces the full app itself). GITHUB_ACTIONS is set
+  // by GitHub automatically and never on Vercel or a dev machine, so this cannot leak. Consequence: CI can NOT catch a
+  // tracing problem (the 2026-11-18 out-of-memory only ever showed on Vercel) — measure with a local build, see
+  // docs/systems/agent-bridge.md.
   outputFileTracing: process.env.GITHUB_ACTIONS !== 'true',
   // This deployment's own release stamp, baked into BOTH the browser bundle and the server bundle (dev job dc629a3d). The open CRM pages
   // compare the stamp they were loaded with against /api/release of the live deployment and offer "New release available — refresh".
@@ -61,6 +52,9 @@ const nextConfig = {
   // (local dev) → empty → the check stays off.
   env: {
     NEXT_PUBLIC_BUILD_SHA: process.env.NEXT_PUBLIC_BUILD_SHA || (process.env.VERCEL_GIT_COMMIT_SHA || '').slice(0, 7),
+    // What each release does (dev job 616dc839): content/releases/*.json compiled into the build — RELEASE_NOTES_JSON (server only) and
+    // NEXT_PUBLIC_NEWEST_NOTE (the page's "seen up to here" mark). See scripts/release-notes-env.js and docs/systems/releases.md.
+    ...releaseNotesEnv(path.join(__dirname, 'content', 'releases')),
   },
   eslint: {
     // Warnings in MCP tool files should not block production builds.

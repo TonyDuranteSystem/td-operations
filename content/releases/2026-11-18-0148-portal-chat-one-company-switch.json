@@ -1,0 +1,12 @@
+{
+  "title": "Client chat: one company switch, a clear personal chat, tabs change together",
+  "tag": "improved",
+  "text": "The client portal chat no longer has its own Switch button or the \"Which company?\" window. The company is chosen only with the chip at the top left, and the chat follows it. Change company in one tab and every other open tab changes at once, with a short note. A client in a shared company now sees \"Need to write something private? Open your personal chat with the team.\" The personal chat is private, tied to no company, and never shown to other members. In the iPhone and Android apps it is a small Private button on the company label.",
+  "points": [
+    "Open a client's chat with \"View as client\": no Switch button, the company name is only a label",
+    "Shared company: the \"Open personal chat\" strip shows, with a number for unread private messages",
+    "Open the personal chat: the company at the top stays the same, and a button goes back",
+    "Open two tabs and change company in one: the other follows by itself with a note"
+  ],
+  "screenshot": "portal-chat-one-company-switch.png"
+}

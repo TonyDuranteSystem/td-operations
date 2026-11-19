@@ -1,0 +1,11 @@
+{
+  "title": "TD Talk and Marketing chats keep unsent messages and offline changes and send them later",
+  "tag": "improved",
+  "text": "A message that cannot be delivered right away is no longer lost. In TD Talk and in both TD Marketing chats (a lead's chat and team conversations) it stays in the chat with a clock and the note \"Not sent yet\", and sends by itself when you are back online, even after closing the app. In TD Talk, editing, deleting or reacting to a message while offline is also kept and sent later.",
+  "points": [
+    "A message the server really refuses stays in red with its reason, plus Send now and Delete; it is not retried by itself.",
+    "Later messages in the same chat wait behind a stuck one so the order is kept, and a retry never posts a message twice.",
+    "A queued message or change is only sent as the person who made it, so a shared phone cannot send Luca's message as Antonio.",
+    "Files get a longer time to upload, so a slow upload no longer fails."
+  ]
+}

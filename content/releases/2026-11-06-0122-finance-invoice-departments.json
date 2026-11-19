@@ -1,0 +1,9 @@
+{
+  "title": "Finance: switch invoices between All, TD clients and TD Marketing",
+  "tag": "new",
+  "text": "Invoices now belong to a department: TD clients (the default) or TD Marketing, which owns the Marketing sales invoices and their credit notes. Finance has a new switch (All, TD clients, TD Marketing) that filters the All Invoices list, By Client and the selected client's lists. Overview and the header totals still cover both departments.",
+  "points": [
+    "When a Marketing sale is paid, its invoice and credit note are marked TD Marketing automatically.",
+    "The 6 older Marketing records were tagged in a separate one-off step."
+  ]
+}

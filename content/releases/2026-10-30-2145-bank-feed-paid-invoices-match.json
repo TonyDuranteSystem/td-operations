@@ -1,0 +1,11 @@
+{
+  "title": "Bank Feed: link one payment to several already-paid invoices",
+  "tag": "new",
+  "text": "In the Bank Feed Match popup and in Link with a note, you can now tick several already-paid invoices for one bank payment, with a running total against the payment and a button Link to N invoices. No money moves: the payment is recorded against the invoices for the record, a dated note is added to each, and undo releases them all together.",
+  "points": [
+    "A new From who paid block lists the paid and unpaid invoices of the company the payer belongs to and suggests sets that add up exactly; they are suggestions only.",
+    "A new box shows paid invoices of exactly this amount, paid within 3 days of the payment (30 days behind Look wider), that no other bank payment is tied to.",
+    "When a payment fits several paid invoices equally, the one paid within 3 days of the payment now wins; the red box shows each invoice's description, amount and paid date.",
+    "Mixing paid and unpaid invoices in one link is refused for now."
+  ]
+}

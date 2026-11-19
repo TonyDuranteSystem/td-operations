@@ -746,3 +746,131 @@ final class PushPlanTests: XCTestCase {
     }
     func testTheWaitIsWithinWhatTheCRMAllows() { XCTAssertEqual(PushPlan.waitSeconds, 20) }
 }
+
+final class ViaRegistryTests: XCTestCase {
+    private func fresh() -> ViaRegistry {
+        let d = UserDefaults(suiteName: "td-via-\(UUID().uuidString)")!
+        return ViaRegistry(defaults: d, key: "k")
+    }
+    let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+
+    func testTheRoutesShownForAStorageAreRemembered() {
+        let r = fresh()
+        r.record(link: "co1:ct1:person9", now: t0)
+        r.record(link: "co2:ct2:person9", now: t0)
+        r.record(link: "co1:ct1:person7", now: t0)
+        XCTAssertEqual(r.links(for: "person9", now: t0), ["co1:ct1:person9", "co2:ct2:person9"])
+        XCTAssertEqual(r.links(for: "person7", now: t0), ["co1:ct1:person7"])
+        XCTAssertEqual(r.links(for: "nobody", now: t0), [])
+    }
+
+    func testAPersonWithNoStorageOrAMalformedLinkIsNotKept() {
+        let r = fresh()
+        r.record(link: "co1:ct1:c-contact5", now: t0)
+        r.record(link: "co1::person9", now: t0)
+        r.record(link: "garbage", now: t0)
+        XCTAssertEqual(r.count, 0)
+    }
+
+    func testARouteNotSeenFor90DaysIsForgotten() {
+        let r = fresh()
+        r.record(link: "co1:ct1:person9", now: t0)
+        XCTAssertEqual(r.links(for: "person9", now: t0.addingTimeInterval(89 * 86_400)).count, 1)
+        XCTAssertEqual(r.links(for: "person9", now: t0.addingTimeInterval(91 * 86_400)).count, 0)
+    }
+
+    func testSeeingARouteAgainKeepsItAlive() {
+        let r = fresh()
+        r.record(link: "co1:ct1:person9", now: t0)
+        r.record(link: "co1:ct1:person9", now: t0.addingTimeInterval(80 * 86_400))
+        XCTAssertEqual(r.links(for: "person9", now: t0.addingTimeInterval(150 * 86_400)).count, 1)
+    }
+
+    func testTheListNeverGrowsPastItsCapAndDropsTheOldest() {
+        let r = fresh()
+        for i in 0..<(ViaRegistry.maxLinks + 5) { r.record(link: "co:ct:p\(i)", now: t0.addingTimeInterval(Double(i) * 60)) }
+        XCTAssertEqual(r.count, ViaRegistry.maxLinks)
+        XCTAssertEqual(r.links(for: "p0", now: t0.addingTimeInterval(Double(ViaRegistry.maxLinks) * 60)).count, 0)
+        XCTAssertEqual(r.links(for: "p\(ViaRegistry.maxLinks + 4)", now: t0.addingTimeInterval(Double(ViaRegistry.maxLinks) * 60)).count, 1)
+    }
+
+    func testTheRouteMatchesTheIdFinderWasGiven() {
+        // the id of a file shown through a route is exactly "v:<link>|f:<owner>:<file>", which resolves back to the plain file
+        let link = "co1:ct1:person9"
+        let shown = ItemID.file(owner: "person9", file: "fA").shown(via: link)
+        XCTAssertEqual(shown.raw, "v:co1:ct1:person9|f:person9:fA")
+        XCTAssertEqual(shown.underlying, .file(owner: "person9", file: "fA"))
+        XCTAssertEqual(ViaRegistry.target(of: link), "person9")
+    }
+}
+
+
+final class RouteBookTests: XCTestCase {
+    private func book() -> (RouteBook, ViaRegistry) {
+        let d = UserDefaults(suiteName: "td-routes-\(UUID().uuidString)")!
+        let r = ViaRegistry(defaults: d, key: "k")
+        return (RouteBook(registry: r), r)
+    }
+    let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+
+    func testTheCRMsAnswerFillsTheRegistryWithoutFinderOpeningAnything() {
+        let (b, reg) = book()
+        b.apply(asked: ["p1"], routes: [RouteEntry(owner: "p1", company: "co1", folder: "ct1"), RouteEntry(owner: "p1", company: "co2", folder: "ct2")], now: t0)
+        XCTAssertEqual(reg.links(for: "p1", now: t0), ["co1:ct1:p1", "co2:ct2:p1"])
+    }
+    func testAStorageIsAskedAboutOnlyOncePerHalfHour() {
+        let (b, _) = book()
+        XCTAssertEqual(b.needingCheck(["p1", "p2", "p1"], now: t0), ["p1", "p2"])
+        b.apply(asked: ["p1", "p2"], routes: [], now: t0)
+        XCTAssertEqual(b.needingCheck(["p1", "p2"], now: t0.addingTimeInterval(60)), [])
+        XCTAssertEqual(b.needingCheck(["p1"], now: t0.addingTimeInterval(RouteBook.recheckSeconds + 1)), ["p1"])
+    }
+    func testAnAnswerForAStorageNobodyAskedAboutIsIgnored() {
+        let (b, reg) = book()
+        b.apply(asked: ["p1"], routes: [RouteEntry(owner: "other", company: "co1", folder: "ct1")], now: t0)
+        XCTAssertEqual(reg.count, 0)
+    }
+    func testQuestionsAreCutIntoBatches() {
+        let ids = (0..<95).map { "p\($0)" }
+        let q = RouteBook.questions(ids)
+        XCTAssertEqual(q.map { $0.count }, [40, 40, 15])
+        XCTAssertEqual(q.flatMap { $0 }, ids)
+        XCTAssertEqual(RouteBook.questions([]), [])
+    }
+}
+
+final class SignInExpiryTests: XCTestCase {
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    private func iso(_ d: Date) -> String { ISO8601DateFormatter().string(from: d) }
+    private let utc = TimeZone(identifier: "UTC")!
+
+    func testNothingToSayWhileThereAreMoreThanFiveDaysLeft() {
+        XCTAssertNil(SignInExpiry.warning(expiresAt: iso(now.addingTimeInterval(6 * 86_400)), now: now, timeZone: utc))
+        XCTAssertNil(SignInExpiry.warning(expiresAt: nil, now: now, timeZone: utc))
+        XCTAssertNil(SignInExpiry.warning(expiresAt: "not a date", now: now, timeZone: utc))
+    }
+    func testTheWarningNamesTheDaysAndTheDate() {
+        let w = SignInExpiry.warning(expiresAt: iso(now.addingTimeInterval(3 * 86_400 - 3600)), now: now, timeZone: utc)
+        XCTAssertNotNil(w)
+        XCTAssertTrue(w!.contains("in 3 days"))
+        XCTAssertTrue(w!.contains("sign in again"))
+    }
+    func testTheLastDayAndAnEndedSignIn() {
+        XCTAssertTrue(SignInExpiry.warning(expiresAt: iso(now.addingTimeInterval(5 * 3600)), now: now, timeZone: utc)!.contains("today or tomorrow"))
+        XCTAssertTrue(SignInExpiry.warning(expiresAt: iso(now.addingTimeInterval(-60)), now: now, timeZone: utc)!.contains("has ended"))
+    }
+    func testDaysAreCountedUp() {
+        XCTAssertEqual(SignInExpiry.daysLeft(expiresAt: iso(now.addingTimeInterval(3600)), now: now), 1)
+        XCTAssertEqual(SignInExpiry.daysLeft(expiresAt: iso(now.addingTimeInterval(86_400 + 60)), now: now), 2)
+        XCTAssertEqual(SignInExpiry.daysLeft(expiresAt: iso(now.addingTimeInterval(-5)), now: now), 0)
+    }
+}
+
+final class LoopbackQueryTests: XCTestCase {
+    func testARepeatedKeyDoesNotCrashAndTheFirstOneCounts() {
+        let q = LoopbackSignIn.queryValues([URLQueryItem(name: "state", value: "a"), URLQueryItem(name: "state", value: "b"), URLQueryItem(name: "code", value: "c")])
+        XCTAssertEqual(q["state"], "a")
+        XCTAssertEqual(q["code"], "c")
+        XCTAssertEqual(LoopbackSignIn.queryValues(nil), [:])
+    }
+}

@@ -1,0 +1,6 @@
+{
+  "title": "Referral page: the Book a free call button works again",
+  "tag": "fixed",
+  "text": "The Book a free call button on the referral landing page pointed at a Calendly address that no longer exists, because the Calendly account was renamed. It now points at the right address, which is kept in one place so it only has to be changed once.",
+  "points": []
+}

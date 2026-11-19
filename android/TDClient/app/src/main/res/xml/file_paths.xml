@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- td-files: a file the portal handed over, opened once in the phone's viewer and cleaned up later -->
+    <cache-path name="td_files" path="td-files/" />
+    <!-- td-photos: a photo taken for an upload -->
+    <cache-path name="td_photos" path="td-photos/" />
+</paths>

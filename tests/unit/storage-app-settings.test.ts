@@ -27,6 +27,18 @@ describe("the one settings row of the Mac app: safe defaults", () => {
   })
 })
 
+describe("no expiry, 10 Macs per login (2026-11-12)", () => {
+  it("defaults: a Mac never has to be re-approved (10 years) and a login may have 10 Macs", () => {
+    const d = defaultSettings({})
+    expect(d.leaseHours).toBe(87_600)
+    expect(d.maxMacsPerLogin).toBe(10)
+  })
+  it("the lease can still be shortened by the setting, and 10 years is the ceiling", () => {
+    expect(parseSettings({ leaseHours: 24 }, {}).leaseHours).toBe(24)
+    expect(parseSettings({ leaseHours: 1_000_000 }, {}).leaseHours).toBe(87_600)
+  })
+})
+
 describe("field-by-field validation: one bad value never spoils the others", () => {
   it("takes good values, drops bad ones", () => {
     const s = parseSettings({ keepSecondsNormal: 60, keepSecondsSensitive: "soon", maxSaveMB: 9999, leaseHours: 12, resyncMinutes: 0, maxMacsPerLogin: 2.4 }, {})

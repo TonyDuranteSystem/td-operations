@@ -1,0 +1,5 @@
+{
+  "title": "Behind the scenes: shared menu rules for the client app, updated records, one new rule",
+  "tag": "behind-the-scenes",
+  "text": "Nothing to see on screen. The client portal's side-menu rules (which entries each login sees, and in what order) moved into one shared place so the website and the new iPhone app always agree, and the menu looks exactly the same. The written records of how the client app, Company Closure and the portal voice notes work were updated, and a new working rule was added about checking code on the real live build, after a bug that only appeared there."
+}

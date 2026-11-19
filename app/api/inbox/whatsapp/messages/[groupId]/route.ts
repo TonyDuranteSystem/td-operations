@@ -5,6 +5,7 @@ import { OUTBOX_TEAM_LABEL, normalizeSendMode, outboxDisplayStatus, type SendMod
 import { createClient } from "@/lib/supabase/server"
 import { isStaffUser } from "@/lib/auth"
 import { jidToE164 } from "@/lib/messaging/phone"
+import { isJunkChatName, pickSenderName, resolveChatNameWithSource, type ChatNameSource } from "@/lib/messaging/chat-name"
 import { PLAYBACK_URL_SECONDS, VOICE_BUCKET } from "@/lib/messaging/wabridge-media"
 
 export const dynamic = "force-dynamic"
@@ -55,6 +56,8 @@ export async function GET(
        *  needs a client to attach to — null when this chat has never been linked to a CRM record. */
       accountId: string | null
       contactId: string | null
+      /** Where `name` came from — "whatsapp" means only the sender vouches for it (the header marks it). */
+      nameSource: ChatNameSource
     } | null = null
     try {
       const { data: g } = await supabaseAdmin
@@ -68,8 +71,31 @@ export async function GET(
           g.contact_id ? supabaseAdmin.from("contacts").select("full_name, language").eq("id", g.contact_id).maybeSingle() : Promise.resolve({ data: null }),
           g.account_id ? supabaseAdmin.from("accounts").select("company_name").eq("id", g.account_id).maybeSingle() : Promise.resolve({ data: null }),
         ])
+        // Nobody has named this chat: fall back to the name the sender writes under (newest inbound first), marked as unverified.
+        let senderName: string | null = null
+        if (!contact.data?.full_name && !lead.data?.full_name && !account.data?.company_name && isJunkChatName(g.group_name, g.external_group_id)) {
+          const { data: senderRows } = await supabaseAdmin
+            .from("messages")
+            .select("sender_name")
+            .eq("group_id", groupId)
+            .eq("direction", "inbound")
+            .not("sender_name", "is", null)
+            .order("created_at", { ascending: false })
+            .limit(20)
+          senderName = pickSenderName((senderRows ?? []).map((r) => r.sender_name), g.external_group_id)
+        }
+        const resolved = resolveChatNameWithSource({
+          contactName: contact.data?.full_name,
+          leadName: lead.data?.full_name,
+          accountName: account.data?.company_name,
+          savedName: g.group_name,
+          senderName,
+          externalGroupId: g.external_group_id,
+        })
         chat = {
-          name: contact.data?.full_name ?? lead.data?.full_name ?? account.data?.company_name ?? g.group_name ?? null,
+          // "number" = nothing better exists: keep null so the screens fall back to the bare number exactly as before.
+          name: resolved.source === "number" ? null : resolved.name,
+          nameSource: resolved.source,
           phone: g.external_group_id ? jidToE164(g.external_group_id) : null,
           language: (contact.data as { language?: string } | null)?.language ?? null,
           accountId: g.account_id ?? null,
