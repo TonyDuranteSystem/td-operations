@@ -37,6 +37,7 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/sync-airtable": "0 */6 * * *",
   "/api/cron/check-wire-payments": "0 */6 * * *",
   "/api/cron/ra-renewal-check": "0 9 * * *",
+  "/api/cron/complete-held-closings": "30 9 * * *",
   "/api/cron/annual-report-check": "0 9 * * *",
   "/api/cron/overdue-payments-report": "0 9 * * *",
   "/api/cron/portal-issues": "0 */1 * * *",
