@@ -48,7 +48,7 @@ interface ExistingAccountContact {
   phone: string | null
 }
 
-type RecordType = 'lead' | 'contact-with-account' | 'contact-standalone'
+type RecordType = 'lead' | 'contact-with-account' | 'contact-standalone' | 'address-book'
 
 export function WhatsAppContactMatchBanner({ groupId, onSaved }: { groupId: string; onSaved?: () => void }) {
   const queryClient = useQueryClient()
@@ -69,7 +69,7 @@ export function WhatsAppContactMatchBanner({ groupId, onSaved }: { groupId: stri
   const [addingNewPerson, setAddingNewPerson] = useState(false)
   const [, bumpDismiss] = useState(0)
 
-  const { data, isLoading } = useQuery<{ match: ContactMatch | null; matches?: ContactMatch[]; alreadyLinked: boolean; nameSuggestion?: NameSuggestion | null; suggestedName?: string | null; error?: string }>({
+  const { data, isLoading } = useQuery<{ match: ContactMatch | null; matches?: ContactMatch[]; savedMatch?: { id: string; name: string; company: string | null }; groupPhone?: string | null; alreadyLinked: boolean; nameSuggestion?: NameSuggestion | null; suggestedName?: string | null; error?: string }>({
     queryKey: ['whatsapp-contact-match', groupId],
     queryFn: () => fetch(`/api/inbox/whatsapp-new/match-contact?groupId=${encodeURIComponent(groupId)}`).then((r) => r.json()),
   })
@@ -148,6 +148,20 @@ export function WhatsAppContactMatchBanner({ groupId, onSaved }: { groupId: stri
     }
     setSaving(true)
     try {
+      if (recordType === 'address-book') {
+        // An outside person (lawyer, supplier…): saved in the address book only, never as a CRM contact. The server refuses a number already saved or held by a client.
+        const res = await fetch('/api/address-book/people', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ full_name: name.trim(), phones: [data?.groupPhone ?? ''].filter(Boolean), source: 'whatsapp' }),
+        })
+        const json = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(json.error || 'Could not save to the address book.')
+        toast.success(`Saved ${name.trim()} in the address book`)
+        queryClient.invalidateQueries({ queryKey: ['whatsapp-contact-match', groupId] })
+        setRecordType(null)
+        return
+      }
       const res = await fetch('/api/inbox/whatsapp-new/create-record', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -356,10 +370,22 @@ export function WhatsAppContactMatchBanner({ groupId, onSaved }: { groupId: stri
     )
   }
 
+  if (!recordType && data?.savedMatch) {
+    return (
+      <div data-tour="wa-match-banner" className="app-tight px-4 py-1.5 bg-emerald-50 border-b border-emerald-100 flex items-center justify-between gap-2">
+        <span className="text-xs text-emerald-900">
+          <UserCheck className="inline h-3.5 w-3.5 mr-1" />
+          Saved in the address book: <strong>{data.savedMatch.name}</strong>{data.savedMatch.company ? ` · ${data.savedMatch.company}` : ''}
+        </span>
+        <a href="/address-book" className="app-slim-line text-xs font-medium text-emerald-700 hover:text-emerald-900 underline">Open address book</a>
+      </div>
+    )
+  }
+
   if (!recordType) {
     return (
       <div data-tour="wa-match-banner" className="app-tight px-4 py-1.5 bg-zinc-50 border-b flex items-center justify-between gap-2">
-        <span className="text-xs text-zinc-500">No matching lead or client for this number.</span>
+        <span className="text-xs text-zinc-500">Not a lead, client or saved person.</span>
         <button
           onClick={() => setRecordType('lead')}
           className="app-slim-line inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"
@@ -384,6 +410,7 @@ export function WhatsAppContactMatchBanner({ groupId, onSaved }: { groupId: stri
           { key: 'lead', label: 'New lead' },
           { key: 'contact-with-account', label: 'Contact of an existing client' },
           { key: 'contact-standalone', label: 'Just a contact' },
+          { key: 'address-book', label: 'Address book (not a client)' },
         ] as const).map((opt) => (
           <button
             key={opt.key}

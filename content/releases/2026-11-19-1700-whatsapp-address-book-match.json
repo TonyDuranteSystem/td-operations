@@ -1,0 +1,26 @@
+{
+  "title": "WhatsApp chat bar: people saved in the Address book are recognised",
+  "tag": "improved",
+  "text": "When a WhatsApp number is not a lead or client, the bar now checks the Address book too. An outside person (a lawyer, a supplier) can be saved there from the chat with one choice, and is recognised next time. Voice notes sent from the CRM now go out with their length, so the receiver no longer sees an empty note.",
+  "points": [
+    "Green bar: Saved in the address book: name",
+    "New save choice: Address book (not a client)",
+    "Voice notes carry their length"
+  ],
+  "stepsTitle": "Saving an outside person from a chat",
+  "steps": [
+    {
+      "name": "Open a chat with an unknown number",
+      "detail": "The bar says it is not a lead, client or saved person."
+    },
+    {
+      "name": "Pick Address book (not a client)",
+      "detail": "Press Save this number first. The name WhatsApp gave is filled in.",
+      "flag": "new"
+    },
+    {
+      "name": "Press Save",
+      "detail": "Next time the bar shows the saved name."
+    }
+  ]
+}
