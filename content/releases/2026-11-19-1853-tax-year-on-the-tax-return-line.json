@@ -1,0 +1,5 @@
+{
+  "title": "A Tax Return line in an offer now says which tax year it is for",
+  "tag": "behind-the-scenes",
+  "text": "In the offer builder, the Tax Return line of a tax return offer has a \"Tax year\" box, filled with last year and changeable (for example 2026 for a final return filed next year). The year goes into the line name (\"Tax Return 2026\") and, once the offer is paid, into the tax return job and the company's tax record. An offer can have only one Tax Return line, and a year before the company existed or one that has not started is refused. Offers without a year behave as before. Also fixed: the step that marks the tax return paid wrote a column that does not exist, failing quietly while reporting success."
+}
