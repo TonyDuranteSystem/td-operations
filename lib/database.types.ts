@@ -21708,6 +21708,8 @@ export type Database = {
           send_min_gap_seconds: number
           send_mode: string
           send_same_body_per_hour: number
+          update_status: Json | null
+          update_status_at: string | null
           updated_at: string
         }
         Insert: {
@@ -21749,6 +21751,8 @@ export type Database = {
           send_min_gap_seconds?: number
           send_mode?: string
           send_same_body_per_hour?: number
+          update_status?: Json | null
+          update_status_at?: string | null
           updated_at?: string
         }
         Update: {
@@ -21790,6 +21794,8 @@ export type Database = {
           send_min_gap_seconds?: number
           send_mode?: string
           send_same_body_per_hour?: number
+          update_status?: Json | null
+          update_status_at?: string | null
           updated_at?: string
         }
         Relationships: [
