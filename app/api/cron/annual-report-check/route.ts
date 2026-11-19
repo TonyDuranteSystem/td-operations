@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logCron } from "@/lib/cron-log"
 import { emitActionNeeded } from "@/lib/notifications/act-event"
+import { companiesWaitingForFinalReturn } from "@/lib/closure/closing-wait"
 
 /**
  * Cron: Annual Report Check
@@ -45,6 +46,8 @@ export async function GET(req: NextRequest) {
     if (!accounts?.length) {
       return NextResponse.json({ ok: true, message: "No annual reports due", checked: 0, created: 0 })
     }
+    // A company waiting for its final tax return before it closes stays Active but must not get a new annual report job (dev job 0a60f416, part C).
+    const waitingToClose = await companiesWaitingForFinalReturn()
 
     const stateFees: Record<string, string> = {
       "Wyoming": "$60",
@@ -58,7 +61,7 @@ export async function GET(req: NextRequest) {
     let blocked = 0
     const results: { company: string; action: string }[] = []
 
-    for (const account of accounts) {
+    for (const account of accounts.filter((a) => !waitingToClose.has(a.id))) {
       // Check if SD already exists (active or blocked)
       const { data: existingSD } = await supabaseAdmin
         .from("service_deliveries")

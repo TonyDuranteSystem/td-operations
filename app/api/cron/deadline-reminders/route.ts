@@ -21,6 +21,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logCron } from "@/lib/cron-log"
 import { emitActionNeeded } from "@/lib/notifications/act-event"
 import { extractITINMiddleDigits } from "@/lib/itin/renewal-utils"
+import { companiesWaitingForFinalReturn } from "@/lib/closure/closing-wait"
 import type { Json } from "@/lib/database.types"
 
 interface _DeadlineCheck {
@@ -51,7 +52,10 @@ export async function GET(req: NextRequest) {
   }
 
   // Helper: create task if not exists
+  // Companies waiting for their final tax return before they close stay Active but get no new filing reminders (dev job 0a60f416, part C). Read once, below.
+  let waitingToClose = new Set<string>()
   const createTaskIfNew = async (title: string, description: string, priority: string, dueDate: string, accountId?: string) => {
+    if (accountId && waitingToClose.has(accountId)) return false
     const { data: existing } = await supabaseAdmin
       .from("tasks")
       .select("id")
@@ -75,6 +79,8 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    waitingToClose = await companiesWaitingForFinalReturn()
+
     // ═══════════════════════════════════════
     // 1. DELAWARE FRANCHISE TAX
     // ═══════════════════════════════════════

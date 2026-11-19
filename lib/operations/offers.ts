@@ -36,6 +36,7 @@ import type { ShortContractType } from "@/lib/offers/standalone-contract-types"
 import { agreementCoverageGap, agreementCoverageWarnings } from "@/lib/offers/standalone-agreement-lines"
 import { multiAgreementsEnabled } from "@/lib/offers/multi-agreements-switch"
 import { normalizeOfferLists } from "@/lib/offers/json-list"
+import { checkTaxYearOnOffer } from "@/lib/offers/tax-year-check"
 
 // ─── JSONB validation ───────────────────────────────────────
 
@@ -562,6 +563,13 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
       return { success: false, outcome: "validation_error", error: billToOwnershipError }
     }
 
+    // The tax year of a short-contract Tax Return line (dev job 0a60f416, part B): one Tax Return line per offer, and a year the company
+    // could really have a return for. Warnings travel with the created offer.
+    const taxYearCheck = await checkTaxYearOnOffer({ contractType: params.contract_type, services: params.services, accountId: params.account_id })
+    if (taxYearCheck.error) {
+      return { success: false, outcome: "validation_error", error: taxYearCheck.error }
+    }
+
     // Multi-option offers (dev job 3c1bb5fa). Refused at the door for the same
     // reason as the payment plan below: every problem in an incomplete package
     // is much further from whoever typed it once a client is looking at it.
@@ -1023,6 +1031,8 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
     } catch (e) {
       console.warn("[createOffer] agreement coverage check failed:", e instanceof Error ? e.message : e)
     }
+
+    creditWarnings.push(...taxYearCheck.warnings)
 
     return {
       success: true,
