@@ -124,7 +124,7 @@ export async function readClosingBrief(serviceDeliveryId: string): Promise<Closi
  * Close the company a finished closure job belongs to. Never throws for a failed step — it reports it in `problems`.
  * @param wrapUpStepExists whether the Company Closure step list has the (dormant) "Wrap-up" step — passed on to the follow-up to-dos.
  */
-export async function applyCompanyClosure(p: { accountId: string; deliveryId: string; wrapUpStepExists: boolean; /** the closure's own follow-up to-dos were already created (the completion after a held closing) */ skipFollowUps?: boolean }): Promise<CompanyClosureResult> {
+export async function applyCompanyClosure(p: { accountId: string; deliveryId: string; wrapUpStepExists: boolean; /** the closure's own follow-up to-dos were already created (the completion after a held closing) */ skipFollowUps?: boolean; /** offers of the final tax return(s) now filed: their unpaid invoices are REPORTED to staff, never cancelled silently (the completion after a held closing) */ protectOfferTokens?: readonly string[] }): Promise<CompanyClosureResult> {
   const { accountId, deliveryId, wrapUpStepExists } = p
   const lines: string[] = []
   const problems: string[] = []
@@ -170,7 +170,8 @@ export async function applyCompanyClosure(p: { accountId: string; deliveryId: st
   }
   const waiting = kept.length > 0
   const keptIds = new Set(kept.map((k) => k.id))
-  const keptTokens = keptOfferTokens(kept)
+  // Unpaid invoices of a kept tax return's offer are not cancelled: while the return is pending, and — reported, not cancelled — when it is filed.
+  const keptTokens = new Set<string>([...Array.from(keptOfferTokens(kept)), ...(p.protectOfferTokens ?? [])])
 
   // 1. the company's other open services
   try {
@@ -226,7 +227,9 @@ export async function applyCompanyClosure(p: { accountId: string; deliveryId: st
     // received would sit on a cancelled invoice); an unused credit note is not an invoice; a row whose status column is stale is left alone.
     // The unpaid invoices of a kept tax return's offer are not touched at all (part C) — neither cancelled nor reported.
     const keptRows = ((data ?? []) as Array<Row & OpenPaymentRow & { tranche_offer_token?: string | null }>).filter((r) => belongsToKeptOffer(r, keptTokens))
-    if (keptRows.length) lines.push(`${keptRows.length} unpaid invoice${keptRows.length === 1 ? "" : "s"} of the tax return's offer stay${keptRows.length === 1 ? "s" : ""} open`)
+    if (keptRows.length && waiting) lines.push(`${keptRows.length} unpaid invoice${keptRows.length === 1 ? "" : "s"} of the tax return's offer stay${keptRows.length === 1 ? "s" : ""} open`)
+    // The return is filed and a part of its offer is still unpaid: money may be owed, so it is never cancelled behind staff's back.
+    if (!waiting) for (const r of keptRows) problems.push(`invoice ${r.invoice_number || r.id} (a part of the filed tax return's offer) is still unpaid — it was NOT cancelled: collect it or void it by hand`)
     const classified = classifyOpenPayments(((data ?? []) as Array<Row & OpenPaymentRow & { tranche_offer_token?: string | null }>).filter((r) => !belongsToKeptOffer(r, keptTokens)))
     for (const p of classified.partPaid) {
       const cur = (p.amount_currency || "USD").toUpperCase()
@@ -412,7 +415,9 @@ export async function completePendingCompanyClosure(p: { accountId: string }): P
       return { ...none, waiting: true, lines: [`The company is still waiting for ${stillOpen.map(returnLabel).join(", ")} before it closes`] }
     }
 
-    const done = await applyCompanyClosure({ accountId: p.accountId, deliveryId: waitingJob.service_delivery_id, wrapUpStepExists: false, skipFollowUps: true })
+    // the offers the filed returns came from — their unpaid invoices are reported, not cancelled
+    const protectOfferTokens = Array.from(keptOfferTokens(holdingReturns(all)))
+    const done = await applyCompanyClosure({ accountId: p.accountId, deliveryId: waitingJob.service_delivery_id, wrapUpStepExists: false, skipFollowUps: true, protectOfferTokens })
     return { ...done, lines: ["The final tax return is done — the company's closing is completed now", ...done.lines] }
   } catch (e) {
     return { ...none, problems: [`could not complete the company's closing after its tax return: ${e instanceof Error ? e.message : String(e)}`] }

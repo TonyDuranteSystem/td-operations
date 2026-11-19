@@ -229,20 +229,21 @@ describe("completePendingCompanyClosure — when the final tax return is done", 
     const followUpsBefore = followUps().length
     tableRow("service_deliveries", "sd-tax").status = "completed" // TR Filed
     const r = await completePendingCompanyClosure({ accountId: ACC })
-    expect(r.problems).toEqual([])
     expect(r.lines[0]).toMatch(/final tax return is done/)
     expect(tableRow("accounts", ACC)).toMatchObject({ status: "Closed", portal_account: false, portal_tier: "inactive" })
     expect(h.state.tierSyncs).toEqual([ACC])
     expect(followUps()).toHaveLength(followUpsBefore)
-    // the unpaid invoice of the offer is cancelled NOW (the return is filed, nothing more is owed for it to be worked)
-    expect(tableRow("payments", "p-part").status).toBe("Cancelled")
+    // the unpaid part of the filed return's offer is REPORTED, never cancelled behind staff's back (the unrelated one was cancelled when the job finished)
+    expect(tableRow("payments", "p-part").status).toBe("Pending")
+    expect(r.problems.join(" ")).toMatch(/INV-000010.*still unpaid.*NOT cancelled/)
   })
 
   it("closes the company when the tax return is cancelled by hand too", async () => {
     await hold()
     tableRow("service_deliveries", "sd-tax").status = "cancelled"
     const r = await completePendingCompanyClosure({ accountId: ACC })
-    expect(r.problems).toEqual([])
+    expect(r.problems).toHaveLength(1) // only the still-unpaid part of the offer, reported
+    expect(r.problems[0]).toMatch(/still unpaid/)
     expect(tableRow("accounts", ACC).status).toBe("Closed")
   })
 
