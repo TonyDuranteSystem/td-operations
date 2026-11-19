@@ -546,7 +546,7 @@ function StandaloneServiceAgreementPage({ offer, token, contractType = 'tax_retu
       // N0 (dev job f907220c): upload through a one-time link, then the server checks the
       // PDF, writes the contracts row, flips the offer to signed and runs the follow-up.
       setStatusMsg('Uploading signed agreement...')
-      await uploadAndSignOffer(cred, pdfBlob, `Tony_Durante_${pdfName}_${token}.pdf`, { client_name: name, client_email: email }, offer.language)
+      await uploadAndSignOffer(cred, pdfBlob, `Tony_Durante_${pdfName}_${token}.pdf`, { client_name: name, client_email: email }, offer.language, agreements.map((a) => String(a.line?.name ?? '')))
 
       // Show payment options — ensure real bank details (replace placeholders)
       const { ensureBankDetails } = await import('./bank-defaults')

@@ -107,8 +107,8 @@ export interface SignResponse {
   invoiceNumber: string | null
 }
 
-export function signOffer(cred: OfferCredential, pdfPath: string, fields: Record<string, unknown>): Promise<SignResponse> {
-  return post<SignResponse>('/api/offers/sign', cred, { pdf_path: pdfPath, fields })
+export function signOffer(cred: OfferCredential, pdfPath: string, fields: Record<string, unknown>, shownAgreements?: string[]): Promise<SignResponse> {
+  return post<SignResponse>('/api/offers/sign', cred, { pdf_path: pdfPath, fields, ...(shownAgreements ? { shown_agreements: shownAgreements } : {}) })
 }
 
 /** A server message meant for the client, shown as-is on the signing screen. */
@@ -128,6 +128,7 @@ export async function uploadAndSignOffer(
   fileName: string,
   fields: Record<string, unknown>,
   lang: string | null | undefined,
+  shownAgreements?: string[],
 ): Promise<SignResponse> {
   const l = signingLang(lang)
   let pdfPath: string
@@ -138,7 +139,7 @@ export async function uploadAndSignOffer(
     throw new SigningFailure('document_upload', l)
   }
   try {
-    return await signOffer(cred, pdfPath, fields)
+    return await signOffer(cred, pdfPath, fields, shownAgreements)
   } catch (e) {
     const msg = e instanceof Error ? e.message : ''
     if (msg === 'document_upload' || msg === 'record' || msg === 'status') throw new SigningFailure(msg, l)
