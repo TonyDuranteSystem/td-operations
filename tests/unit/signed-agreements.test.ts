@@ -173,3 +173,25 @@ describe('signing records what was printed', () => {
     expect('agreements' in w.rows[0]).toBe(false)
   })
 })
+
+describe('the contact card names a contract from what it contains', () => {
+  it('a contract with a record gets the combined name; one without keeps the name from the offer\'s main type', async () => {
+    const { buildEntries } = await import('@/lib/signed-contracts/entries')
+    const offers = [
+      { id: 'o1', token: 'carasso-2026', contract_type: 'tax_return', installment_currency: null, recurring_costs: null, account_id: null },
+      { id: 'o2', token: 'old-2025', contract_type: 'tax_return', installment_currency: null, recurring_costs: null, account_id: null },
+    ]
+    const base = { signed_at: '2026-11-19T08:38:22Z', created_at: '2026-11-19T08:38:22Z', updated_at: null, contract_version: null, annual_fee: null, installments: null, pdf_path: 'x/y.pdf' }
+    const entries = buildEntries({
+      offers,
+      contracts: [
+        { id: 'c1', offer_token: 'carasso-2026', ...base, agreements: [{ type: 'closure', name: 'Company Closure' }, { type: 'tax_return', name: 'Tax Return 2026' }] },
+        { id: 'c2', offer_token: 'old-2025', ...base, agreements: null },
+      ],
+      agreements: [],
+      corrections: [],
+    })
+    expect(entries.find((e) => e.id === 'c1')?.title).toBe('Closure + Tax return agreements')
+    expect(entries.find((e) => e.id === 'c2')?.title).toBe('Tax Return Filing Agreement')
+  })
+})
