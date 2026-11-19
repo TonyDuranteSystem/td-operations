@@ -181,7 +181,7 @@ _Regenerated 2026-11-19 from the R-rule list in CLAUDE.md — **45 rules**, high
 <!-- GENERATED:deep-docs -->
 _Regenerated 2026-11-19. Every subsystem doc under `docs/systems/` (64 docs), with the date each was last verified against code — **an old date means treat that doc as a hint and check the code**._
 
-- [account-journey.md](account-journey.md) — Account journey (the card on the company page) _(verified 2026-11-14)_
+- [account-journey.md](account-journey.md) — Account journey (the card on the company page) _(verified 2026-11-19)_
 - [address-book.md](address-book.md) — Address book — standalone, reads the CRM, saves everyone else _(verified 2026-11-15)_
 - [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-11-18)_
 - [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-11-13)_
