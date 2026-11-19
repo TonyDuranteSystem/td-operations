@@ -49,6 +49,7 @@ function world(opts: {
       return { status: 200, body: { ok: true } }
     },
     processAgreementSigned: async (t) => { log.push(`agreement-followup ${t}`); return { status: 200, body: { ok: true, invoice_number: 'INV-000123' } } },
+    multiAgreementsEnabled: async () => false,
     now: () => new Date('2026-09-30T12:00:00Z'),
   }
   return { offer, deps, log, contracts: () => contracts }

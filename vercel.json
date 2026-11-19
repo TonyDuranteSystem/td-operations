@@ -53,6 +53,10 @@
       "schedule": "0 9 * * *"
     },
     {
+      "path": "/api/cron/complete-held-closings",
+      "schedule": "30 9 * * *"
+    },
+    {
       "path": "/api/cron/annual-report-check",
       "schedule": "0 9 * * *"
     },

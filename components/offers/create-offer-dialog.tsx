@@ -9,6 +9,7 @@ import { FORMATION_STATE_CODES, FORMATION_STATE_NAMES, type FormationStateCode }
 import { parsePriceQuirk } from '@/lib/offers/compute-offer-totals'
 import { parseAuthoredAmount, authoredAmountValue } from '@/lib/offers/parse-authored-amount'
 import { deriveContractType, isUntypedFormationFallback } from '@/lib/offers/derive-contract-type'
+import { lineNameWithYear, taxYearProblem } from '@/lib/offers/tax-year'
 import { buildAnnualCostRows } from '@/lib/offers/annual-maintenance-wording'
 import { formatOptionLabel } from '@/lib/offers/package-option-label'
 import { canGroundFormationState, canGroundEntityType } from '@/lib/offers/narrative-business-rules'
@@ -50,6 +51,8 @@ interface SelectedService {
   price: string            // unit price entered by staff
   quantity: number         // default 1; >1 only for services with supports_quantity
   service_context: 'individual' | 'business' | 'ask'
+  /** Tax Return line only: the tax year it is for (dev job 0a60f416) — written into the line name ("Tax Return 2026") */
+  tax_year?: number
 }
 
 const PAYMENT_TYPES = [
@@ -999,7 +1002,9 @@ export function CreateOfferDialog({
       if (exists) return prev.filter(s => s.id !== id)
       const svc = catalog.find(c => c.id === id)
       const defaultPrice = svc?.default_price != null ? String(svc.default_price) : ''
-      return [...prev, { id, price: defaultPrice, quantity: 1, service_context: getDefaultContext(svc) }]
+      // A Tax Return line starts on last year (what activation always assumed) — now visible, and staff can change it.
+      const taxYear = svc?.pipeline === 'Tax Return' ? new Date().getFullYear() - 1 : undefined
+      return [...prev, { id, price: defaultPrice, quantity: 1, service_context: getDefaultContext(svc), ...(taxYear ? { tax_year: taxYear } : {}) }]
     })
   }
 
@@ -1014,6 +1019,16 @@ export function CreateOfferDialog({
       prev.map(s => s.id === id ? { ...s, quantity: Math.max(1, quantity) } : s)
     )
   }
+
+  const updateTaxYear = (id: string, year: number) => {
+    setSelected(prev => prev.map(s => s.id === id ? { ...s, tax_year: year } : s))
+  }
+
+  // The tax-year box shows only on a Tax Return line of a short-contract tax return offer — the one kind whose year the activation reads.
+  const taxYearRowProps = (svc: CatalogService) =>
+    svc.pipeline === 'Tax Return' && derivedContractType === 'tax_return'
+      ? { taxYear: selected.find(s => s.id === svc.id)?.tax_year ?? null, onTaxYearChange: (y: number) => updateTaxYear(svc.id, y) }
+      : {}
 
   const updateServiceContext = (id: string, ctx: 'individual' | 'business' | 'ask') => {
     setSelected(prev =>
@@ -1096,6 +1111,15 @@ export function CreateOfferDialog({
       }
     }
 
+    // A Tax Return line states a year the company could really have a return for (dev job 0a60f416). The server checks it again against the company.
+    if (derivedContractType === 'tax_return') {
+      for (const s of selected) {
+        if (catalog.find(c => c.id === s.id)?.pipeline !== 'Tax Return' || !s.tax_year) continue
+        const problem = taxYearProblem(s.tax_year, { currentYear: new Date().getFullYear() })
+        if (problem) { toast.error(`Tax Return line: ${problem}`); return }
+      }
+    }
+
     startTransition(async () => {
       try {
         // Every ticked service is sold. No price = free / gift (Antonio 2026-09-27):
@@ -1107,8 +1131,9 @@ export function CreateOfferDialog({
             const unitPrice = s.price.replace(/[^0-9.]/g, '') || '0'
             const qty = s.quantity ?? 1
             const totalPrice = (parseFloat(unitPrice) * qty).toLocaleString('en-US')
+            const lineYear = derivedContractType === 'tax_return' && svc_cat?.pipeline === 'Tax Return' ? s.tax_year : undefined
             const svc: Record<string, unknown> = {
-              name: svc_cat?.name || s.id,
+              name: lineYear ? lineNameWithYear(svc_cat?.name || s.id, lineYear) : (svc_cat?.name || s.id),
               price: `${currencySymbol}${qty > 1 ? totalPrice : unitPrice}`,
               service_context: s.service_context,
             }
@@ -1640,6 +1665,7 @@ export function CreateOfferDialog({
                   onPriceChange={(p) => updatePrice(svc.id, p)}
                   onQuantityChange={(q) => updateQuantity(svc.id, q)}
                   onContextChange={(ctx) => updateServiceContext(svc.id, ctx)}
+                  {...taxYearRowProps(svc)}
                 />
               ))}
             </div>
@@ -1659,6 +1685,7 @@ export function CreateOfferDialog({
                   onPriceChange={(p) => updatePrice(svc.id, p)}
                   onQuantityChange={(q) => updateQuantity(svc.id, q)}
                   onContextChange={(ctx) => updateServiceContext(svc.id, ctx)}
+                  {...taxYearRowProps(svc)}
                 />
               ))}
             </div>
@@ -1678,6 +1705,7 @@ export function CreateOfferDialog({
                   onPriceChange={(p) => updatePrice(svc.id, p)}
                   onQuantityChange={(q) => updateQuantity(svc.id, q)}
                   onContextChange={(ctx) => updateServiceContext(svc.id, ctx)}
+                  {...taxYearRowProps(svc)}
                 />
               ))}
             </div>
@@ -2802,6 +2830,8 @@ function ServiceRow({
   onPriceChange,
   onQuantityChange,
   onContextChange,
+  taxYear,
+  onTaxYearChange,
 }: {
   service: { id: string; name: string; supports_quantity: boolean }
   isSelected: boolean
@@ -2813,6 +2843,9 @@ function ServiceRow({
   onPriceChange: (price: string) => void
   onQuantityChange: (quantity: number) => void
   onContextChange: (ctx: 'individual' | 'business' | 'ask') => void
+  /** Tax Return line of a tax return offer only: the year it is for, and how to change it. Absent = no year box. */
+  taxYear?: number | null
+  onTaxYearChange?: (year: number) => void
 }) {
   const unitPrice = parsePriceQuirk(price)
   const lineTotal = unitPrice > 0 && quantity > 1
@@ -2851,6 +2884,22 @@ function ServiceRow({
               <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
           </select>
+          {/* Tax year — only on the Tax Return line of a tax return offer (dev job 0a60f416) */}
+          {taxYear !== undefined && onTaxYearChange && (
+            <label className="flex items-center gap-1 text-xs text-zinc-600">
+              Tax year
+              <input
+                type="number"
+                min={2000}
+                max={new Date().getFullYear()}
+                value={taxYear ?? ''}
+                onChange={e => onTaxYearChange(parseInt(e.target.value, 10) || 0)}
+                className="w-20 px-2 py-1.5 text-sm text-center border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                title="The tax year this return is for"
+                aria-label="Tax year"
+              />
+            </label>
+          )}
           {/* Quantity input — only for services that support it (e.g. ITIN) */}
           {service.supports_quantity && (
             <div className="flex items-center gap-1">

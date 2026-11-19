@@ -35,6 +35,7 @@ import { ContactHealthPanel } from '@/components/contacts/contact-health-panel'
 import { ReferralsGivenCard } from '@/components/referrals/referrals-given-card'
 import { ConfirmPaymentDialog } from '@/app/(dashboard)/leads/[id]/components/confirm-payment-dialog'
 import { AccountOfferPanel, type OfferData } from '@/components/offers/account-offer-panel'
+import { listOrEmpty } from '@/lib/offers/json-list'
 import { SignedContractsCard } from '@/components/contacts/signed-contracts-card'
 import { replaceEntry } from '@/lib/signed-contracts/list'
 import type { SignedContractEntry } from '@/lib/signed-contracts/types'
@@ -1214,7 +1215,10 @@ function QuickActionsBar({
             contract_type: paymentOffer.contract_type,
             bundled_pipelines: paymentOffer.bundled_pipelines,
             currency: paymentOffer.currency ?? null,
-            cost_summary: (paymentOffer.cost_summary ?? null) as Array<{ label: string; total?: string; items?: Array<{ name: string; price: string }> }> | null,
+            // a list saved as text is read as a real list (dev job 20600f18); no breakdown stays null
+            cost_summary: paymentOffer.cost_summary == null
+              ? null
+              : listOrEmpty<{ label: string; total?: string; items?: Array<{ name: string; price: string }> }>(paymentOffer.cost_summary),
           } : null}
         />
       )}
@@ -1540,7 +1544,7 @@ function OfferStatusCard({
   const offersData: OfferData[] = offers.map((o) => ({
     ...o,
     view_count: o.view_count ?? 0,
-    cost_summary: o.cost_summary as OfferData['cost_summary'],
+    cost_summary: o.cost_summary == null ? null : listOrEmpty<NonNullable<OfferData['cost_summary']>[number]>(o.cost_summary),
     required_documents: o.required_documents as OfferData['required_documents'],
   }))
 
