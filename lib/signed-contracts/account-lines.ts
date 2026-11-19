@@ -11,6 +11,7 @@
 import { etDay } from '@/lib/accounts/became-client'
 import { contractLabel } from './labels'
 import { hasUsablePath, newestPerOffer } from './entries'
+import { signedAgreementsLabel } from '@/lib/offers/signed-agreements'
 
 export interface AccountLineOffer {
   token: string
@@ -22,6 +23,8 @@ export interface AccountLineContract {
   signed_at: string | null
   created_at: string | null
   pdf_path: string | null
+  /** what the contract contained when it was signed (contracts.agreements); null/absent = signed before this was recorded */
+  agreements?: unknown
 }
 
 export interface AccountContractLine {
@@ -62,7 +65,8 @@ export function buildAccountContractLines(input: {
     const year = offer.contract_type === 'renewal' ? (input.agreementYears[c.offer_token] ?? (signedOn ? Number(signedOn.slice(0, 4)) : null)) : null
     lines.push({
       id: c.id,
-      name: accountLineName(offer.contract_type, year),
+      // what the contract CONTAINS, when that was recorded at signing; else the old name from the offer's main type (dev job 0a60f416)
+      name: signedAgreementsLabel(c.agreements)?.title ?? accountLineName(offer.contract_type, year),
       signedOn,
       isMain: MAIN_TYPES.includes(offer.contract_type ?? ''),
       fileAvailable: hasUsablePath(c.pdf_path),
