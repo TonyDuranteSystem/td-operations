@@ -85,6 +85,7 @@ export function provisionDeps(): ProvisionDeps {
     // A Member / Owner of this company with the same name: they get their own full login, never a team login.
     findCompanyMemberByName: async (accountId, displayName) => {
       const wanted = displayName.trim().toLowerCase().replace(/\s+/g, ' ')
+      // portal-access-ok: roster check (a member is never given a second, team login), whether or not they use the portal
       const { data } = await sb()
         .from('account_contacts')
         .select('role, contacts:contact_id(full_name)')

@@ -64,6 +64,9 @@ function buildChain(table: string) {
   const chain = {
     select: (_cols?: string) => chain,
 
+    // the no-portal-access filter (dev job beb43385): the in-memory links carry no mark
+    is(_col: string, _val: unknown) { return chain },
+
     update(payload: Record<string, unknown>) {
       isUpdate = true
       updatePayload = payload

@@ -142,6 +142,7 @@ export async function POST(req: NextRequest) {
         billableName = acct.company_name || body.end_client_name || "End Client"
 
         const { data: link } = await supabaseAdmin
+          // portal-access-ok: billing contact of a partner client, picked by staff-side rules
           .from("account_contacts")
           .select("contact_id, contacts(full_name, email)")
           .eq("account_id", body.account_id)

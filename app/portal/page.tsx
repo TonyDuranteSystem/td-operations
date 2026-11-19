@@ -116,6 +116,7 @@ export default async function PortalDashboardPage() {
     const { count: membershipCount } = await supabaseAdmin
       .from('account_contacts')
       .select('account_id', { count: 'exact', head: true })
+      .is('access_revoked_at', null)
       .eq('contact_id', contactId)
     const cookieStore = await cookies()
     const modeCtx = await resolvePortalMode(contactId, (membershipCount ?? 0) > 0, cookieStore.get('portal_mode')?.value)

@@ -8,6 +8,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, Pencil, FileSignature, Landmark, Calculator, Home, XCircle, MessageCircle, ChevronDown, Pin, Mail, StickyNote, Link2, Languages, Lightbulb, FolderInput } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { cn } from '@/lib/utils'
+import { SwipeRow } from '@/components/portal-chats/swipe-row'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { useAudioNoteRecorder } from '@/lib/hooks/use-audio-note-recorder'
 import { clock } from '@/lib/talk/chat-model'
@@ -476,6 +477,8 @@ export default function PortalChatsPage() {
   const [selectedMsgIds, setSelectedMsgIds] = useState<Set<string>>(new Set())
   // Chat-list filter chip: All / Unread / What's New / Chats / Pinned (lib/portal-chats/list-filter.ts). Opens on Chats.
   const [listFilter, setListFilter] = useState<ListFilter>(DEFAULT_LIST_FILTER)
+  // The conversation row currently swiped open on a phone ('<threadKey>|left' or '|right'); only one at a time.
+  const [openSwipeKey, setOpenSwipeKey] = useState<string | null>(null)
   // "Open card" from a What's New note → opens the same dashboard card editor, preset to this client.
   const [cardPreset, setCardPreset] = useState<{
     accountId?: string | null
@@ -970,6 +973,21 @@ export default function PortalChatsPage() {
       .then(() => toast.success('Link copied.'))
       .catch(() => toast.error('Could not copy the link on this device.'))
   }, [threadDeepLink])
+
+  // Swipe tools on the open conversation's header (phone): same four tools as the list rows. Pin/Read state comes from the list entry of this thread.
+  const openThreadRow = threads?.find(t => selectedAccountId ? t.account_id === selectedAccountId : t.contact_id === selectedContactId)
+  const openThreadSwipe = {
+    left: (selectedAccountId || selectedContactId) ? [
+      ...((openThreadRow?.unread_count ?? 0) > 0
+        ? [{ key: 'read', label: 'Read', icon: <MailCheck className="h-4 w-4" />, className: 'bg-blue-600', onPress: () => { void markAsRead({ account_id: selectedAccountId, contact_id: selectedContactId }) } }]
+        : [{ key: 'unread', label: 'Unread', icon: <MailOpen className="h-4 w-4" />, className: 'bg-blue-600', onPress: () => { void markAsUnread({ account_id: selectedAccountId, contact_id: selectedContactId }) } }]),
+      { key: 'pin', label: openThreadRow?.is_pinned ? 'Unpin' : 'Pin', icon: <Pin className="h-4 w-4" />, className: 'bg-amber-500', onPress: () => pinThreadMutation.mutate({ account_id: selectedAccountId, contact_id: selectedContactId, pinned: !openThreadRow?.is_pinned }) },
+    ] : [],
+    right: (selectedAccountId || selectedContactId) ? [
+      { key: 'note', label: 'Note', icon: <StickyNote className="h-4 w-4" />, className: 'bg-yellow-500', onPress: () => setNoteSeed({ accountId: selectedAccountId, contactId: selectedAccountId ? null : selectedContactId, prefill: '', originUrl: threadDeepLink() ?? undefined }) },
+      { key: 'link', label: 'Copy link', icon: <Link2 className="h-4 w-4" />, className: 'bg-zinc-600', onPress: () => copyDeepLink() },
+    ] : [],
+  }
 
   const { data: messages, isLoading: messagesLoading } = useQuery<ChatMessage[]>({
     queryKey: ['portal-chat-messages', selectedAccountId || selectedContactId],
@@ -2813,6 +2831,29 @@ export default function PortalChatsPage() {
                 : selectedContactId === thread.contact_id
               return (
               <FastTooltip key={threadKey} label={thread.contact_name ? `${thread.company_name} — ${thread.contact_name}` : thread.company_name} className="w-full">
+                <SwipeRow
+                  rowKey={threadKey}
+                  openKey={openSwipeKey}
+                  onOpenChange={setOpenSwipeKey}
+                  leftActions={[
+                    ...((thread.account_id || thread.contact_id) ? [thread.unread_count > 0
+                      ? { key: 'read', label: 'Read', icon: <MailCheck className="h-4 w-4" />, className: 'bg-blue-600', onPress: () => { void markAsRead(thread) } }
+                      : { key: 'unread', label: 'Unread', icon: <MailOpen className="h-4 w-4" />, className: 'bg-blue-600', onPress: () => { void markAsUnread(thread) } }] : []),
+                    { key: 'pin', label: thread.is_pinned ? 'Unpin' : 'Pin', icon: <Pin className="h-4 w-4" />, className: 'bg-amber-500', onPress: () => pinThreadMutation.mutate({ account_id: thread.account_id, contact_id: thread.contact_id, pinned: !thread.is_pinned }) },
+                  ]}
+                  rightActions={(() => {
+                    // Same scope the thread opens with: a multi-member company by account, every other thread by contact.
+                    const byAccount = !!thread.account_id && (thread.members ?? []).length > 0
+                    const rel = byAccount ? `/portal-chats?account=${thread.account_id}` : thread.contact_id ? `/portal-chats?contact=${thread.contact_id}` : null
+                    return [
+                      { key: 'note', label: 'Note', icon: <StickyNote className="h-4 w-4" />, className: 'bg-yellow-500', onPress: () => setNoteSeed({ accountId: byAccount ? thread.account_id : null, contactId: byAccount ? null : thread.contact_id, prefill: '', originUrl: rel ?? undefined }) },
+                      { key: 'link', label: 'Copy link', icon: <Link2 className="h-4 w-4" />, className: 'bg-zinc-600', onPress: () => {
+                        if (!rel) return
+                        navigator.clipboard.writeText(`${window.location.origin}${rel}`).then(() => toast.success('Link copied.')).catch(() => toast.error('Could not copy the link on this device.'))
+                      } },
+                    ]
+                  })()}
+                >
                 <button
                   onClick={() => {
                     const members = thread.members ?? []
@@ -2999,6 +3040,7 @@ export default function PortalChatsPage() {
                     {thread.last_message_at ? format(parseISO(thread.last_message_at), 'MMM d, h:mm a') : ''}
                   </p>
                 </button>
+                </SwipeRow>
               </FastTooltip>
               )
             })
@@ -3462,6 +3504,14 @@ export default function PortalChatsPage() {
               const companies = selectedThreadCompanies.length > 0 ? selectedThreadCompanies : (currentThread?.companies ?? [])
               const subtitle = companies.length > 0 ? companies.map(c => (c.closed ? `${c.name} (closed)` : c.name)).join(' · ') : 'Portal chat'
               return (
+                <SwipeRow
+                  rowKey="open-header"
+                  className="shrink-0"
+                  openKey={openSwipeKey}
+                  onOpenChange={setOpenSwipeKey}
+                  leftActions={openThreadSwipe.left}
+                  rightActions={openThreadSwipe.right}
+                >
                 <PhoneConvNav
                   title={displayName}
                   titleHref={selectedContactId ? `/contacts/${selectedContactId}` : selectedAccountId ? `/accounts/${selectedAccountId}` : undefined}
@@ -3471,8 +3521,17 @@ export default function PortalChatsPage() {
                   onBack={leaveConversation}
                   onMore={() => setAppSheet('more')}
                 />
+                </SwipeRow>
               )
             })()}
+            <SwipeRow
+              rowKey="open-header"
+              className="app-hide shrink-0"
+              openKey={openSwipeKey}
+              onOpenChange={setOpenSwipeKey}
+              leftActions={openThreadSwipe.left}
+              rightActions={openThreadSwipe.right}
+            >
             <div className="app-conv-header app-hide px-4 py-3 border-b bg-white shrink-0">
               <button
                 onClick={leaveConversation}
@@ -3583,6 +3642,7 @@ export default function PortalChatsPage() {
                 )
               })()}
             </div>
+            </SwipeRow>
 
             {/* Sub-tabs: Messages | Tasks (shown when a client thread is selected) */}
             {(selectedAccountId || selectedContactId) && (

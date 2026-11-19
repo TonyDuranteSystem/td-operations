@@ -74,6 +74,7 @@ function makeChain(data: unknown, count?: number) {
   const chain: Record<string, unknown> = {
     select: vi.fn(() => chain),
     eq: vi.fn(() => chain),
+    is: vi.fn(() => chain), // the no-portal-access filter (dev job beb43385)
     single: vi.fn().mockResolvedValue(result),
     then: (resolve: (v: typeof result) => unknown) => resolve(result),
   }

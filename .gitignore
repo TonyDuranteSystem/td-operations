@@ -62,3 +62,6 @@ test-results/
 # WhatsApp importer output (contains client conversation data — never commit)
 import-report.json
 .env*
+
+# Packed copy of the source for the production code tools — written by `npm run build` (scripts/build-code-snapshot.js)
+/generated/
