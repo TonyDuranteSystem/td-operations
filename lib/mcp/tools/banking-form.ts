@@ -9,6 +9,7 @@ import { z } from "zod"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
 import type { Json } from "@/lib/database.types"
+import { localeFromLanguage } from "@/lib/locale"
 
 export function registerBankingFormTools(server: McpServer) {
 
@@ -105,7 +106,7 @@ export function registerBankingFormTools(server: McpServer) {
         }
 
         // 7. Determine language
-        const formLang = language || (contact.language === "Italian" || contact.language === "it" ? "it" : "en")
+        const formLang = language || localeFromLanguage(contact.language)
 
         // 8. Insert
         const { data: submission, error: insErr } = await supabaseAdmin

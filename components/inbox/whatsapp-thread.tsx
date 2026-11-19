@@ -1159,7 +1159,9 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
           sending, so replying from an open conversation isn't a different,
           thinner experience than starting one (Antonio, 2026-09-17). */}
       {/* The footer can never be taller than the chat pane: it scrolls inside itself, and the confirm buttons stay pinned at its bottom (Antonio, 2026-11-06). */}
-      <div className="border-t bg-white shrink-0 max-h-[70%] overflow-y-auto">
+      {/* Scrolls ONLY on the confirm screen (a long message must not push its buttons off the screen). The normal message bar must NOT scroll or clip:
+          the attach menu and the emoji picker pop up ABOVE it, and a scrolling box cut them off (Antonio 2026-11-19: "the card to attach is behind the screen"). */}
+      <div className={cn('border-t bg-white shrink-0', confirming && 'max-h-[70%] overflow-y-auto')}>
         {notice && (
           <p className={cn('text-xs px-3 pt-2', notice.tone === 'warn' ? 'text-amber-700' : 'text-zinc-500')}>{notice.text}</p>
         )}
