@@ -38,6 +38,10 @@ export async function GET(request: NextRequest) {
   if (!group) {
     return NextResponse.json({ error: "Conversation not found" }, { status: 404 })
   }
+  // a WhatsApp GROUP is not one person's number: nothing to match or save
+  if ((group.external_group_id ?? "").endsWith("@g.us")) {
+    return NextResponse.json({ match: null, alreadyLinked: true })
+  }
   if (group.lead_id || group.contact_id || group.account_id) {
     return NextResponse.json({ match: null, alreadyLinked: true })
   }
