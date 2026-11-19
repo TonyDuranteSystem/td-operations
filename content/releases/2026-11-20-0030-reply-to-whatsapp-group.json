@@ -1,0 +1,26 @@
+{
+  "title": "You can reply to a WhatsApp group from TD Social",
+  "tag": "new",
+  "text": "Open a group in the WhatsApp tab and write to it like any chat. Text, files and voice notes work. Before sending, the confirm step shows a clear warning that you are writing to the whole group and that it cannot be taken back. As before, you can only reply in a group where someone has already written, and the same speed limits apply.",
+  "points": [
+    "Text, files and voice notes",
+    "Clear group warning before sending",
+    "Only groups where someone already wrote"
+  ],
+  "stepsTitle": "Replying to a group",
+  "steps": [
+    {
+      "name": "Open the group",
+      "detail": "It has the green Group label."
+    },
+    {
+      "name": "Write your message",
+      "detail": "Press send to reach the confirm step.",
+      "flag": "new"
+    },
+    {
+      "name": "Check the group name, then confirm",
+      "detail": "The amber note names the group."
+    }
+  ]
+}
