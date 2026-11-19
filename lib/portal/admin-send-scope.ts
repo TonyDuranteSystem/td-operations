@@ -95,6 +95,7 @@ export async function isContactLinkedToAccount(
 ): Promise<boolean> {
   try {
     const { data, error } = await db
+      // portal-access-ok: checks the send scope names a real member; membership, not portal access
       .from('account_contacts')
       .select('contact_id')
       .eq('account_id', accountId)
@@ -124,7 +125,7 @@ export async function accountAudience(
   let contactCount = 0
   let chatTeammateCount = 0
   try {
-    const { data } = await db.from('account_contacts').select('contact_id').eq('account_id', accountId)
+    const { data } = await db.from('account_contacts').select('contact_id').is('access_revoked_at', null).eq('account_id', accountId)
     contactCount = Array.isArray(data) ? data.length : 0
   } catch {
     contactCount = 0
@@ -162,6 +163,7 @@ export async function resolveAdminReplyContact(
   const { data: links } = await admin
     .from('account_contacts')
     .select('contact_id, is_primary')
+    .is('access_revoked_at', null)
     .eq('account_id', accountId)
   const linked = (links ?? []) as { contact_id: string; is_primary: boolean | null }[]
   if (linked.length === 0) return null

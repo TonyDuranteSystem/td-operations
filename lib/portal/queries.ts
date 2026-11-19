@@ -26,6 +26,7 @@ export async function getPortalAccounts(contactId: string): Promise<PortalAccoun
   const { data: links } = await supabaseAdmin
     .from('account_contacts')
     .select('account_id, role, is_primary')
+    .is('access_revoked_at', null)
     .eq('contact_id', contactId)
 
   if (!links || links.length === 0) return []
@@ -58,7 +59,7 @@ export async function getPortalAccounts(contactId: string): Promise<PortalAccoun
  * (getPortalAccounts), so this is how the home page can still say "your company has been closed" (lib/portal/closed-company.ts).
  */
 export async function getClosedCompanyNames(contactId: string): Promise<string[]> {
-  const { data: links } = await supabaseAdmin.from('account_contacts').select('account_id').eq('contact_id', contactId)
+  const { data: links } = await supabaseAdmin.from('account_contacts').select('account_id').is('access_revoked_at', null).eq('contact_id', contactId)
   if (!links || links.length === 0) return []
   const { data } = await supabaseAdmin
     .from('accounts')
@@ -114,6 +115,7 @@ export async function getChatMembership(contactId: string): Promise<{
     const { data: links } = await supabaseAdmin
       .from('account_contacts')
       .select('account_id, contact_id')
+      .is('access_revoked_at', null)
       .in('account_id', accounts.map(a => a.id))
     for (const l of links ?? []) {
       const arr = membersByAccount.get(l.account_id) ?? []
@@ -192,6 +194,7 @@ export async function getFormationAccount(contactId: string) {
   const { data: links } = await supabaseAdmin
     .from('account_contacts')
     .select('account_id')
+    .is('access_revoked_at', null)
     .eq('contact_id', contactId)
 
   if (!links || links.length === 0) return null
@@ -2225,6 +2228,7 @@ export async function getCompanyEmail(accountId: string): Promise<string | null>
   const { data: links } = await supabaseAdmin
     .from('account_contacts')
     .select('role, ownership_pct, contacts(email, created_at)')
+    .is('access_revoked_at', null)
     .eq('account_id', accountId)
 
   if (!links || links.length === 0) return null
@@ -2315,6 +2319,7 @@ export async function getProfileBannerStatus(contactId: string): Promise<Profile
   const { data: links } = await supabaseAdmin
     .from('account_contacts')
     .select('account_id')
+    .is('access_revoked_at', null)
     .eq('contact_id', contactId)
   const accountIds = (links ?? [])
     .map(l => l.account_id)

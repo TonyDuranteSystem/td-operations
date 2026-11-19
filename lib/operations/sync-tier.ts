@@ -41,6 +41,7 @@ export async function computeContactTier(contactId: string): Promise<PortalTier 
   const { data: links } = await supabaseAdmin
     .from('account_contacts')
     .select('account_id')
+    .is('access_revoked_at', null)
     .eq('contact_id', contactId)
 
   if (!links || links.length === 0) return null
@@ -87,6 +88,7 @@ export async function syncContactTiersForAccount(
   actor = 'system',
 ): Promise<ContactTierUpdate[]> {
   const { data: links } = await supabaseAdmin
+    // portal-access-ok: tier follows the company; a no-access member simply keeps their other tier
     .from('account_contacts')
     .select('contact_id')
     .eq('account_id', accountId)
@@ -190,6 +192,7 @@ export async function syncTier(params: SyncTierParams): Promise<SyncTierResult> 
 
   // Find all contacts linked to this account
   const { data: links } = await supabaseAdmin
+    // portal-access-ok: tier follows the company; a no-access member simply keeps their other tier
     .from('account_contacts')
     .select('contact_id')
     .eq('account_id', accountId)

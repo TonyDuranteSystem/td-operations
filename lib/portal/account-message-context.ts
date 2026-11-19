@@ -39,7 +39,7 @@ export async function getAccountMessageContext(accountId: string): Promise<Share
 /** The amber "nobody can read it yet" line, or undefined (also when the lookup fails — never a false warning). */
 async function reachNotice(accountId: string, name: string): Promise<string | undefined> {
   try {
-    const { data: links } = await supabaseAdmin.from("account_contacts").select("contact_id").eq("account_id", accountId)
+    const { data: links } = await supabaseAdmin.from("account_contacts").select("contact_id").is("access_revoked_at", null).eq("account_id", accountId)
     const contactIds = Array.from(new Set(((links ?? []) as { contact_id: string }[]).map((l) => l.contact_id)))
     let contactsWithLogin = 0
     if (contactIds.length > 0) {

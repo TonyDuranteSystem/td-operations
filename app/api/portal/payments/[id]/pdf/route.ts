@@ -69,6 +69,7 @@ export async function GET(
       : Promise.resolve({ data: null }),
     payment.account_id
       ? supabaseAdmin
+          // portal-access-ok: owner name printed on the payment PDF (roster)
           .from('account_contacts')
           .select('contacts(first_name, last_name, email)')
           .eq('account_id', payment.account_id)

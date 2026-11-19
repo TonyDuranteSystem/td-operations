@@ -66,6 +66,7 @@ export async function GET() {
       const { data: links } = await supabaseAdmin
         .from('account_contacts')
         .select('contact_id, account_id')
+        .is('access_revoked_at', null)
         .in('contact_id', contactIds)
       for (const link of links ?? []) {
         const cid = link.contact_id as string

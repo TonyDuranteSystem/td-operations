@@ -42,6 +42,7 @@ export async function GET(
       const { data: ac } = await supabaseAdmin
         .from('account_contacts')
         .select('account_id')
+        .is('access_revoked_at', null)
         .eq('contact_id', contactId)
         .limit(1)
         .maybeSingle()

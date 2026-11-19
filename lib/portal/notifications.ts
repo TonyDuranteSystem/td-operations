@@ -102,6 +102,7 @@ async function _sendNotificationEmail(accountId: string, title: string, body: st
   const { data: links } = await supabaseAdmin
     .from('account_contacts')
     .select('contact_id')
+    .is('access_revoked_at', null)
     .eq('account_id', accountId)
     .limit(1)
 
@@ -292,6 +293,7 @@ export async function notifyClientOfAdminMessage({
     const { data: links } = await supabaseAdmin
       .from('account_contacts')
       .select('role, contacts(id, email, full_name, language)')
+      .is('access_revoked_at', null)
       .eq('account_id', account_id)
     const linkRows = links ?? []
     const contactRecipients = linkRows
@@ -503,6 +505,7 @@ export async function notifyClientOfStageAdvance(params: {
     const { data: links } = await supabaseAdmin
       .from('account_contacts')
       .select('contact_id, contacts(email, full_name, language)')
+      .is('access_revoked_at', null)
       .eq('account_id', account_id)
     recipients = (links ?? [])
       .map(l => {

@@ -65,6 +65,7 @@ export default async function TdCommunicationPage() {
     const { data: acLinks } = await supabaseAdmin
       .from('account_contacts')
       .select('account_id')
+      .is('access_revoked_at', null)
       .eq('contact_id', contactId)
     for (const l of acLinks ?? []) {
       if (l.account_id && !ownedAccountIds.includes(l.account_id)) ownedAccountIds.push(l.account_id)
