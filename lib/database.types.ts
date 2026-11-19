@@ -5698,6 +5698,7 @@ export type Database = {
       }
       contracts: {
         Row: {
+          agreements: Json | null
           annual_fee: string | null
           client_address: string | null
           client_city: string | null
@@ -5727,6 +5728,7 @@ export type Database = {
           wire_receipt_path: string | null
         }
         Insert: {
+          agreements?: Json | null
           annual_fee?: string | null
           client_address?: string | null
           client_city?: string | null
@@ -5756,6 +5758,7 @@ export type Database = {
           wire_receipt_path?: string | null
         }
         Update: {
+          agreements?: Json | null
           annual_fee?: string | null
           client_address?: string | null
           client_city?: string | null
