@@ -32,6 +32,7 @@ import {
   SIGNABLE_OFFER_STATUSES,
 } from '@/lib/offers/public-signing'
 import { CURRENT_CONTRACT_VERSION, versionSignedFor } from '@/lib/offers/contract-version'
+import { agreementsShownFor, shownDiffersFromPlan, type SignedAgreement } from '@/lib/offers/signed-agreements'
 
 export interface SignDeps {
   storageObjectExists: (bucket: string, path: string) => Promise<boolean>
@@ -42,6 +43,8 @@ export interface SignDeps {
   flipOfferSigned: (token: string, update: Record<string, unknown>, fromStatuses: readonly string[]) => Promise<{ changed: number; error: string | null }>
   processOfferSigned: (token: string) => Promise<{ status: number; body: Record<string, unknown> }>
   processAgreementSigned: (token: string) => Promise<{ status: number; body: Record<string, unknown> }>
+  /** The "several agreements in one contract" switch right now (app setting). Decides which agreements a short contract prints and records. */
+  multiAgreementsEnabled: () => Promise<boolean>
   now: () => Date
 }
 
@@ -74,7 +77,7 @@ async function followUpOffer(deps: SignDeps, token: string): Promise<void> {
 
 export async function signPublicOffer(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  input: { offer: any; fields: Record<string, unknown> | null | undefined; pdfPath: unknown },
+  input: { offer: any; fields: Record<string, unknown> | null | undefined; pdfPath: unknown; shownAgreements?: unknown },
   deps: SignDeps,
 ): Promise<SignResult> {
   const { offer } = input
@@ -104,11 +107,28 @@ export async function signPublicOffer(
   const refusal = offerSignRefusal(offer, deps.now())
   if (refusal) return fail(409, refusal)
 
+  // A short contract records WHICH agreements it contains (dev job 0a60f416). The plan is the one the page draws (planAgreements); when the browser
+  // says it printed something else — the switch was flipped while the page was open — nothing is signed, so the record can never disagree with the PDF.
+  let agreements: SignedAgreement[] | null = null
+  if (kind === 'standalone') {
+    const planned = agreementsShownFor(offer, String(offer?.contract_type ?? ''), await deps.multiAgreementsEnabled())
+    if (shownDiffersFromPlan(input.shownAgreements, planned)) {
+      return fail(409, 'This agreement was updated while it was open. Please reload the page and sign again.')
+    }
+    if (planned.length > 0) agreements = planned
+  }
+
   if (!isOwnSignedPdfPath(token, input.pdfPath)) return fail(400, 'document_upload')
   if (!(await deps.storageObjectExists(SIGNED_BUCKET, input.pdfPath))) return fail(400, 'document_upload')
 
-  const row = buildRow(offer, kind, input.fields, input.pdfPath, deps.now())
-  const ins = await deps.insertContract(row)
+  const row = buildRow(offer, kind, input.fields, input.pdfPath, deps.now(), agreements)
+  let ins = await deps.insertContract(row)
+  if (ins.error && agreements && /agreements/i.test(ins.error)) {
+    // The record column is not on this database yet (a deploy that got ahead of its migration): sign without the record rather than block the client.
+    const plain = { ...row }
+    delete plain.agreements
+    ins = await deps.insertContract(plain)
+  }
   if (ins.error || !ins.id) return fail(500, 'record')
 
   const { update, planRefusal } = signingOfferUpdate(offer, kind)
@@ -146,9 +166,11 @@ function buildRow(
   fields: Record<string, unknown> | null | undefined,
   pdfPath: string,
   now: Date,
+  agreements: SignedAgreement[] | null = null,
 ): Record<string, unknown> {
   return {
     ...sanitizeContractFields(fields, kind),
+    ...(agreements ? { agreements } : {}),
     offer_token: String(offer.token),
     signed_at: now.toISOString(),
     pdf_path: pdfPath,

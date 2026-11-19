@@ -21,6 +21,7 @@
 
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { findAuthUsersByContactId, findAuthUserByEmail } from "@/lib/auth-admin-helpers"
+import { localeFromLanguage } from "@/lib/locale"
 
 export type LoginEmailSyncStatus =
   | "synced"
@@ -104,8 +105,8 @@ export async function sendLoginEmailChangedNotice(params: {
   fullName: string | null
   language: string | null
 }): Promise<void> {
-  const { toEmail, previousEmail, fullName, language } = params
-  const isIt = language === "it" || language === "Italian"
+  const { toEmail, fullName, language } = params
+  const isIt = localeFromLanguage(language) === "it"
   const { gmailPost } = await import("@/lib/gmail")
   const { PORTAL_BASE_URL } = await import("@/lib/config")
   const loginUrl = `${PORTAL_BASE_URL}/portal/login`

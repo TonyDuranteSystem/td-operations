@@ -21,6 +21,7 @@ import { clientFacingPartLabel, validatePaymentPlan } from "@/lib/offers/payment
 import { createOffer, type OfferContractType, type OfferPaymentType, type OfferPaymentGateway } from "@/lib/operations/offers"
 import { STANDALONE_AGREEMENT_TYPES, CUSTOM_CONTRACT_TYPE_PATTERN } from "@/lib/offers/standalone-contract-types"
 import { FORMATION_STATE_CODES, normalizeFormationState } from "@/lib/formation/states"
+import { normalizeOfferLists } from "@/lib/offers/json-list"
 
 // ─── Gmail Draft Helper ─────────────────────────────────────
 
@@ -544,6 +545,13 @@ IMPORTANT: Always set bundled_pipelines to list ALL possible service deliveries 
         // used to live here is removed; see lib/operations/offers.ts's step-1 comment for why.
         // Commission is now released ONCE, by a human, only after the whole plan is settled in
         // real cash — see the account-page release action.
+        // A list sent as TEXT (a pre-encoded JSON string) is saved as the real list, or refused — a text-saved price
+        // breakdown once took the staff contact page down (dev job 20600f18). See lib/offers/json-list.ts.
+        const listCheck = normalizeOfferLists(updates)
+        if (!listCheck.ok) {
+          return { content: [{ type: "text" as const, text: `❌ offer_update error: ${listCheck.error}` }] }
+        }
+        Object.assign(updates, listCheck.values)
         let planEcho = ""
         if ("payment_plan" in updates && updates.payment_plan != null) {
           const planCheck = validatePaymentPlan(updates.payment_plan)
