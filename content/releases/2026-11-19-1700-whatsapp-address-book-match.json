@@ -10,12 +10,12 @@
   "stepsTitle": "Saving an outside person from a chat",
   "steps": [
     {
-      "name": "Open a WhatsApp chat with an unknown number",
+      "name": "Open a chat with an unknown number",
       "detail": "The bar says it is not a lead, client or saved person."
     },
     {
-      "name": "Press Save this number, then Address book (not a client)",
-      "detail": "The name WhatsApp gave is filled in; edit it if needed.",
+      "name": "Pick Address book (not a client)",
+      "detail": "Press Save this number first. The name WhatsApp gave is filled in.",
       "flag": "new"
     },
     {
