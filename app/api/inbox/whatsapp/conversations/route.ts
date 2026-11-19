@@ -110,10 +110,12 @@ export async function GET() {
 
     const conversations: InboxConversation[] = groups.map((group) => {
       const preview = previewMap.get(group.id)
+      const isGroup = (group.external_group_id ?? "").endsWith("@g.us")
       return {
+        isGroup,
         id: `whatsapp:${group.id}`,
         channel: "whatsapp" as const,
-        name: resolveChatName({
+        name: isGroup ? (group.group_name?.trim() || "WhatsApp group") : resolveChatName({
           contactName: group.contact_id ? contactNames.get(group.contact_id) : null,
           leadName: group.lead_id ? leadNames.get(group.lead_id) : null,
           accountName: group.account_id ? accountNames.get(group.account_id) : null,

@@ -855,6 +855,9 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onFirstR
                   >
                     {conv.name}
                   </span>
+                  {conv.isGroup && (
+                    <span className="shrink-0 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">Group</span>
+                  )}
                   {/* PAYLOAD-derived "Archived" chip: shows in the views where
                       an archived row deliberately stays (folders, all-mail
                       search) so the Archive click always has a visible result.
