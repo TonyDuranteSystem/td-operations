@@ -1,3 +1,4 @@
+export const dynamic = 'force-dynamic'
 /**
  * Nightly safety net for a company whose closing is HELD for its final tax return (dev job 0a60f416, part C).
  *
