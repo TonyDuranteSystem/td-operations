@@ -12434,6 +12434,7 @@ export type Database = {
           is_active: boolean
           last_message_at: string | null
           lead_id: string | null
+          members: Json | null
           pinned: boolean
           unread_count: number
           updated_at: string
@@ -12450,6 +12451,7 @@ export type Database = {
           is_active?: boolean
           last_message_at?: string | null
           lead_id?: string | null
+          members?: Json | null
           pinned?: boolean
           unread_count?: number
           updated_at?: string
@@ -12466,6 +12468,7 @@ export type Database = {
           is_active?: boolean
           last_message_at?: string | null
           lead_id?: string | null
+          members?: Json | null
           pinned?: boolean
           unread_count?: number
           updated_at?: string
