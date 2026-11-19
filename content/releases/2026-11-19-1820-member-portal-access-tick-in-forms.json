@@ -1,5 +1,5 @@
 {
   "title": "Behind the scenes: a portal-access tick for each member in the company forms (switched off)",
   "tag": "behind-the-scenes",
-  "text": "The formation and onboarding forms for multi-member companies can now ask, for each additional member, whether that person should get a client portal login for the company. The box starts ticked; unticking it keeps the person as an owner on every document and only keeps the company out of their portal. The form also gets a clear orange notice that the person who signs the SS-4 is the person who appears on the EIN letter. The whole thing is switched off, so no client sees any difference yet. We test it on test companies first, and Antonio turns it on afterwards. When a member's login is created after the company is formed, the existing welcome email now goes with it, but only while the switch is on."
+  "text": "The formation and onboarding forms for multi-member companies can now ask, for each extra member, whether that person gets a client portal login for the company. The box starts ticked; unticking it keeps the person an owner on every document and only keeps the company out of their portal. The form also warns that whoever signs the SS-4 appears on the EIN letter. It is switched off, so no client sees any difference yet: we test it on test companies first and Antonio turns it on afterwards."
 }
