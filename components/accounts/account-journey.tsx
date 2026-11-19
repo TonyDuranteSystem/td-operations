@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils'
 import { journeyHeaderSummary, type JourneyFlag, type JourneyTone } from '@/lib/accounts/journey-summary'
 import { HelpDot } from '@/components/help/help-dot'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { listOrEmpty } from '@/lib/offers/json-list'
 
 // --- Types ---
 
@@ -133,7 +134,8 @@ export function deriveAccountJourneySteps(props: AccountJourneyProps): JourneySt
     tooltip.push(`Sent ${daysOut}d ago (${formatShortDate(offer.created_at)})`)
     if (offer.contract_type) tooltip.push(`Type: ${offer.contract_type}`)
     if (offer.cost_summary) {
-      const totals = offer.cost_summary.filter(g => g.total).map(g => `${g.label}: ${g.total}`)
+      // read through the shared reader: an old offer has this saved as text, and `.filter` on text would crash the page
+      const totals = listOrEmpty<{ label: string; total?: string }>(offer.cost_summary).filter(g => g.total).map(g => `${g.label}: ${g.total}`)
       if (totals.length > 0) tooltip.push(...totals)
     }
     steps.push({

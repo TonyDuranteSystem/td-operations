@@ -274,6 +274,57 @@ describe("createOffer — validation", () => {
   })
 })
 
+// Dev job 20600f18: an offer whose price breakdown was saved as TEXT took the staff contact page down.
+describe("createOffer — lists sent as text are saved as real lists (or refused)", () => {
+  it("a price breakdown and services sent as pre-encoded text are stored as real lists", async () => {
+    const { createOffer } = await import("@/lib/operations/offers")
+    const services = [{ name: "Formation", price: "$500" }]
+    const costSummary = [{ label: "Total", total: "$500" }]
+    const result = await createOffer({
+      client_name: "Mario Rossi",
+      language: "en",
+      payment_type: "bank_transfer",
+      services: JSON.stringify(services) as never,
+      cost_summary: JSON.stringify(costSummary) as never,
+    })
+    expect(result.success).toBe(true)
+    const insert = offerInserts.find((o) => !o.__update)
+    expect(Array.isArray(insert?.services)).toBe(true)
+    expect(Array.isArray(insert?.cost_summary)).toBe(true)
+    expect(insert?.services).toEqual(services)
+    expect(insert?.cost_summary).toEqual(costSummary)
+  })
+
+  it("text that is not a list is refused and nothing is saved", async () => {
+    const { createOffer } = await import("@/lib/operations/offers")
+    const result = await createOffer({
+      client_name: "Mario Rossi",
+      language: "en",
+      payment_type: "bank_transfer",
+      services: [{ name: "X", price: "$100" }],
+      cost_summary: "Total: 100 dollars" as never,
+    })
+    expect(result.success).toBe(false)
+    expect(result.outcome).toBe("validation_error")
+    expect(result.error).toContain("cost_summary")
+    expect(result.error).toContain("not a list")
+    expect(offerInserts.filter((o) => !o.__update)).toEqual([])
+  })
+
+  it("a text-saved list is still checked: a malformed service inside it is refused like any other", async () => {
+    const { createOffer } = await import("@/lib/operations/offers")
+    const result = await createOffer({
+      client_name: "Mario Rossi",
+      language: "en",
+      payment_type: "bank_transfer",
+      services: JSON.stringify([{ name: "Missing price" }]) as never,
+      cost_summary: [{ label: "Total", total: "$100" }],
+    })
+    expect(result.outcome).toBe("validation_error")
+    expect(result.error).toContain("services")
+  })
+})
+
 describe("createOffer — existence checks", () => {
   it("returns not_found when account_id does not exist", async () => {
     accountExists = false

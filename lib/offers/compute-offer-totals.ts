@@ -26,6 +26,7 @@
  */
 
 import { planCurrency, planTotal, planTotalMatchesGross, signingPart, validatePaymentPlan } from "@/lib/offers/payment-plan"
+import { listOrEmpty } from "@/lib/offers/json-list"
 
 export interface OfferLikeForTotals {
   services?: unknown
@@ -123,16 +124,7 @@ interface SummaryGroup {
 }
 
 function summaryArray(cost_summary: unknown): SummaryGroup[] {
-  if (Array.isArray(cost_summary)) return cost_summary as SummaryGroup[]
-  if (typeof cost_summary === "string") {
-    try {
-      const parsed = JSON.parse(cost_summary)
-      return Array.isArray(parsed) ? (parsed as SummaryGroup[]) : []
-    } catch {
-      return []
-    }
-  }
-  return []
+  return listOrEmpty<SummaryGroup>(cost_summary)
 }
 
 

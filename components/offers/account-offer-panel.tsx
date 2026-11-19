@@ -18,6 +18,7 @@ import type { ReadinessBlocker } from '@/lib/offers/service-readiness'
 import { canResetPackagePick } from '@/lib/offers/package-pick-status'
 import type { OfferPackageOption } from '@/lib/types/offer'
 import { FastTooltip } from '@/components/ui/fast-tooltip'
+import { listOrEmpty } from '@/lib/offers/json-list'
 
 const OFFER_STATUS_COLORS: Record<string, string> = {
   draft: 'bg-zinc-100 text-zinc-700',
@@ -219,6 +220,10 @@ function OfferCard({
   const welcomeLinkRef = useRef<WelcomeLinkButtonHandle | null>(null)
 
   const isOfferDraft = offer.status === 'draft'
+
+  // The price breakdown as a real list. One old offer has it saved as TEXT, and `.map` on text took the whole
+  // contact page down (dev job 20600f18) — read it through the shared reader instead.
+  const costSummaryGroups = listOrEmpty<NonNullable<OfferData['cost_summary']>[number]>(offer.cost_summary)
 
   // Multi-option offers: which option (if any) the client picked, so staff
   // can see it without opening the database directly.
@@ -423,9 +428,9 @@ function OfferCard({
         </div>
 
         {/* Cost summary */}
-        {offer.cost_summary && offer.cost_summary.length > 0 && (
+        {costSummaryGroups.length > 0 && (
           <div className="bg-zinc-50 rounded-lg p-3 text-sm">
-            {offer.cost_summary.map((group, i) => (
+            {costSummaryGroups.map((group, i) => (
               <div key={i}>
                 {group.items?.map((item, j) => (
                   <div key={j} className="flex justify-between text-xs">
@@ -615,7 +620,7 @@ function OfferCard({
             token: offer.token,
             contract_type: offer.contract_type,
             bundled_pipelines: offer.bundled_pipelines,
-            cost_summary: offer.cost_summary,
+            cost_summary: offer.cost_summary == null ? null : costSummaryGroups,
             currency: offer.currency,
           }}
         />
