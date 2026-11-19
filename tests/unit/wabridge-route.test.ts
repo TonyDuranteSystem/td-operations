@@ -126,8 +126,16 @@ describe("POST /api/wa-bridge/[channelId] — live messages", () => {
     expect(await call(goodMessage())).toEqual({ status: 200, body: { ok: true, deduped: true } })
   })
 
-  it("acknowledges ignored events (groups, reactions) with 200 and writes nothing", async () => {
-    for (const p of [goodMessage({ chat_id: "1203630000@g.us" }), { event: "message.reaction", payload: {} }]) {
+  it("saves a GROUP message under the group's own id, with the participant as sender and no auto-link", async () => {
+    const r = await call(goodMessage({ chat_id: "120363432541591903@g.us", from: "393339980702:7@s.whatsapp.net", from_name: "Mario" }))
+    expect(r).toEqual({ status: 200, body: { ok: true } })
+    expect(state.rpcCalls.map((c) => c.fn)).toEqual(["wabridge_ingest_message"]) // a group is never matched to a client by number
+    expect(state.groupCalls[0]).toMatchObject({ channelId: CHANNEL, remoteIdentifier: "120363432541591903@g.us", groupName: null })
+    expect(ingestCall().args).toMatchObject({ p_direction: "inbound", p_sender_phone: "+393339980702", p_sender_name: "Mario" })
+  })
+
+  it("acknowledges ignored events (status, reactions) with 200 and writes nothing", async () => {
+    for (const p of [goodMessage({ chat_id: "status@broadcast" }), { event: "message.reaction", payload: {} }]) {
       const r = await call(p)
       expect(r.status).toBe(200)
       expect(r.body.skipped).toBeTruthy()

@@ -16,6 +16,7 @@ import { legacyFormSlug } from "@/lib/portal/submission-token"
 import { contactIdForLead } from "@/lib/crm-store/lead-form-store"
 import { APP_BASE_URL } from "@/lib/config"
 import type { Json } from "@/lib/database.types"
+import { localeFromLanguage } from "@/lib/locale"
 
 export function registerClosureTools(server: McpServer) {
 
@@ -61,7 +62,7 @@ Use gmail_send to send the link to the client after Antonio approves.`,
           fullName = lead.full_name || ""
           email = lead.email || ""
           phone = lead.phone || ""
-          if (!language) lang = lead.language === "Italian" || lead.language === "it" ? "it" : "en"
+          if (!language) lang = localeFromLanguage(lead.language)
         }
 
         if (contact_id && !fullName) {

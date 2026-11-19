@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { findOrCreateWhatsAppGroup } from "@/lib/messaging/groups"
+import { parseGroupsBatch } from "@/lib/messaging/wabridge-groups"
 import type { Json } from "@/lib/database.types"
 import {
   isFreshTs,
@@ -354,6 +355,23 @@ export async function POST(req: NextRequest, { params }: { params: { channelId: 
     return NextResponse.json(finished)
   }
 
+  // ─── The phone's WhatsApp GROUPS (id + name), listed by the Mac every minute ───
+  // A group a client creates (or adds us to) appears in the Inbox within a minute, even before anyone writes in it; a renamed group
+  // gets its new name. Saved only: nothing is ever sent to WhatsApp from here.
+  if (kind === "bridge.groups") {
+    const parsedGroups = parseGroupsBatch(body, now)
+    if ("error" in parsedGroups) return NextResponse.json({ error: parsedGroups.error }, { status: 400 })
+    // the new database function is not in the generated types until the next regeneration, so this one call is untyped
+    const untyped = supabaseAdmin as unknown as { rpc: (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: { message: string } | null }> }
+    const { data: applied, error: groupsError } = await untyped.rpc("wabridge_apply_groups", {
+      p_channel_id: channel.id,
+      p_groups: parsedGroups.groups,
+    })
+    if (groupsError) return NextResponse.json({ error: groupsError.message }, { status: 500 })
+    if (typeof applied === "number" && applied > 0) await emitUiEvent("whatsapp")
+    return NextResponse.json({ ok: true, changed: applied ?? 0 })
+  }
+
   // ─── The phone's saved contact names → chat names ───
   if (kind === "bridge.names") {
     const b = body as { ts?: unknown; names?: unknown }
@@ -486,7 +504,8 @@ async function ingest(
     const groupResult = await findOrCreateWhatsAppGroup({
       channelId,
       remoteIdentifier: m.remoteDigits,
-      groupName: m.direction === "inbound" ? m.senderName : null,
+      // a GROUP's name comes from the phone's own group list (bridge.groups), never from whoever happened to write first
+      groupName: m.isGroup ? null : m.direction === "inbound" ? m.senderName : null,
     })
     if ("error" in groupResult) return "error"
     groupId = groupResult.group.id
@@ -495,7 +514,7 @@ async function ingest(
     // A LIVE message for a chat that is not yet linked to a lead/contact/company: try to link it on the spot (exact number,
     // one person, names agree — rules in wabridge_link_chat). Never blocks or fails the save: the 1-minute sweep is the safety net.
     const g = groupResult.group
-    if (!backfill && !g.lead_id && !g.contact_id && !g.account_id) {
+    if (!backfill && !m.isGroup && !g.lead_id && !g.contact_id && !g.account_id) {
       try {
         const { error: linkError } = await supabaseAdmin.rpc("wabridge_link_chat", { p_group_id: groupId })
         if (linkError) console.warn("[wa-bridge] auto-link failed (the 1-minute sweep will retry):", linkError.message)
@@ -510,7 +529,7 @@ async function ingest(
     p_channel_id: channelId,
     p_external_id: m.externalId,
     p_direction: m.direction,
-    p_sender_phone: m.direction === "inbound" ? `+${m.remoteDigits}` : null,
+    p_sender_phone: m.direction !== "inbound" ? null : m.isGroup ? (m.senderDigits ? `+${m.senderDigits}` : null) : `+${m.remoteDigits}`,
     p_sender_name: m.senderName,
     p_content_type: m.contentType,
     p_content_text: m.contentText,

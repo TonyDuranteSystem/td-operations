@@ -249,7 +249,7 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
   const { data, isLoading, error } = useQuery<{
     messages: WhatsAppMessage[]
     send?: { mode: SendMode; hasInbound: boolean } | null
-    chat?: { name: string | null; phone: string | null; language: string | null; accountId: string | null; contactId: string | null; nameSource?: string } | null
+    chat?: { name: string | null; phone: string | null; language: string | null; accountId: string | null; contactId: string | null; nameSource?: string; isGroup?: boolean } | null
   }>({
     queryKey: ['whatsapp-messages', groupId],
     queryFn: () =>
@@ -752,8 +752,11 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
 
   const messages = data?.messages ?? []
   // Self-hosted line: `send` is present. The server enforces every rule; this only avoids offering a button that would be refused.
-  const notice = data?.send ? sendNotice(data.send) : null
-  const canSend = !data?.send || (data.send.mode !== 'paused' && data.send.hasInbound)
+  const isGroupChat = data?.chat?.isGroup === true
+  const notice = isGroupChat
+    ? { tone: 'neutral' as const, text: 'This is a WhatsApp group — everyone in it sees what is written. Replying to a group from here is coming next; for now reply from the phone.' }
+    : data?.send ? sendNotice(data.send) : null
+  const canSend = !isGroupChat && (!data?.send || (data.send.mode !== 'paused' && data.send.hasInbound))
   // Attachments/voice notes ARE supported on the self-hosted line now (Antonio 2026-09-27) — kept as a named
   // constant since the paperclip button still needs to know "is this the wabridge line" for its upload route.
   const isWabridgeLine = !!data?.send
@@ -1156,7 +1159,9 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
           sending, so replying from an open conversation isn't a different,
           thinner experience than starting one (Antonio, 2026-09-17). */}
       {/* The footer can never be taller than the chat pane: it scrolls inside itself, and the confirm buttons stay pinned at its bottom (Antonio, 2026-11-06). */}
-      <div className="border-t bg-white shrink-0 max-h-[70%] overflow-y-auto">
+      {/* Scrolls ONLY on the confirm screen (a long message must not push its buttons off the screen). The normal message bar must NOT scroll or clip:
+          the attach menu and the emoji picker pop up ABOVE it, and a scrolling box cut them off (Antonio 2026-11-19: "the card to attach is behind the screen"). */}
+      <div className={cn('border-t bg-white shrink-0', confirming && 'max-h-[70%] overflow-y-auto')}>
         {notice && (
           <p className={cn('text-xs px-3 pt-2', notice.tone === 'warn' ? 'text-amber-700' : 'text-zinc-500')}>{notice.text}</p>
         )}

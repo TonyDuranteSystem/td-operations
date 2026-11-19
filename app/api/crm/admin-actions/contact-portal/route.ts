@@ -6,6 +6,7 @@ import { PORTAL_BASE_URL } from '@/lib/config'
 import { PORTAL_TIERS, type PortalTier } from '@/lib/portal/tier-config'
 import { syncTier } from '@/lib/operations/sync-tier'
 import { NextRequest, NextResponse } from 'next/server'
+import { localeFromLanguage } from '@/lib/locale'
 
 /**
  * POST /api/crm/admin-actions/contact-portal
@@ -563,7 +564,7 @@ export async function POST(request: NextRequest) {
     // Notify the client (bilingual by contact language — same convention as the
     // rest of the codebase: 'Italian'/'it' → IT, else EN). Suspend email has no
     // login button (they can't log in); restore email links back to the portal.
-    const isItalian = contact.language === 'Italian' || contact.language === 'it'
+    const isItalian = localeFromLanguage(contact.language) === 'it'
     try {
       const { gmailPost } = await import('@/lib/gmail')
       const loginUrl = `${PORTAL_BASE_URL}/portal/login`

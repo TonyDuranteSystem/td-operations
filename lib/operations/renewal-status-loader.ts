@@ -188,6 +188,15 @@ export async function loadRenewalStatuses(
     }
   }
 
+  // A company waiting for its final tax return before it closes stays Active, but it IS closing: no renewal work is proposed for it (dev job 0a60f416, part C).
+  // A failed read must not take the whole watchdog down — it then behaves as before.
+  try {
+    const { companiesWaitingForFinalReturn } = await import("@/lib/closure/closing-wait")
+    for (const id of Array.from(await companiesWaitingForFinalReturn())) if (accountIdSet.has(id)) closureAccounts.add(id)
+  } catch (e) {
+    console.error("[renewal-status] could not read the companies waiting to close:", e instanceof Error ? e.message : e)
+  }
+
   // ── 3. The money gate: live Overdue/Delinquent payments ──────────
   // (payments.is_test excluded — a QA invoice must never hold a real renewal)
   const payments = await fetchAllPages<{

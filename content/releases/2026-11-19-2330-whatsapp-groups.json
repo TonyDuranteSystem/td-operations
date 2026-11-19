@@ -1,0 +1,26 @@
+{
+  "title": "WhatsApp groups now show up in TD Social",
+  "tag": "new",
+  "text": "When a client creates a WhatsApp group (or adds the business number to one), it now appears in the WhatsApp tab within about a minute, with a green \"Group\" label. Every message shows who in the group wrote it. A group you hide stays hidden when someone writes in it. Replying to a group from the CRM is not available yet \u2014 reply from the phone for now. Groups were switched off on purpose before; this turns them on.",
+  "points": [
+    "New groups appear within a minute",
+    "Green Group label in the list",
+    "Each message shows who wrote it"
+  ],
+  "stepsTitle": "Finding a client's WhatsApp group",
+  "steps": [
+    {
+      "name": "Open the WhatsApp tab",
+      "detail": "A new group is at the top of the list."
+    },
+    {
+      "name": "Look for the green Group label",
+      "detail": "The name is the group's own name.",
+      "flag": "new"
+    },
+    {
+      "name": "Open it to read",
+      "detail": "Each message shows who wrote it. Reply from the phone for now."
+    }
+  ]
+}
