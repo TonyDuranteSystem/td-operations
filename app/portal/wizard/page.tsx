@@ -1097,6 +1097,7 @@ export default async function WizardPage({
     // confirms or corrects instead of retyping data we already hold.
     try {
       const { data: links } = await supabaseAdmin
+        // portal-access-ok: tax-form roster: every owner is listed whether or not they use the portal
         .from('account_contacts')
         .select('ownership_pct, contacts(first_name, last_name, citizenship, itin_number, address_line1, address_city, address_zip, address_country)')
         .eq('account_id', accountId)
@@ -1200,6 +1201,7 @@ export default async function WizardPage({
       const { data: acLinks } = await supabaseAdmin
         .from('account_contacts')
         .select('account_id')
+        .is('access_revoked_at', null)
         .eq('contact_id', contactId)
       for (const l of acLinks ?? []) {
         if (l.account_id && !ownedAccountIds.includes(l.account_id)) ownedAccountIds.push(l.account_id)

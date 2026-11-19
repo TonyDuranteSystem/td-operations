@@ -67,6 +67,7 @@ export async function POST(req: NextRequest) {
       const { data: links } = await supabaseAdmin
         .from('account_contacts')
         .select('account_id, accounts(company_name)')
+        .is('access_revoked_at', null)
         .eq('contact_id', targetContactId)
         .limit(1)
 

@@ -80,6 +80,7 @@ export async function multiMemberAccountIds(
   const { data } = await supabaseAdmin
     .from("account_contacts")
     .select("account_id, contact_id")
+    .is("access_revoked_at", null)
     .in("account_id", accountIds)
   return pickMultiMemberAccounts(
     (data ?? []) as { account_id: string; contact_id: string }[],
@@ -98,6 +99,7 @@ export async function linkedContactIdsByAccount(
   const { data } = await supabaseAdmin
     .from("account_contacts")
     .select("account_id, contact_id")
+    .is("access_revoked_at", null)
     .in("account_id", accountIds)
   for (const r of data ?? []) {
     const acct = r.account_id as string

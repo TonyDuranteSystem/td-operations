@@ -38,7 +38,7 @@ vi.mock('@/lib/supabase-admin', () => ({
       }
       if (table === 'account_contacts') {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const b: any = { select: () => b, eq: () => Promise.resolve({ data: fx.links, error: null }) }
+        const b: any = { select: () => b, is: () => b /* the no-portal-access filter (dev job beb43385) */, eq: () => Promise.resolve({ data: fx.links, error: null }) }
         return b
       }
       throw new Error(`unexpected table ${table}`)
