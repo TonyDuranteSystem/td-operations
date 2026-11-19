@@ -1557,6 +1557,19 @@ export async function advanceServiceDelivery(
     }
   }
 
+  // 14b. A Tax Return reaching its last step ("TR Filed") completes a company closing that was HELD for it (dev job 0a60f416, part C). Does nothing unless the
+  //      company's closure job left the "CLOSING WAITS" marker; the company then closes and its portal goes off. Never fails the move.
+  if ((delivery.service_type === "Tax Return" || delivery.service_type === "Tax Return One-Time") && isCompleted && delivery.account_id) {
+    try {
+      const { completePendingCompanyClosure } = await import("@/lib/operations/close-company")
+      const done = await completePendingCompanyClosure({ accountId: delivery.account_id })
+      autoTriggers.push(...done.lines)
+      for (const problem of done.problems) autoTriggers.push(`Closure problem: ${problem}`)
+    } catch (e) {
+      autoTriggers.push(`Closure problem: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
   // 15. Action log
   logAction({
     action_type: "advance",

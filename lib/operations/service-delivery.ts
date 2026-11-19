@@ -1217,6 +1217,17 @@ export async function deactivateSD(
     },
   })
 
+  // A Tax Return cancelled by hand ends the wait of a company whose closing was HELD for it (dev job 0a60f416, part C). Does nothing unless the company's
+  // closure job left the "CLOSING WAITS" marker. Skipped for the closing's own cancellations. Never fails the cancellation.
+  if ((sd.service_type === "Tax Return" || sd.service_type === "Tax Return One-Time") && sd.account_id && actor !== "system:sd-closure") {
+    try {
+      const { completePendingCompanyClosure } = await import("@/lib/operations/close-company")
+      await completePendingCompanyClosure({ accountId: sd.account_id })
+    } catch (err) {
+      console.error(`[deactivateSD] could not complete the held closing of account ${sd.account_id}:`, err instanceof Error ? err.message : err)
+    }
+  }
+
   return {
     success: true,
     outcome: "deactivated",
