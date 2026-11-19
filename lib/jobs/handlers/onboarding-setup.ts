@@ -29,6 +29,7 @@ import { updateJobProgress, type Job, type JobResult } from "../queue"
 import { validateOnboardingData, normalizeEIN } from "../validation"
 import { runOCRCrossCheck } from "../ocr-crosscheck"
 import { extractMembersFromWizardData } from "@/lib/utils/wizard-members"
+import { applyFormPortalAccess } from "@/lib/members/apply-form-portal-access"
 import { resolveMemberContactId } from "@/lib/members/resolve-member-contact"
 import { upsertMemberRow } from "@/lib/members/write-member-row"
 import { normalizePersonName, normalizeEmail } from "@/lib/members/member-identity"
@@ -663,6 +664,10 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
                 { onConflict: 'account_id,contact_id' }
               )
               result.steps.push(step(`member_${i + 1}_link`, 'ok', `${companyName} (rep: ${repName ?? repEmail})`))
+              // The "portal access" tick in the form (dev job beb43385): unticked puts the no-access mark on this link.
+              const repAccess = await applyFormPortalAccess({ accountId: account_id, contactId: repContactId, ownerContactId: contact_id, ticked: m.member_portal_access })
+              if (repAccess.error) result.steps.push(step(`member_${i + 1}_portal_access`, 'error', `${companyName} — portal access mark could not be written: ${repAccess.error}`))
+              else if (repAccess.action === 'mark') result.steps.push(step(`member_${i + 1}_portal_access`, 'ok', `${companyName} — no portal access (unticked in the form); still an owner`))
             } else {
               result.steps.push(step(`member_${i + 1}_link`, 'skipped', `${companyName} — could not create representative contact`))
             }
@@ -704,6 +709,10 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
               result.steps.push(step(`member_${i + 1}_link`, 'error', acErr.message))
             } else {
               result.steps.push(step(`member_${i + 1}_link`, 'ok', `${memberName}${isPrimary ? ' [PRIMARY]' : ''}`))
+              // The "portal access" tick in the form (dev job beb43385): unticked puts the no-access mark on this link.
+              const memberAccess = await applyFormPortalAccess({ accountId: account_id, contactId: membContactId, ownerContactId: contact_id, ticked: m.member_portal_access })
+              if (memberAccess.error) result.steps.push(step(`member_${i + 1}_portal_access`, 'error', `${memberName} — portal access mark could not be written: ${memberAccess.error}`))
+              else if (memberAccess.action === 'mark') result.steps.push(step(`member_${i + 1}_portal_access`, 'ok', `${memberName} — no portal access (unticked in the form); still an owner`))
             }
 
             // Write the individual row to the members table via the reliable,
