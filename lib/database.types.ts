@@ -24457,6 +24457,10 @@ export type Database = {
         Args: { p_ts: string; p_user_id: string }
         Returns: undefined
       }
+      wabridge_apply_groups: {
+        Args: { p_channel_id: string; p_groups: Json }
+        Returns: number
+      }
       wabridge_apply_names: {
         Args: { p_channel_id: string; p_names: Json }
         Returns: number
