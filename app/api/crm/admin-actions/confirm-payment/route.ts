@@ -45,6 +45,7 @@ import { runActivation } from "@/lib/operations/activate-service"
 import { confirmedPaymentInvoiceLabel } from "@/lib/operations/activation-start-services"
 import { invoiceTargetForOffer } from "@/lib/offers/bill-to-server"
 import { normalizeFormationState } from "@/lib/formation/states"
+import { localeFromLanguage } from "@/lib/locale"
 
 interface ConfirmPaymentBody {
   // Identifier — exactly one required
@@ -416,7 +417,7 @@ export async function POST(request: Request) {
           lead_id: effectiveLeadId,
           client_name: lead.full_name,
           client_email: lead.email,
-          language: lead.language === "Italian" ? "it" : "en",
+          language: localeFromLanguage(lead.language),
           contract_type,
           bundled_pipelines,
           payment_type: "bank_transfer",

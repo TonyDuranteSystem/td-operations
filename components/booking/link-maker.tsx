@@ -10,6 +10,7 @@ import type { AllQuestions } from "@/lib/booking/questions"
 import { callApi, messageOf } from "@/components/booking/api"
 import type { MakeAgain } from "@/components/booking/booking-workspace"
 import { OFF_REASON } from "@/lib/booking/mode-text"
+import { isItalian } from "@/lib/locale"
 
 /** `paidText` is the price AS IT WAS when the link was made ("$397"), kept with the link: the form may be edited while the request is on its way. */
 type MadeLink = { id: string; publicId: string; url: string; email: string | null; language: "Italian" | "English" | null; paidText?: string | null }
@@ -39,7 +40,7 @@ function parseMinutes(pick: string, other: string): number | null {
 }
 
 function draftTexts(url: string, language: "Italian" | "English" | null) {
-  return language === "Italian"
+  return isItalian(language)
     ? { subject: "Prenota una chiamata con Tony Durante", body: `Ecco il link per prenotare la nostra chiamata: ${url}` }
     : { subject: "Book a call with Tony Durante", body: `Here is the link to book our call: ${url}` }
 }

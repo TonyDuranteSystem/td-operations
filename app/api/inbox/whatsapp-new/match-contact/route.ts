@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { findAllMatchesByPhone } from "@/lib/messaging/contact-match"
+import { findSavedByPhone } from "@/lib/address-book/store"
 import { jidToE164 } from "@/lib/messaging/phone"
 import { findNameSuggestion } from "@/lib/messaging/name-suggestion"
 import { isOneToOneNumberKey, suggestedSaveName } from "@/lib/messaging/name-match"
@@ -57,6 +58,16 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ match: matches.length === 1 ? matches[0] : null, matches, alreadyLinked: false, nameSuggestion: null })
   }
 
+  // Not a lead or client — maybe an outside person saved in the address book (a lawyer, a supplier). A failed read here only hides this extra hint.
+  if (isOneToOneNumberKey(group.external_group_id)) {
+    try {
+      const saved = await findSavedByPhone(jidToE164(group.external_group_id))
+      if (saved.length > 0) return NextResponse.json({ match: null, alreadyLinked: false, savedMatch: saved[0], nameSuggestion: null })
+    } catch (err) {
+      console.warn("[match-contact] address book lookup failed:", err instanceof Error ? err.message : err)
+    }
+  }
+
   // No client has this number. A known client may be writing from a second number: if the sender's name fits exactly one
   // existing contact, the banner offers to add this number to them (suggest only — a person clicks). Never blocks the page.
   let nameSuggestion = null
@@ -79,5 +90,11 @@ export async function GET(request: NextRequest) {
   } catch (err) {
     console.warn("[match-contact] suggested name failed:", err instanceof Error ? err.message : err)
   }
-  return NextResponse.json({ match: null, alreadyLinked: false, nameSuggestion, suggestedName })
+  return NextResponse.json({
+    match: null,
+    alreadyLinked: false,
+    nameSuggestion,
+    suggestedName,
+    groupPhone: isOneToOneNumberKey(group.external_group_id) ? jidToE164(group.external_group_id) : null,
+  })
 }
