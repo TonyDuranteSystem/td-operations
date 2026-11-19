@@ -54,6 +54,7 @@ import { updateTasksBulk } from "@/lib/operations/task"
 import { setAccountRenewalDate, anniversaryForYear } from "@/lib/operations/renewal-dates"
 import { logAction } from "@/lib/mcp/action-log"
 import { pickDoneStep, NO_DONE_STEP_MESSAGE, type StageLike } from "@/lib/services/done-step"
+import { TAX_RETURN_SERVICES } from "@/lib/closure/wrapup-facts"
 
 // Re-export so existing import paths keep working.
 export { VALID_SERVICE_TYPES, isValidServiceType }
@@ -1219,7 +1220,7 @@ export async function deactivateSD(
 
   // A Tax Return cancelled by hand ends the wait of a company whose closing was HELD for it (dev job 0a60f416, part C). Does nothing unless the company's
   // closure job left the "CLOSING WAITS" marker. Skipped for the closing's own cancellations. Never fails the cancellation.
-  if ((sd.service_type === "Tax Return" || sd.service_type === "Tax Return One-Time") && sd.account_id && actor !== "system:sd-closure") {
+  if (TAX_RETURN_SERVICES.includes(sd.service_type) && sd.account_id && actor !== "system:sd-closure") {
     try {
       const { completePendingCompanyClosure } = await import("@/lib/operations/close-company")
       await completePendingCompanyClosure({ accountId: sd.account_id })

@@ -10,6 +10,7 @@ const h = vi.hoisted(() => {
   const state = {
     tables: {} as Record<string, Row[]>,
     log: [] as string[],
+    onInsert: null as null | ((table: string) => void),
     failOn: new Set<string>(),
     deactivated: [] as string[],
     tierSyncs: [] as string[],
@@ -25,6 +26,7 @@ const h = vi.hoisted(() => {
       if (q.op === "insert") {
         for (const r of q.rows) rowsOf().push({ ...r })
         state.log.push(`${table}.insert x${q.rows.length}`)
+        state.onInsert?.(table)
         return Promise.resolve({ data: q.rows, error: null, count: null })
       }
       const hit = matches()
@@ -43,7 +45,11 @@ const h = vi.hoisted(() => {
       insert(rows: Row | Row[]) { q.op = "insert"; q.rows = Array.isArray(rows) ? rows : [rows]; return api },
       eq(c: string, v: unknown) { q.filters.push((r) => r[c] === v); return api },
       neq(c: string, v: unknown) { q.filters.push((r) => r[c] !== v); return api },
-      not(c: string, op: string, pat: string) { const n = pat.replace(/%/g, "").toLowerCase(); if (op === "ilike") q.filters.push((r) => !String(r[c] ?? "").toLowerCase().includes(n)); return api },
+      not(c: string, op: string, v: unknown) {
+        if (op === "ilike") { const n = String(v).replace(/%/g, "").toLowerCase(); q.filters.push((r) => !String(r[c] ?? "").toLowerCase().includes(n)) }
+        else if (op === "is") q.filters.push((r) => (r[c] ?? null) !== v)
+        return api
+      },
       in(c: string, vs: unknown[]) { q.filters.push((r) => vs.includes(r[c])); return api },
       is(c: string, v: unknown) { q.filters.push((r) => (r[c] ?? null) === v); return api },
       ilike(c: string, pat: string) { const n = pat.replace(/%/g, "").toLowerCase(); q.filters.push((r) => String(r[c] ?? "").toLowerCase().includes(n)); return api },
@@ -97,7 +103,7 @@ vi.mock("@/lib/portal/td-invoice-mirror", () => ({
 }))
 vi.mock("@/lib/mcp/action-log", () => ({ logAction: vi.fn((p: Record<string, unknown>) => { h.state.logged.push(p) }) }))
 
-import { applyCompanyClosure, completePendingCompanyClosure, readClosingBrief } from "@/lib/operations/close-company"
+import { applyCompanyClosure, completePendingCompanyClosure, endClosingWait, readClosingBrief } from "@/lib/operations/close-company"
 
 const ACC = "acc-1"
 const JOB = "job-1"
@@ -107,7 +113,7 @@ function seed(over: Partial<Record<string, Row[]>> = {}) {
   h.state.tables = {
     accounts: [{ id: ACC, company_name: "Carasso LLC", status: "Active", portal_account: true, portal_tier: "active" }],
     service_deliveries: [
-      { id: JOB, account_id: ACC, service_type: "Company Closure", status: "active" },
+      { id: JOB, account_id: ACC, service_type: "Company Closure", status: "completed", stage: "Closing" },
       { id: "sd-ra", account_id: ACC, service_type: "State RA Renewal", status: "active" },
       { id: "sd-tax", account_id: ACC, service_type: "Tax Return", status: "active", service_name: "Tax Return 2026 - Carasso LLC", source_offer_token: TOKEN },
     ],
@@ -130,6 +136,7 @@ function seed(over: Partial<Record<string, Row[]>> = {}) {
     ...over,
   } as Record<string, Row[]>
   h.state.log = []
+  h.state.onInsert = null
   h.state.failOn = new Set()
   h.state.deactivated = []
   h.state.tierSyncs = []
@@ -194,7 +201,7 @@ describe("a Tax Return still to be filed holds the closing", () => {
   })
 
   it("a company with NO open tax return closes exactly as before", async () => {
-    seed({ service_deliveries: [{ id: JOB, account_id: ACC, service_type: "Company Closure", status: "active" }] })
+    seed({ service_deliveries: [{ id: JOB, account_id: ACC, service_type: "Company Closure", status: "completed", stage: "Closing" }] })
     const r = await applyCompanyClosure({ accountId: ACC, deliveryId: JOB, wrapUpStepExists: false })
     expect(r.waiting).toBe(false)
     expect(tableRow("accounts", ACC)).toMatchObject({ status: "Closed", portal_account: false, portal_tier: "inactive" })
@@ -291,6 +298,106 @@ describe("completePendingCompanyClosure — when the final tax return is done", 
   })
 })
 
+describe("the wait is never just 'a note exists' (bug hunt 2026-11-19)", () => {
+  beforeEach(() => seed())
+  const hold = async () => { await applyCompanyClosure({ accountId: ACC, deliveryId: JOB, wrapUpStepExists: false }) }
+  const fileTheReturn = () => { tableRow("service_deliveries", "sd-tax").status = "completed" }
+
+  it("Go Back from Closing ends the wait: the return being filed later closes nothing, and the nightly jobs stop skipping the company", async () => {
+    await hold()
+    Object.assign(tableRow("service_deliveries", JOB), { status: "active", stage: "IRS Closure" }) // revertServiceDelivery
+    fileTheReturn()
+    const r = await completePendingCompanyClosure({ accountId: ACC })
+    expect(r).toMatchObject({ waiting: false, lines: [], problems: [] })
+    expect(tableRow("accounts", ACC).status).toBe("Active")
+    const { findWaitingClosures } = await import("@/lib/closure/closing-wait")
+    expect(await findWaitingClosures()).toEqual([])
+  })
+
+  it("a cancelled closure job ends the wait too", async () => {
+    await hold()
+    tableRow("service_deliveries", JOB).status = "cancelled"
+    fileTheReturn()
+    expect(await completePendingCompanyClosure({ accountId: ACC })).toMatchObject({ lines: [], problems: [] })
+    expect(tableRow("accounts", ACC).status).toBe("Active")
+  })
+
+  it("finishing again WITHOUT closing (skip company close) ends the wait with a note — the explicit choice is never undone by the return", async () => {
+    await hold()
+    expect(await endClosingWait(JOB, "the job was finished without closing the company")).toBe(true)
+    expect((h.state.tables.service_delivery_notes ?? []).some((n) => String(n.body).includes("CLOSING WAIT ENDED"))).toBe(true)
+    fileTheReturn()
+    expect(await completePendingCompanyClosure({ accountId: ACC })).toMatchObject({ lines: [], problems: [] })
+    expect(tableRow("accounts", ACC)).toMatchObject({ status: "Active", portal_account: true })
+  })
+
+  it("ending a wait that does not exist writes nothing", async () => {
+    expect(await endClosingWait(JOB, "x")).toBe(false)
+    expect(notes()).toHaveLength(0)
+  })
+
+  it("a company brought back to Active after its closing is NOT closed again by a later tax return", async () => {
+    await hold()
+    fileTheReturn()
+    await completePendingCompanyClosure({ accountId: ACC }) // closes it and ends the wait
+    expect(tableRow("accounts", ACC).status).toBe("Closed")
+    // reactivated, and a later Tax Return is filed
+    tableRow("accounts", ACC).status = "Active"
+    h.state.tables.service_deliveries.push({ id: "sd-tax-2027", account_id: ACC, service_type: "Tax Return", status: "completed", service_name: "Tax Return 2027 - Carasso LLC" })
+    const r = await completePendingCompanyClosure({ accountId: ACC })
+    expect(r).toMatchObject({ lines: [], problems: [] })
+    expect(tableRow("accounts", ACC).status).toBe("Active")
+    const { findWaitingClosures } = await import("@/lib/closure/closing-wait")
+    expect(await findWaitingClosures()).toEqual([])
+  })
+
+  it("a wait that ended can start again: the newest note wins", async () => {
+    await hold()
+    await endClosingWait(JOB, "the job was finished without closing the company")
+    await hold() // finished at Closing again, with the return still open
+    const { findWaitingClosures } = await import("@/lib/closure/closing-wait")
+    expect(await findWaitingClosures()).toEqual([{ accountId: ACC, closureJobId: JOB }])
+  })
+
+  it("a Tax Return parked at 'Terminated - Non Payment' is a dead end, not a return being worked on: it does not hold the closing", async () => {
+    Object.assign(tableRow("service_deliveries", "sd-tax"), { stage: "Terminated - Non Payment", status: "active" })
+    const r = await applyCompanyClosure({ accountId: ACC, deliveryId: JOB, wrapUpStepExists: false })
+    expect(r.waiting).toBe(false)
+    expect(tableRow("accounts", ACC).status).toBe("Closed")
+    expect(h.state.deactivated).toContain("sd-tax")
+  })
+
+  it("the return was filed WHILE the closing ran: the company is closed right there instead of waiting forever", async () => {
+    // after the waiting note is written, the return reaches TR Filed (its completion hook found no note and did nothing)
+    h.state.onInsert = (table) => { if (table === "service_delivery_notes") { tableRow("service_deliveries", "sd-tax").status = "completed"; h.state.onInsert = null } }
+    const r = await applyCompanyClosure({ accountId: ACC, deliveryId: JOB, wrapUpStepExists: false })
+    expect(r.waiting).toBe(false)
+    expect(tableRow("accounts", ACC)).toMatchObject({ status: "Closed", portal_tier: "inactive" })
+    expect(followUps().length).toBeGreaterThan(0) // the job's own follow-up to-dos were still created, once
+  })
+
+  it("a problem while completing is written on the closure job too, where staff look — not only returned", async () => {
+    await hold()
+    fileTheReturn()
+    const r = await completePendingCompanyClosure({ accountId: ACC })
+    expect(r.problems.join(" ")).toMatch(/INV-000010.*still unpaid/)
+    const problemNotes = (h.state.tables.service_delivery_notes ?? []).filter((n) => String(n.body).startsWith("CLOSURE PROBLEM"))
+    expect(problemNotes).toHaveLength(1)
+    expect(problemNotes[0].service_delivery_id).toBe(JOB)
+  })
+
+  it("the nightly sweep's view: a waiting company with no open return left is found and then completed", async () => {
+    await hold()
+    fileTheReturn()
+    const { findWaitingClosures } = await import("@/lib/closure/closing-wait")
+    const waiting = await findWaitingClosures()
+    expect(waiting).toEqual([{ accountId: ACC, closureJobId: JOB }])
+    await completePendingCompanyClosure({ accountId: waiting[0].accountId })
+    expect(tableRow("accounts", ACC).status).toBe("Closed")
+    expect(await findWaitingClosures()).toEqual([])
+  })
+})
+
 describe("the ask-first question tells the truth about a held closing", () => {
   beforeEach(() => seed())
   it("lists the tax return as kept, not as cancelled, and leaves its invoice out of the unpaid count", async () => {
@@ -299,5 +406,15 @@ describe("the ask-first question tells the truth about a held closing", () => {
     expect(b!.openServices.map((s) => s.type)).toEqual(["State RA Renewal"])
     expect(b!.unpaid.count).toBe(1) // only the unrelated invoice
     expect(b!.openTasks).toBe(1) // the return's own to-do is not counted
+    expect(b!.pendingDeadlines).toBe(1) // the return's own tax deadline is not counted as cancelled
+  })
+
+  it("a company that is ALREADY Closed is only tidied, so nothing is promised as kept (the step cancels the return and its invoices)", async () => {
+    tableRow("accounts", ACC).status = "Closed"
+    const b = await readClosingBrief(JOB)
+    expect(b!.alreadyClosed).toBe(true)
+    expect(b!.keptReturns).toEqual([])
+    expect(b!.openServices.map((s) => s.type).sort()).toEqual(["State RA Renewal", "Tax Return"])
+    expect(b!.unpaid.count).toBe(2)
   })
 })

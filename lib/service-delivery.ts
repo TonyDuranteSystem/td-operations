@@ -39,6 +39,7 @@ import { CHANGE_NAME_STAGES } from "@/lib/flows/change-name-stages"
 import { trackingStepsCrossed, trackingMissingMessage } from "@/lib/flows/tracking-gate"
 import { trackingNumberMissing } from "@/lib/operations/tracking-number-check"
 import { POINTER_WORKFLOW_SLUG_BY_SERVICE, mergeSdStageIntoTaskMeta } from "@/lib/tasks/sd-stage-sync"
+import { TAX_RETURN_SERVICES } from "@/lib/closure/wrapup-facts"
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -1535,6 +1536,13 @@ export async function advanceServiceDelivery(
   ) {
     if (skip_company_close) {
       autoTriggers.push("Company left open — the job was finished without closing it")
+      // A company that was waiting for its final tax return no longer waits: this explicit choice must not be undone later by that return being filed.
+      try {
+        const { endClosingWait } = await import("@/lib/operations/close-company")
+        if (await endClosingWait(delivery_id, "the job was finished without closing the company")) autoTriggers.push("The company is no longer waiting for its tax return — it stays open")
+      } catch (e) {
+        autoTriggers.push(`Closure problem: the company's waiting note could not be ended (${e instanceof Error ? e.message : String(e)})`)
+      }
     } else {
       const { applyCompanyClosure } = await import("@/lib/operations/close-company")
       const closure = await applyCompanyClosure({
@@ -1559,7 +1567,7 @@ export async function advanceServiceDelivery(
 
   // 14b. A Tax Return reaching its last step ("TR Filed") completes a company closing that was HELD for it (dev job 0a60f416, part C). Does nothing unless the
   //      company's closure job left the "CLOSING WAITS" marker; the company then closes and its portal goes off. Never fails the move.
-  if ((delivery.service_type === "Tax Return" || delivery.service_type === "Tax Return One-Time") && isCompleted && delivery.account_id) {
+  if (TAX_RETURN_SERVICES.includes(delivery.service_type) && isCompleted && delivery.account_id) {
     try {
       const { completePendingCompanyClosure } = await import("@/lib/operations/close-company")
       const done = await completePendingCompanyClosure({ accountId: delivery.account_id })

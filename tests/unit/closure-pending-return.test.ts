@@ -1,6 +1,6 @@
 /** Dev job 0a60f416, part C — the pure rules of "a Tax Return still to be filed holds the closing", the brief text and the nightly-job guard. */
 import { describe, it, expect, vi } from 'vitest'
-import { belongsToKeptOffer, CLOSING_WAITS_MARKER, hasWaitsMarker, holdingReturns, keptOfferTokens, returnLabel, waitsNote } from '@/lib/closure/pending-return'
+import { belongsToKeptOffer, CLOSING_ENDED_MARKER, CLOSING_WAITS_MARKER, endedNote, hasWaitsMarker, holdingReturns, isDeadEndStage, isWaitingClosureJob, keptOfferTokens, newestMarker, returnLabel, waitsNote } from '@/lib/closure/pending-return'
 import { closingBriefLines, closingHeadline, type ClosingBrief } from '@/lib/closure/closing-brief'
 
 const job = (over: Record<string, unknown>) => ({ id: 'j', service_type: 'Tax Return', status: 'active', ...over }) as Parameters<typeof returnLabel>[0]
@@ -19,6 +19,37 @@ describe('which open jobs hold the closing', () => {
     expect(belongsToKeptOffer({ tranche_offer_token: 'y-2026' }, tokens)).toBe(false)
     expect(belongsToKeptOffer({ tranche_offer_token: null }, tokens)).toBe(false)
     expect(belongsToKeptOffer({}, tokens)).toBe(false)
+  })
+})
+
+describe('a dead-end step does not hold the closing', () => {
+  it('"Terminated…" steps are dead ends; ordinary steps are not', () => {
+    expect(isDeadEndStage('Terminated - Non Payment')).toBe(true)
+    expect(isDeadEndStage('  terminated')).toBe(true)
+    for (const s of ['Wizard Available', 'TR Filed', null, undefined, '']) expect(isDeadEndStage(s as string | null | undefined)).toBe(false)
+  })
+  it('an open Tax Return at a dead-end step is not a holding return', () => {
+    expect(holdingReturns([job({ id: 'a', stage: 'Terminated - Non Payment' }), job({ id: 'b', stage: 'Wizard Available' })]).map((j) => j.id)).toEqual(['b'])
+  })
+})
+
+describe('the wait is the NEWEST marker on a closure job that is still finished at Closing', () => {
+  const waits = { body: waitsNote([job({})]) }
+  const ended = { body: endedNote('the company was closed') }
+  it('newest marker wins, oldest first', () => {
+    expect(newestMarker([])).toBeNull()
+    expect(newestMarker([{ body: 'an ordinary note' }])).toBeNull()
+    expect(newestMarker([waits])).toBe('waits')
+    expect(newestMarker([waits, ended])).toBe('ended')
+    expect(newestMarker([waits, ended, waits])).toBe('waits')
+    expect(endedNote('x')).toContain(CLOSING_ENDED_MARKER)
+  })
+  it('waits only while the job is completed AND at Closing', () => {
+    expect(isWaitingClosureJob({ status: 'completed', stage: 'Closing' }, [waits])).toBe(true)
+    expect(isWaitingClosureJob({ status: 'active', stage: 'IRS Closure' }, [waits])).toBe(false) // went back
+    expect(isWaitingClosureJob({ status: 'cancelled', stage: 'Closing' }, [waits])).toBe(false)
+    expect(isWaitingClosureJob({ status: 'completed', stage: 'Closing' }, [waits, ended])).toBe(false)
+    expect(isWaitingClosureJob({ status: 'completed', stage: 'Closing' }, [])).toBe(false)
   })
 })
 
@@ -63,6 +94,7 @@ describe('companiesWaitingForFinalReturn — the nightly-job guard', () => {
           const api: Record<string, unknown> = {
             select: () => api,
             ilike: (c: string, pat: string) => { const n = pat.replace(/%/g, '').toLowerCase(); filters.push((r) => String(r[c] ?? '').toLowerCase().includes(n)); return api },
+            order: () => api,
             in: (c: string, vs: unknown[]) => { filters.push((r) => vs.includes(r[c])); return api },
             not: (c: string, _op: string, v: unknown) => { filters.push((r) => (r[c] ?? null) !== v); return api },
             then: (res: (v: unknown) => unknown) => res(failOn === t ? { data: null, error: { message: 'boom' } } : { data: (tables[t] ?? []).filter((r) => filters.every((f) => f(r))), error: null }),
@@ -76,11 +108,19 @@ describe('companiesWaitingForFinalReturn — the nightly-job guard', () => {
   }
   const tables = {
     service_delivery_notes: [{ service_delivery_id: 'job-1', body: `${CLOSING_WAITS_MARKER}: ...` }, { service_delivery_id: 'job-2', body: 'an ordinary note' }],
-    service_deliveries: [{ id: 'job-1', account_id: 'acc-1' }, { id: 'job-2', account_id: 'acc-2' }],
+    service_deliveries: [{ id: 'job-1', account_id: 'acc-1', status: 'completed', stage: 'Closing' }, { id: 'job-2', account_id: 'acc-2', status: 'completed', stage: 'Closing' }],
     accounts: [{ id: 'acc-1', status: 'Active' }, { id: 'acc-2', status: 'Active' }, { id: 'acc-3', status: 'Active' }],
   }
   it('lists only the companies whose closure job left the marker', async () => {
     expect([...(await run(tables))]).toEqual(['acc-1'])
+  })
+  it('a closure job that went back, or was cancelled, no longer holds its company', async () => {
+    expect([...(await run({ ...tables, service_deliveries: [{ id: 'job-1', account_id: 'acc-1', status: 'active', stage: 'IRS Closure' }] }))]).toEqual([])
+    expect([...(await run({ ...tables, service_deliveries: [{ id: 'job-1', account_id: 'acc-1', status: 'cancelled', stage: 'Closing' }] }))]).toEqual([])
+  })
+  it('a wait that was ended no longer counts (the newest note wins)', async () => {
+    const withEnd = { ...tables, service_delivery_notes: [...tables.service_delivery_notes, { service_delivery_id: 'job-1', body: `${CLOSING_ENDED_MARKER}: the company was closed.` }] }
+    expect([...(await run(withEnd))]).toEqual([])
   })
   it('a company that has since been Closed is no longer waiting', async () => {
     expect([...(await run({ ...tables, accounts: [{ id: 'acc-1', status: 'Closed' }] }))]).toEqual([])
