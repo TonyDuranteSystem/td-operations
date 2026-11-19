@@ -122,7 +122,7 @@ function formatTime(dateStr: string) {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-export function ConversationList({ activeChannel, selectedId, onSelect, onFirstRow, onDeleted, onRestored, onRestoredTo, onRestoreFailed, overrides, unread, onUnreadOverride, onReconciled, onPayloadOrigin, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, searchScope, onWidenScope, onSelectMany, mailbox, unreadFilter, userLabels, onSetColor, onMoveToLabel, onSnooze }: ConversationListProps & { mailbox?: string; unreadFilter?: 'all' | 'unread' | 'read' }) {
+export function ConversationList({ activeChannel, selectedId, onSelect, onFirstRow, onDeleted, onRestored, onRestoredTo, onRestoreFailed, overrides, unread, onUnreadOverride, onReconciled, onPayloadOrigin, bulkMode, selectedIds, onToggleSelect, labelFilter, searchQuery, searchScope, onWidenScope, onSelectMany, mailbox, unreadFilter, groupsOnly, userLabels, onSetColor, onMoveToLabel, onSnooze }: ConversationListProps & { mailbox?: string; unreadFilter?: 'all' | 'unread' | 'read'; groupsOnly?: boolean }) {
   const queryClient = useQueryClient()
 
   // Which row's quick-action popover (color palette / folder list / snooze
@@ -686,11 +686,12 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onFirstR
 
   const conversations = useMemo(() => visibleRows.filter(c => {
     if (whatsappQuery && !matchesWhatsAppSearch(c.name, whatsappQuery)) return false
+    if (groupsOnly && !c.isGroup) return false
     if (!unreadFilter || unreadFilter === 'all') return true
     if (unreadFilter === 'unread') return c.unread > 0
     if (unreadFilter === 'read') return c.unread === 0
     return true
-  }), [visibleRows, unreadFilter, whatsappQuery])
+  }), [visibleRows, unreadFilter, whatsappQuery, groupsOnly])
 
   if (isLoading) {
     return (
@@ -731,7 +732,7 @@ export function ConversationList({ activeChannel, selectedId, onSelect, onFirstR
         </div>
       )
     }
-    if (isWhatsApp && (whatsappQuery || (unreadFilter && unreadFilter !== 'all'))) {
+    if (isWhatsApp && (whatsappQuery || groupsOnly || (unreadFilter && unreadFilter !== 'all'))) {
       return (
         <div className="flex-1 flex items-center justify-center text-zinc-400 text-sm">
           No matching conversations

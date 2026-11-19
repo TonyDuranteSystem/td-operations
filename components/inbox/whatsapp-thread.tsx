@@ -109,7 +109,7 @@ interface WhatsappThreadProps {
   /** Antonio, 2026-09-28: "I want to see the phone number next to the name" — this component already
    *  fetches the chat's own name/phone (for the send-confirm screen); this just reports it up to the
    *  header, which lives in the parent (inbox-shell.tsx), rather than that header re-fetching it itself. */
-  onChatInfo?: (info: { name: string | null; phone: string | null; nameSource?: string } | null) => void
+  onChatInfo?: (info: { name: string | null; phone: string | null; nameSource?: string; isGroup?: boolean } | null) => void
 }
 
 interface StagedFile {
@@ -275,7 +275,7 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
   useEffect(() => { onChatInfoRef.current = onChatInfo }, [onChatInfo])
   useEffect(() => { onChatInfoRef.current?.(null) }, [groupId])
   useEffect(() => {
-    if (data?.chat) onChatInfoRef.current?.({ name: data.chat.name, phone: data.chat.phone, nameSource: data.chat.nameSource })
+    if (data?.chat) onChatInfoRef.current?.({ name: data.chat.name, phone: data.chat.phone, nameSource: data.chat.nameSource, isGroup: data.chat.isGroup === true })
   }, [data?.chat])
   useEffect(() => () => onChatInfoRef.current?.(null), [])
 
