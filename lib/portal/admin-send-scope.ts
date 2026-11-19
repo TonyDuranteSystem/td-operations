@@ -69,16 +69,19 @@ export function decideAdminSendScope(input: AdminSendScopeInput): AdminSendScope
 }
 
 /** Minimal query surface so callers/tests can inject a fake client. */
+type DbEqResult = {
+  eq?: unknown
+  limit?: unknown
+} & PromiseLike<{ data: unknown; count?: number | null; error: { message: string } | null }>
 type DbClient = {
   from: (table: string) => {
     select: (
       cols: string,
       opts?: { count?: 'exact'; head?: boolean },
     ) => {
-      eq: (col: string, val: string) => {
-        eq?: unknown
-        limit?: unknown
-      } & PromiseLike<{ data: unknown; count?: number | null; error: { message: string } | null }>
+      eq: (col: string, val: string) => DbEqResult
+      // the no-portal-access filter (dev job beb43385): .select(...).is('access_revoked_at', null).eq(...)
+      is: (col: string, val: null) => { eq: (col: string, val: string) => DbEqResult }
     }
   }
 }
