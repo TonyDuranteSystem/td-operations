@@ -12,8 +12,10 @@ export interface ClosingBrief {
   companyName: string
   /** the company is already Closed (finishing again changes nothing) */
   alreadyClosed: boolean
-  /** the company's other open services (active / on hold / blocked), excluding this job */
+  /** the company's other open services (active / on hold / blocked) that WILL be cancelled, excluding this job and any Tax Return still to be filed */
   openServices: Array<{ type: string; status: string }>
+  /** Tax Returns still to be filed: they hold the closing — the company stays open (portal on) until they are filed (dev job 0a60f416, part C) */
+  keptReturns?: string[]
   pendingDeadlines: number
   /** unpaid invoices (Pending / Overdue, nothing received) that will be cancelled, grouped by currency — what is still OWED, not the full amount */
   unpaid: { count: number; totals: Record<string, number> }
@@ -44,6 +46,9 @@ function plural(n: number, one: string, many: string): string {
 
 /** One line: the company this closes. */
 export function closingHeadline(b: ClosingBrief): string {
+  if (!b.alreadyClosed && (b.keptReturns?.length ?? 0) > 0) {
+    return `Finishing this job finishes the closure of ${b.companyName}, but the company stays open until its tax return is filed.`
+  }
   return b.alreadyClosed
     ? `${b.companyName} is already Closed — finishing this job only tidies up what is still open for it.`
     : `Finishing this job closes ${b.companyName}.`
@@ -52,6 +57,10 @@ export function closingHeadline(b: ClosingBrief): string {
 /** The bullet lines under the headline, only the ones that apply. */
 export function closingBriefLines(b: ClosingBrief): string[] {
   const lines: string[] = []
+  const waiting = (b.keptReturns?.length ?? 0) > 0
+  if (waiting) {
+    lines.push(`${(b.keptReturns ?? []).join(", ")} ${b.keptReturns!.length === 1 ? "is" : "are"} still to be filed: ${b.keptReturns!.length === 1 ? "it" : "they"} and ${b.keptReturns!.length === 1 ? "its" : "their"} unpaid invoices are NOT cancelled, and the company and its portal stay open until ${b.keptReturns!.length === 1 ? "it is" : "they are"} filed. The company closes by itself then.`)
+  }
   if (b.openServices.length > 0) {
     lines.push(`${plural(b.openServices.length, "other service", "other services")} will be cancelled: ${b.openServices.map((s) => `${s.type}${s.status === "active" ? "" : ` (${s.status.replace(/_/g, " ")})`}`).join(", ")}.`)
   }
@@ -68,7 +77,7 @@ export function closingBriefLines(b: ClosingBrief): string[] {
   }
   if (b.pendingDeadlines > 0) lines.push(`${plural(b.pendingDeadlines, "upcoming deadline", "upcoming deadlines")} will be cancelled.`)
   if (b.openTasks > 0) lines.push(`${plural(b.openTasks, "open to-do", "open to-dos")} of the company will be cancelled.`)
-  if (!b.alreadyClosed && b.members > 0) lines.push(`${plural(b.members, "person", "people")} linked to the company will lose portal access to it.`)
+  if (!b.alreadyClosed && !waiting && b.members > 0) lines.push(`${plural(b.members, "person", "people")} linked to the company will lose portal access to it.`)
   if (!b.alreadyClosed && b.hasLease) lines.push("The company has a mailing-address lease — a to-do is created to cancel it.")
   return lines
 }

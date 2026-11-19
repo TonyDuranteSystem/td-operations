@@ -107,7 +107,7 @@ function seed(over: Partial<Record<string, Row[]>> = {}) {
     service_deliveries: [
       { id: JOB, account_id: ACC, service_type: "Company Closure", status: "active" },
       { id: "sd-ra", account_id: ACC, service_type: "State RA Renewal", status: "active" },
-      { id: "sd-tax", account_id: ACC, service_type: "Tax Return", status: "on_hold" },
+      { id: "sd-hold", account_id: ACC, service_type: "State Annual Report", status: "on_hold" },
       { id: "sd-bank", account_id: ACC, service_type: "Banking", status: "blocked" },
       { id: "sd-done", account_id: ACC, service_type: "ITIN", status: "completed" },
       { id: "sd-other", account_id: "other-acc", service_type: "Tax Return", status: "active" },
@@ -147,7 +147,7 @@ describe("applyCompanyClosure", () => {
     expect(r.alreadyClosed).toBe(false)
 
     // the other open services — active, ON HOLD and BLOCKED — are cancelled; a finished one and another company's are not; the job itself is not
-    expect(h.state.deactivated.sort()).toEqual(["sd-bank", "sd-ra", "sd-tax"])
+    expect(h.state.deactivated.sort()).toEqual(["sd-bank", "sd-hold", "sd-ra"])
     expect(tableRow("service_deliveries", JOB).status).toBe("active")
     expect(tableRow("service_deliveries", "sd-done").status).toBe("completed")
     expect(tableRow("service_deliveries", "sd-other").status).toBe("active")
@@ -323,7 +323,7 @@ describe("readClosingBrief (the facts the question shows)", () => {
     expect(b).not.toBeNull()
     expect(b!.companyName).toBe("Epsilon LLC")
     expect(b!.alreadyClosed).toBe(false)
-    expect(b!.openServices.map((s) => s.type).sort()).toEqual(["Banking", "State RA Renewal", "Tax Return"])
+    expect(b!.openServices.map((s) => s.type).sort()).toEqual(["Banking", "State Annual Report", "State RA Renewal"])
     expect(b!.pendingDeadlines).toBe(1)
     expect(b!.unpaid).toEqual({ count: 2, totals: { USD: 120, EUR: 80 } })
     expect(b!.openTasks).toBe(1) // the unrelated one; the job's own card is not counted
