@@ -15,6 +15,8 @@ interface BridgeStatus {
   codeRequested?: boolean
   /** owner only: 5 codes were already made this hour — when the hour is over (ISO) */
   codeLimitUntil?: string | null
+  /** the Mac's nightly program-update report, when a person should know (null = nothing to say) */
+  update?: { level: 'problem' | 'warning'; title: string; text: string } | null
 }
 
 const POLL_MS = 30_000
@@ -75,7 +77,35 @@ export function WhatsAppBridgeBanner() {
   }, [load, unlinked])
 
   if (error && !status) return null // a status-read failure must not block the inbox
-  if (!status || status.health === 'ok' || status.health === 'unmonitored' || status.health === 'none') return null
+  if (!status) return null
+  const linkHealthy = status.health === 'ok' || status.health === 'unmonitored' || status.health === 'none'
+  // The link is fine, but the nightly update of the WhatsApp program needs a person to know (it went back, failed, or stopped running).
+  if (linkHealthy) {
+    const u = status.update
+    if (!u) return null
+    const red = u.level === 'problem'
+    const tone = red ? 'border-red-200 bg-red-50 text-red-900' : 'border-amber-200 bg-amber-50 text-amber-900'
+    const icon = red ? 'text-red-600' : 'text-amber-600'
+    if (appMode && !unfolded) {
+      return (
+        <div role="alert" data-testid="wa-update-notice">
+          <button type="button" onClick={() => setUnfolded(true)} className={`flex min-h-[44px] w-full items-center gap-2 border-b px-3 text-left text-sm ${tone}`}>
+            <AlertTriangle className={`h-4 w-4 shrink-0 ${icon}`} />
+            <span className="min-w-0 flex-1 truncate font-semibold">{u.title}</span>
+          </button>
+        </div>
+      )
+    }
+    return (
+      <div className={`flex items-start gap-3 border-b px-4 py-3 ${tone}`} role="alert" data-testid="wa-update-notice">
+        <AlertTriangle className={`mt-0.5 h-5 w-5 shrink-0 ${icon}`} />
+        <div className="min-w-0 flex-1 space-y-1">
+          <p className="text-sm font-semibold">{u.title}</p>
+          <p className="text-sm">{u.text}</p>
+        </div>
+      </div>
+    )
+  }
 
   if (appMode && !unfolded) {
     return (
