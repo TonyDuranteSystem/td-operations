@@ -48,6 +48,7 @@ export default async function GenerateDocumentsPage({ searchParams }: { searchPa
     // list and made the Distribution Resolution / Tax Statement templates
     // skip their entire body (the "two-line document" bug, 2026-07-07).
     supabaseAdmin
+      // portal-access-ok: legal-document roster: every owner is listed whether or not they use the portal
       .from('account_contacts')
       .select('contact_id, role, contacts(first_name, last_name, address_line1, address_city, address_state, address_zip, address_country)')
       .eq('account_id', selectedAccountId)

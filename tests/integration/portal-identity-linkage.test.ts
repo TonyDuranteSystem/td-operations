@@ -164,6 +164,7 @@ function buildAccountContactsChain() {
   const chain = {
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
+    is: vi.fn().mockReturnThis(), // the no-portal-access filter (dev job beb43385)
     limit: vi.fn().mockReturnThis(),
     insert: vi.fn((payload: Record<string, unknown>) => {
       pendingInsert = payload

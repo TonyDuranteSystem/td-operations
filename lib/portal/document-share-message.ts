@@ -62,7 +62,7 @@ async function contextFromRows(docs: DocRow[]): Promise<ShareContext> {
   const accountIds: string[] = []
   if (doc.account_id) accountIds.push(doc.account_id)
   if (doc.contact_id) {
-    const { data: links } = await supabaseAdmin.from("account_contacts").select("account_id").eq("contact_id", doc.contact_id)
+    const { data: links } = await supabaseAdmin.from("account_contacts").select("account_id").is("access_revoked_at", null).eq("contact_id", doc.contact_id)
     for (const l of (links ?? []) as { account_id: string }[]) if (!accountIds.includes(l.account_id)) accountIds.push(l.account_id)
   }
   const targets = await buildShareTargets({ accountIds, contactId: doc.contact_id, defaultAccountId: doc.account_id, personIsDefault: !doc.account_id })

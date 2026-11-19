@@ -135,6 +135,7 @@ export async function getPendingClosuresOrNull(contactId: string): Promise<Pendi
     const { data: links, error: linksErr } = await supabaseAdmin
       .from("account_contacts")
       .select("account_id")
+      .is("access_revoked_at", null)
       .eq("contact_id", contactId)
     // Non-fatal: contact-only closures are still found without the links; only
     // account-scoped closures would be missed for this one render.
