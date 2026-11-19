@@ -753,10 +753,8 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
   const messages = data?.messages ?? []
   // Self-hosted line: `send` is present. The server enforces every rule; this only avoids offering a button that would be refused.
   const isGroupChat = data?.chat?.isGroup === true
-  const notice = isGroupChat
-    ? { tone: 'neutral' as const, text: 'This is a WhatsApp group — everyone in it sees what is written. Replying to a group from here is coming next; for now reply from the phone.' }
-    : data?.send ? sendNotice(data.send) : null
-  const canSend = !isGroupChat && (!data?.send || (data.send.mode !== 'paused' && data.send.hasInbound))
+  const notice = data?.send ? sendNotice(data.send) : null
+  const canSend = !data?.send || (data.send.mode !== 'paused' && data.send.hasInbound)
   // Attachments/voice notes ARE supported on the self-hosted line now (Antonio 2026-09-27) — kept as a named
   // constant since the paperclip button still needs to know "is this the wabridge line" for its upload route.
   const isWabridgeLine = !!data?.send
@@ -1328,13 +1326,19 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
         ) : (
           <div className="p-3 space-y-2">
             {/* WHO it is going to — always shown, never assumed (a wrong open chat must be obvious here). */}
-            <p className="text-xs text-zinc-500">
-              Sending to{' '}
-              <span className="font-medium text-zinc-700">
-                {data?.chat?.name ?? 'this chat'}
-                {data?.chat?.phone ? ` (${data.chat.phone})` : ''}
-              </span>
-            </p>
+            {isGroupChat ? (
+              <p className="text-xs rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-amber-900" data-testid="wa-group-confirm-warning">
+                Sending to the <span className="font-semibold">GROUP “{data?.chat?.name ?? 'WhatsApp group'}”</span> — everyone in the group will see this message, and it cannot be taken back.
+              </p>
+            ) : (
+              <p className="text-xs text-zinc-500">
+                Sending to{' '}
+                <span className="font-medium text-zinc-700">
+                  {data?.chat?.name ?? 'this chat'}
+                  {data?.chat?.phone ? ` (${data.chat.phone})` : ''}
+                </span>
+              </p>
+            )}
             {/* A long message must never push Edit / Confirm & Send off the bottom of the window (Antonio, 2026-11-06): the preview scrolls inside itself. */}
             <div className="bg-zinc-50 rounded-lg p-3 text-sm whitespace-pre-wrap break-words max-h-[40vh] overflow-y-auto">
               {rewriting ? <span className="text-zinc-400">Rewriting…</span> : text || <span className="text-zinc-400">(no caption — just the attachment)</span>}
