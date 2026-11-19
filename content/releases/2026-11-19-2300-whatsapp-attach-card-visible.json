@@ -15,7 +15,7 @@
     {
       "name": "Press the paperclip",
       "detail": "The card opens above the message bar.",
-      "flag": "fixed"
+      "flag": "new"
     },
     {
       "name": "Pick Photo or file",
