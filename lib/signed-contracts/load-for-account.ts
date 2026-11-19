@@ -5,6 +5,7 @@
  * (the page then says the contracts could not be read).
  */
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { selectWithAgreements } from './contract-columns'
 import { buildAccountContractLines, type AccountContractLine, type AccountLineContract, type AccountLineOffer } from './account-lines'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -14,7 +15,7 @@ export async function loadSignedContractLinesForOffers(offers: AccountLineOffer[
   const tokens = offers.map((o) => o.token).filter(Boolean)
   if (tokens.length === 0) return []
 
-  const contractsRes = await db.from('contracts').select('id, offer_token, signed_at, created_at, pdf_path').in('offer_token', tokens)
+  const contractsRes = await selectWithAgreements<AccountLineContract[]>((cols) => db.from('contracts').select(cols).in('offer_token', tokens), 'id, offer_token, signed_at, created_at, pdf_path')
   if (contractsRes.error) throw new Error(`Could not read the signed contracts: ${contractsRes.error.message}`)
   const contracts = (contractsRes.data ?? []) as AccountLineContract[]
   if (contracts.length === 0) return []

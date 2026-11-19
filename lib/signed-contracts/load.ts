@@ -12,6 +12,7 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { fetchAllRows } from '@/lib/crm-lists/queries'
 import type { CompanyAmountsRow, CompanyLookup } from './company-check'
+import { selectWithAgreements } from './contract-columns'
 import { buildEntries, type AgreementRow, type ContractRow, type CorrectionRow, type OfferRow } from './entries'
 import { INSTALLMENT_CONTRACT_TYPES, hasInstallmentAmounts } from './labels'
 import { contractMismatchesByCompany, contractMismatchesByPerson, type MismatchPerson, type OfferWithOwners } from './list-mismatches'
@@ -84,9 +85,11 @@ async function assemble(offers: OfferRow[], contractFilter?: { id: string }): Pr
   const tokens = offers.map((o) => o.token).filter(Boolean)
   if (tokens.length === 0) return []
 
-  let contractQuery = db.from('contracts').select(CONTRACT_COLUMNS).in('offer_token', tokens)
-  if (contractFilter) contractQuery = contractQuery.eq('id', contractFilter.id)
-  const contractsRes = await contractQuery
+  const contractsRes = await selectWithAgreements<ContractRow[]>((cols) => {
+    let q = db.from('contracts').select(cols).in('offer_token', tokens)
+    if (contractFilter) q = q.eq('id', contractFilter.id)
+    return q
+  }, CONTRACT_COLUMNS)
   if (contractsRes.error) throw new Error(`Could not read the signed contracts: ${contractsRes.error.message}`)
   const contracts = (contractsRes.data ?? []) as ContractRow[]
   if (contracts.length === 0) return []
