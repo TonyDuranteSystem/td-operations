@@ -213,7 +213,7 @@ _Regenerated 2026-11-19. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-11-10)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-11-19)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-11-11)_
-- [offers.md](offers.md) — Offers & Contracts _(verified 2026-11-14)_
+- [offers.md](offers.md) — Offers & Contracts _(verified 2026-11-19)_
 - [onboarding.md](onboarding.md) — Onboarding _(verified 2026-11-18)_
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-22)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-11-19)_
@@ -229,7 +229,7 @@ _Regenerated 2026-11-19. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_
 - [scan-document.md](scan-document.md) — Scan document (the chat attach tool) _(verified 2026-11-10)_
 - [service-contracts.md](service-contracts.md) — Service contracts (stored contract wording for NEW services) _(verified 2026-11-04)_
-- [signed-contracts.md](signed-contracts.md) — Signed contracts (the card on the Contact page) _(verified 2026-11-15)_
+- [signed-contracts.md](signed-contracts.md) — Signed contracts (the card on the Contact page) _(verified 2026-11-19)_
 - [slack-claude-worker.md](slack-claude-worker.md) — Slack Claude Worker — RETIRED (surface removed 2026-07-29) _(verified 2026-09-22)_
 - [social-app.md](social-app.md) — TD Social (iPhone app) — "app mode" on the web side _(verified 2026-11-17)_
 - [staff-notes.md](staff-notes.md) — Staff Sticky Notes (floating post-its) _(verified 2026-11-05)_
