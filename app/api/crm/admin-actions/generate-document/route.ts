@@ -26,6 +26,7 @@ import { refreshSS4, resolveMailing } from "@/lib/operations/ss4-refresh"
 import { isMultiMemberEntity } from "@/lib/portal/entity-type"
 import { hasCollectedSignatures } from "@/lib/portal/oa-regenerate-guard"
 import { companyCmraAddressLine } from "@/lib/operations/suite"
+import { localeFromLanguage } from "@/lib/locale"
 
 const OA_BASE_URL = `${APP_BASE_URL}/operating-agreement`
 const LEASE_BASE_URL = `${APP_BASE_URL}/lease`
@@ -603,7 +604,7 @@ async function generateSS4(accountId: string, opts?: { regenerate?: boolean }) {
       responsible_party_itin: responsibleContact.itin_number || null,
       responsible_party_phone: responsibleContact.phone || null,
       responsible_party_title: title,
-      language: responsibleContact.language === "Italian" ? "it" : "en",
+      language: localeFromLanguage(responsibleContact.language),
       county_and_state: resolvedCountyAndState, // null if RA address unknown — admin must fix RA + ss4_update before signing
       mailing_street: mailing.street,
       mailing_city_state_zip: mailing.cityStateZip,

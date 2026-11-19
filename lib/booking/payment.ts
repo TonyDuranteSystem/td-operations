@@ -9,6 +9,7 @@
 
 import { APP_BASE_URL } from "@/lib/config"
 import { isStrictLinkId } from "@/lib/booking-links/id"
+import { isItalian } from "@/lib/locale"
 import type { PayMode } from "@/lib/booking/plan"
 
 /** The public address of a paid link's payment page. */
@@ -91,7 +92,7 @@ export interface DraftInput {
 /** The message Antonio sees before anything is sent. Written in the person's language; plain, no payment details beyond the amount and the address. */
 export function paymentDraft(input: DraftInput): { subject: string; body: string } {
   const first = (input.name ?? "").trim().split(/\s+/)[0] ?? ""
-  if (input.language === "Italian") {
+  if (isItalian(input.language)) {
     return {
       subject: "Pagamento della nostra chiamata con Tony Durante",
       body: `${first ? `Ciao ${first},` : "Ciao,"}\n\ngrazie per aver prenotato la nostra chiamata${input.when ? ` (${input.when})` : ""}. Ecco il link per pagarla (${input.amountText}):\n${input.url}\n\nPer qualsiasi domanda, rispondi pure a questa email.`,
