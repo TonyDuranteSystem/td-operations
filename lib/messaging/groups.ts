@@ -49,7 +49,10 @@ export interface MessagingGroupRow {
 export async function findOrCreateWhatsAppGroup(
   params: FindOrCreateGroupParams
 ): Promise<{ group: MessagingGroupRow } | { error: string }> {
-  const externalGroupId = toWhatsAppJid(params.remoteIdentifier)
+  // A WhatsApp GROUP is keyed by its own id (`<digits>@g.us`) — never rewritten to a phone-style key, never matched by a
+  // legacy bare-digit key (a group id is not a phone number).
+  const isWaGroup = /@g\.us$/.test(params.remoteIdentifier.trim())
+  const externalGroupId = isWaGroup ? params.remoteIdentifier.trim() : toWhatsAppJid(params.remoteIdentifier)
 
   const { data: canonical, error: lookupError } = await supabaseAdmin
     .from("messaging_groups")
@@ -67,7 +70,7 @@ export async function findOrCreateWhatsAppGroup(
   // open a second, empty thread next to the imported history (the exact split this helper was written to prevent).
   // The legacy key is left as it is: normalizing stored keys touches real client data and needs Antonio's own go.
   let existing = canonical
-  if (!existing) {
+  if (!existing && !isWaGroup) {
     const { data: legacy, error: legacyError } = await supabaseAdmin
       .from("messaging_groups")
       .select("id, channel_id, external_group_id, group_name, account_id, contact_id, lead_id")
@@ -118,7 +121,7 @@ export async function findOrCreateWhatsAppGroup(
         channel_id: params.channelId,
         external_group_id: externalGroupId,
         group_name: initialGroupName,
-        group_type: params.groupType ?? "lead_chat",
+        group_type: params.groupType ?? (isWaGroup ? "support_group" : "lead_chat"),
         account_id: params.accountId ?? null,
         contact_id: params.contactId ?? null,
         lead_id: params.leadId ?? null,
