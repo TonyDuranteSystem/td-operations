@@ -31,6 +31,8 @@ import { buildClosureFollowUpCards, isClosureFollowUpTitle, type ClosureStepTask
 import type { ClosingBrief } from "@/lib/closure/closing-brief"
 import { classifyOpenPayments, owedOf, paidOf, totalsByCurrency, type OpenPaymentRow } from "@/lib/closure/closing-payments"
 import { CHECK_CLEARED_MARKER } from "@/lib/closure/wizard-move-guard"
+import { belongsToKeptOffer, CLOSING_MARKER_LIKE, endedNote, holdingReturns, isWaitingClosureJob, keptOfferTokens, newestMarker, returnLabel, waitsNote, type OpenJob } from "@/lib/closure/pending-return"
+import { TAX_RETURN_SERVICES } from "@/lib/closure/wrapup-facts"
 
 const OPEN_SERVICE = ["active", "on_hold", "blocked"] as const
 const OPEN_TODO = ["To Do", "In Progress", "Waiting"] as const
@@ -38,6 +40,8 @@ const LIVE_LEASE = ["signed", "viewed", "sent"] as const
 
 export interface CompanyClosureResult {
   alreadyClosed: boolean
+  /** a Tax Return still to be filed holds the closing: the company stays open (portal on) until it is filed (dev job 0a60f416, part C) */
+  waiting?: boolean
   /** one line per thing that happened — they go into the advance result's auto_triggers */
   lines: string[]
   /** steps that FAILED — shown to staff as a warning, never swallowed */
@@ -82,9 +86,9 @@ export async function readClosingBrief(serviceDeliveryId: string): Promise<Closi
   if (!acct) return null
 
   const [services, deadlines, payments, tasks, members, leases, notes] = await Promise.all([
-    supabaseAdmin.from("service_deliveries").select("service_type, status").eq("account_id", accountId).in("status", [...OPEN_SERVICE]).neq("id", serviceDeliveryId),
-    supabaseAdmin.from("deadlines").select("id", { count: "exact", head: true }).eq("account_id", accountId).eq("status", "Pending"),
-    supabaseAdmin.from("payments").select("id, invoice_number, status, invoice_status, amount, amount_currency, amount_due, amount_paid").eq("account_id", accountId).in("status", ["Pending", "Overdue"]),
+    supabaseAdmin.from("service_deliveries").select("id, service_type, status, stage, service_name, source_offer_token").eq("account_id", accountId).in("status", [...OPEN_SERVICE]).neq("id", serviceDeliveryId),
+    supabaseAdmin.from("deadlines").select("id, deadline_type").eq("account_id", accountId).eq("status", "Pending"),
+    supabaseAdmin.from("payments").select("id, invoice_number, status, invoice_status, amount, amount_currency, amount_due, amount_paid, tranche_offer_token").eq("account_id", accountId).in("status", ["Pending", "Overdue"]),
     supabaseAdmin.from("tasks").select("id, delivery_id").eq("account_id", accountId).in("status", [...OPEN_TODO]),
     supabaseAdmin.from("account_contacts").select("contact_id", { count: "exact", head: true }).eq("account_id", accountId).is("ended_at", null),
     supabaseAdmin.from("lease_agreements").select("id", { count: "exact", head: true }).eq("account_id", accountId).in("status", [...LIVE_LEASE]),
@@ -95,16 +99,25 @@ export async function readClosingBrief(serviceDeliveryId: string): Promise<Closi
   }
 
   // Only rows closing will really cancel are "unpaid invoices"; a part-paid invoice and an unused credit note are listed apart (closing-payments.ts).
-  const classified = classifyOpenPayments((payments.data ?? []) as OpenPaymentRow[])
+  // A Tax Return still to be filed holds the closing (dev job 0a60f416, part C): it, its to-dos and the unpaid invoices of its offer are NOT cancelled.
+  const openJobs = (services.data ?? []) as OpenJob[]
+  const alreadyClosed = String((acct as Row).status ?? "").toLowerCase() === "closed"
+  // A company that is already Closed is only tidied: the step cancels everything still open, so nothing is promised as kept.
+  const kept = alreadyClosed ? [] : holdingReturns(openJobs)
+  const keptIds = new Set(kept.map((k) => k.id))
+  const keptTokens = keptOfferTokens(kept)
+  const classified = classifyOpenPayments(((payments.data ?? []) as Array<OpenPaymentRow & { tranche_offer_token?: string | null }>).filter((p) => !belongsToKeptOffer(p, keptTokens)))
   return {
     companyName: (acct as Row).company_name as string,
-    alreadyClosed: String((acct as Row).status ?? "").toLowerCase() === "closed",
-    openServices: ((services.data ?? []) as Array<{ service_type: string; status: string }>).map((s) => ({ type: s.service_type, status: s.status })),
-    pendingDeadlines: deadlines.count ?? 0,
+    alreadyClosed,
+    openServices: openJobs.filter((j) => !keptIds.has(j.id)).map((s) => ({ type: s.service_type, status: String(s.status ?? "") })),
+    keptReturns: kept.map(returnLabel),
+    // the final return's own tax deadlines are not cancelled, so they are not counted as such
+    pendingDeadlines: ((deadlines.data ?? []) as Array<{ deadline_type?: string | null }>).filter((d) => kept.length === 0 || !/tax/i.test(d.deadline_type ?? "")).length,
     unpaid: { count: classified.cancel.length, totals: totalsByCurrency<OpenPaymentRow>(classified.cancel, owedOf) },
     partPaid: classified.partPaid.map((p) => ({ invoice: p.invoice_number || p.id, paid: paidOf(p), owed: owedOf(p), currency: (p.amount_currency || "USD").toUpperCase() })),
     credits: { count: classified.credits.length, totals: totalsByCurrency<OpenPaymentRow>(classified.credits, (r) => Math.abs(Number(r.amount ?? 0))) },
-    openTasks: ((tasks.data ?? []) as Array<{ delivery_id: string | null }>).filter((t) => t.delivery_id !== serviceDeliveryId).length,
+    openTasks: ((tasks.data ?? []) as Array<{ delivery_id: string | null }>).filter((t) => t.delivery_id !== serviceDeliveryId && !(t.delivery_id && keptIds.has(t.delivery_id))).length,
     members: members.count ?? 0,
     hasLease: (leases.count ?? 0) > 0,
     checkNote: checkNoteFrom((notes.data ?? []) as Array<{ body: string | null }>),
@@ -115,7 +128,7 @@ export async function readClosingBrief(serviceDeliveryId: string): Promise<Closi
  * Close the company a finished closure job belongs to. Never throws for a failed step — it reports it in `problems`.
  * @param wrapUpStepExists whether the Company Closure step list has the (dormant) "Wrap-up" step — passed on to the follow-up to-dos.
  */
-export async function applyCompanyClosure(p: { accountId: string; deliveryId: string; wrapUpStepExists: boolean }): Promise<CompanyClosureResult> {
+export async function applyCompanyClosure(p: { accountId: string; deliveryId: string; wrapUpStepExists: boolean; /** the closure's own follow-up to-dos were already created (the completion after a held closing) */ skipFollowUps?: boolean; /** offers of the final tax return(s) now filed: their unpaid invoices are REPORTED to staff, never cancelled silently (the completion after a held closing) */ protectOfferTokens?: readonly string[] }): Promise<CompanyClosureResult> {
   const { accountId, deliveryId, wrapUpStepExists } = p
   const lines: string[] = []
   const problems: string[] = []
@@ -142,6 +155,28 @@ export async function applyCompanyClosure(p: { accountId: string; deliveryId: st
   }
   if (wasClosed) lines.push("Company was already Closed — only what was still open for it was tidied")
 
+  // A Tax Return still to be filed HOLDS the closing (dev job 0a60f416, part C; Antonio 2026-10-15 "choice B", 2026-11-19 for Carasso): it, its to-dos, its
+  // tax deadlines and the unpaid invoices of its offer are left alone, and the company stays open (portal on) until it is filed. A read error stops everything.
+  let kept: OpenJob[] = []
+  if (!wasClosed) {
+    try {
+      const { data, error } = await supabaseAdmin
+        .from("service_deliveries")
+        .select("id, service_type, status, stage, service_name, source_offer_token")
+        .eq("account_id", accountId)
+        .in("status", [...OPEN_SERVICE])
+        .neq("id", deliveryId)
+      if (error) throw new Error(error.message)
+      kept = holdingReturns((data ?? []) as OpenJob[])
+    } catch (e) {
+      return { alreadyClosed: false, waiting: false, lines, problems: [`could not check for an open tax return (${e instanceof Error ? e.message : String(e)}) — nothing was changed`] }
+    }
+  }
+  const waiting = kept.length > 0
+  const keptIds = new Set(kept.map((k) => k.id))
+  // Unpaid invoices of a kept tax return's offer are not cancelled: while the return is pending, and — reported, not cancelled — when it is filed.
+  const keptTokens = new Set<string>([...Array.from(keptOfferTokens(kept)), ...(p.protectOfferTokens ?? [])])
+
   // 1. the company's other open services
   try {
     const { data: open, error } = await supabaseAdmin
@@ -154,6 +189,7 @@ export async function applyCompanyClosure(p: { accountId: string; deliveryId: st
     const { deactivateSD } = await import("@/lib/operations/service-delivery")
     const cancelled: string[] = []
     for (const sd of (open ?? []) as Array<{ id: string; service_type: string }>) {
+      if (keptIds.has(sd.id)) continue // the final tax return stays open (part C)
       const r = await deactivateSD({ delivery_id: sd.id, actor: "system:sd-closure", reason: "Company closed (closure job finished)", clear_renewal_date: true })
       if (r.success || r.outcome === "already_terminal") cancelled.push(sd.service_type)
       else fail(`could not cancel ${sd.service_type}`, r.error ?? r.outcome)
@@ -166,7 +202,9 @@ export async function applyCompanyClosure(p: { accountId: string; deliveryId: st
   // 2. pending deadlines
   try {
     // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-    const { data, error } = await supabaseAdmin.from("deadlines").update({ status: "Cancelled" }).eq("account_id", accountId).eq("status", "Pending").select("id")
+    let q = supabaseAdmin.from("deadlines").update({ status: "Cancelled" }).eq("account_id", accountId).eq("status", "Pending")
+    if (waiting) q = q.not("deadline_type", "ilike", "%tax%") // the final return's own deadline stays (part C)
+    const { data, error } = await q.select("id")
     if (error) throw new Error(error.message)
     if (data?.length) lines.push(`Cancelled ${data.length} upcoming deadline${data.length === 1 ? "" : "s"}`)
   } catch (e) {
@@ -179,7 +217,7 @@ export async function applyCompanyClosure(p: { accountId: string; deliveryId: st
   try {
     const { data, error } = await supabaseAdmin
       .from("payments")
-      .select("id, invoice_number, status, invoice_status, amount, amount_currency, amount_due, amount_paid, paid_date, credit_remaining")
+      .select("id, invoice_number, status, invoice_status, amount, amount_currency, amount_due, amount_paid, paid_date, credit_remaining, tranche_offer_token")
       .eq("account_id", accountId)
       .in("status", ["Pending", "Overdue"])
     if (error) throw new Error(error.message)
@@ -191,7 +229,12 @@ export async function applyCompanyClosure(p: { accountId: string; deliveryId: st
     const cancelledIds: string[] = []
     // Only a row with nothing received is cancelled. A part-paid invoice is left open and REPORTED (Finance's Void refuses it too: the money
     // received would sit on a cancelled invoice); an unused credit note is not an invoice; a row whose status column is stale is left alone.
-    const classified = classifyOpenPayments((data ?? []) as Array<Row & OpenPaymentRow>)
+    // The unpaid invoices of a kept tax return's offer are not touched at all (part C) — neither cancelled nor reported.
+    const keptRows = ((data ?? []) as Array<Row & OpenPaymentRow & { tranche_offer_token?: string | null }>).filter((r) => belongsToKeptOffer(r, keptTokens))
+    if (keptRows.length && waiting) lines.push(`${keptRows.length} unpaid invoice${keptRows.length === 1 ? "" : "s"} of the tax return's offer stay${keptRows.length === 1 ? "s" : ""} open`)
+    // The return is filed and a part of its offer is still unpaid: money may be owed, so it is never cancelled behind staff's back.
+    if (!waiting) for (const r of keptRows) problems.push(`invoice ${r.invoice_number || r.id} (a part of the filed tax return's offer) is still unpaid — it was NOT cancelled: collect it or void it by hand`)
+    const classified = classifyOpenPayments(((data ?? []) as Array<Row & OpenPaymentRow & { tranche_offer_token?: string | null }>).filter((r) => !belongsToKeptOffer(r, keptTokens)))
     for (const p of classified.partPaid) {
       const cur = (p.amount_currency || "USD").toUpperCase()
       problems.push(`invoice ${p.invoice_number || p.id} is part-paid (${paidOf(p)} ${cur} received, ${owedOf(p)} ${cur} still owed) — it was NOT cancelled: settle or refund it by hand`)
@@ -246,7 +289,7 @@ export async function applyCompanyClosure(p: { accountId: string; deliveryId: st
     if (error) throw new Error(error.message)
     const rows = (open ?? []) as Array<{ id: string; delivery_id: string | null; task_title: string | null }>
     const own = rows.filter((t) => t.delivery_id === deliveryId && !isClosureFollowUpTitle(t.task_title)).map((t) => t.id)
-    const others = rows.filter((t) => t.delivery_id !== deliveryId).map((t) => t.id)
+    const others = rows.filter((t) => t.delivery_id !== deliveryId && !(t.delivery_id && keptIds.has(t.delivery_id))).map((t) => t.id) // the final return's own to-dos stay (part C)
     const { updateTasksBulk } = await import("@/lib/operations/task")
     if (own.length) {
       const r = await updateTasksBulk({ ids: own, patch: { status: "Done" }, actor: "system:sd-closure", summary: `Auto-completed ${own.length} to-do(s) of the finished closure job` })
@@ -261,9 +304,49 @@ export async function applyCompanyClosure(p: { accountId: string; deliveryId: st
     fail("could not close the company's open to-dos", e)
   }
 
-  // 5. the company itself (not again when it was already Closed)
+  // 5. the company itself (not again when it was already Closed). Held by a Tax Return still to be filed: it stays open, the portal stays on, and a
+  //    marker note on the closure job says why (it is what the nightly jobs and the completion look for).
   let closed = false
-  if (!wasClosed) {
+  let stillWaiting = waiting
+  let lateClose = false
+  if (waiting) {
+    try {
+      const { data: have, error: hErr } = await (supabaseAdmin as any) // eslint-disable-line @typescript-eslint/no-explicit-any -- service_delivery_notes is not in the generated types yet
+        .from("service_delivery_notes")
+        .select("id, body")
+        .eq("service_delivery_id", deliveryId)
+        .ilike("body", CLOSING_MARKER_LIKE)
+        .order("created_at", { ascending: true })
+      if (hErr) throw new Error(hErr.message)
+      // Only the NEWEST marker counts: a wait that was ended (or never written) gets a fresh note; a standing wait is not written twice.
+      if (newestMarker((have ?? []) as Array<{ body: string | null }>) !== "waits") {
+        const { error: nErr } = await (supabaseAdmin as any) // eslint-disable-line @typescript-eslint/no-explicit-any -- same
+          .from("service_delivery_notes")
+          .insert({ service_delivery_id: deliveryId, body: waitsNote(kept), author_name: "Closing step" })
+        if (nErr) throw new Error(nErr.message)
+      }
+      lines.push(`The company stays open (portal on) until ${kept.map(returnLabel).join(", ")} ${kept.length === 1 ? "is" : "are"} filed — it closes by itself then`)
+
+      // Lost wake-up guard: the return may have been filed while the cancellations above ran — its completion hook then found no note and did nothing.
+      // Look again now that the note is written; if nothing holds the closing any more, complete it right here.
+      const { data: nowOpen, error: rErr } = await supabaseAdmin
+        .from("service_deliveries")
+        .select("id, service_type, status, stage")
+        .eq("account_id", accountId)
+        .in("status", [...OPEN_SERVICE])
+        .neq("id", deliveryId)
+      if (rErr) throw new Error(rErr.message)
+      lateClose = holdingReturns((nowOpen ?? []) as OpenJob[]).length === 0
+    } catch (e) {
+      fail("the company was left open for its tax return but the reminder note could NOT be written (the nightly jobs will not know it is closing)", e)
+    }
+    if (lateClose) {
+      const done = await completePendingCompanyClosure({ accountId })
+      lines.push(...done.lines)
+      problems.push(...done.problems)
+      stillWaiting = done.waiting === true
+    }
+  } else if (!wasClosed) {
     try {
       // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
       const { error } = await supabaseAdmin
@@ -278,6 +361,12 @@ export async function applyCompanyClosure(p: { accountId: string; deliveryId: st
     }
   }
   if (closed) {
+    // The company is Closed: the wait (if there was one) is over. Without this note a company later brought back to Active would still look like it waits.
+    try {
+      await endClosingWait(deliveryId, "the company was closed")
+    } catch (e) {
+      fail("the closing's waiting note could not be ended", e)
+    }
     try {
       const { syncContactTiersForAccount } = await import("@/lib/operations/sync-tier")
       await syncContactTiersForAccount(accountId, "system:sd-closure")
@@ -285,11 +374,17 @@ export async function applyCompanyClosure(p: { accountId: string; deliveryId: st
       fail("the company is Closed but its people's portal level could not be recomputed", e)
     }
 
-    // 6. the follow-up to-dos, in their own block: a failure here is reported as such and cannot hide the steps above
+  }
+  if ((closed || waiting) && !p.skipFollowUps) {
+    // 6. the follow-up to-dos, in their own block: a failure here is reported as such and cannot hide the steps above. They are about the closure JOB
+    //    (the registered agent, the lease), not about the company's status, so a held closing creates them too — once (a second finish adds none).
     try {
       const { count, error: lErr } = await supabaseAdmin.from("lease_agreements").select("id", { count: "exact", head: true }).eq("account_id", accountId).in("status", [...LIVE_LEASE])
       if (lErr) throw new Error(lErr.message)
-      const cards = buildClosureFollowUpCards(jobTasks, wrapUpStepExists, (count ?? 0) > 0)
+      const { data: haveCards, error: cErr } = await supabaseAdmin.from("tasks").select("task_title").eq("delivery_id", deliveryId)
+      if (cErr) throw new Error(cErr.message)
+      const haveTitles = new Set(((haveCards ?? []) as Array<{ task_title: string | null }>).map((t) => t.task_title))
+      const cards = buildClosureFollowUpCards(jobTasks, wrapUpStepExists, (count ?? 0) > 0).filter((c) => !haveTitles.has(c.task_title))
       if (cards.length) {
         // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
         const { error } = await supabaseAdmin.from("tasks").insert(
@@ -313,5 +408,83 @@ export async function applyCompanyClosure(p: { accountId: string; deliveryId: st
     }
   }
 
-  return { alreadyClosed: wasClosed, lines, problems }
+  return { alreadyClosed: wasClosed, waiting: stillWaiting, lines, problems }
+}
+
+/**
+ * End a company's wait, when it has one: writes the "CLOSING WAIT ENDED" note on the closure job, but only if the newest marker there says it waits.
+ * Called when the company is Closed and when the job is finished WITHOUT waiting ("skip company close"). Returns whether a wait was ended. THROWS on an error.
+ */
+export async function endClosingWait(jobId: string, reason: string): Promise<boolean> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- service_delivery_notes is not in the generated types yet (lib/job-notes/read.ts)
+  const { data, error } = await (supabaseAdmin as any).from("service_delivery_notes").select("body").eq("service_delivery_id", jobId).ilike("body", CLOSING_MARKER_LIKE).order("created_at", { ascending: true })
+  if (error) throw new Error(error.message)
+  if (newestMarker((data ?? []) as Array<{ body: string | null }>) !== "waits") return false
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- same
+  const { error: iErr } = await (supabaseAdmin as any).from("service_delivery_notes").insert({ service_delivery_id: jobId, body: endedNote(reason), author_name: "Closing step" })
+  if (iErr) throw new Error(iErr.message)
+  return true
+}
+
+/** A durable note on the closure job — where staff look — for a closing that did not fully work after its tax return (the screen warning of an automatic move vanishes). Never throws. */
+async function noteClosureProblem(jobId: string, problems: string[]): Promise<void> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- service_delivery_notes is not in the generated types yet
+    await (supabaseAdmin as any).from("service_delivery_notes").insert({ service_delivery_id: jobId, body: `CLOSURE PROBLEM: completing the company's closing after its final tax return did not fully work — ${problems.join(" · ")}`, author_name: "Closing step" })
+  } catch {
+    /* a note must never fail the move */
+  }
+}
+
+/**
+ * Finish a closing that was HELD for a final tax return (dev job 0a60f416, part C). Called when a Tax Return job reaches "TR Filed" or is cancelled, and by the
+ * nightly sweep (app/api/cron/complete-held-closings) for every path that does not call it (a return cancelled or removed from the tracker, a failed earlier try).
+ *
+ * It does nothing at all unless a closure job of the company is STILL holding it: finished at "Closing" with its newest marker saying "waits"
+ * (lib/closure/pending-return.ts). Going back, cancelling the job, finishing again without waiting ("skip company close") or an earlier closing all end the wait,
+ * so a tax return finishing in normal life, or a company brought back to Active, is never closed by it. When no Tax Return of the company is still open the same
+ * closing runs (idempotent, minus the follow-up to-dos created when the job finished): the company becomes Closed, the portal goes off. A problem is written on
+ * the closure job as well as returned. Never throws.
+ */
+export async function completePendingCompanyClosure(p: { accountId: string }): Promise<CompanyClosureResult> {
+  const none: CompanyClosureResult = { alreadyClosed: false, waiting: false, lines: [], problems: [] }
+  let closureJobId: string | null = null
+  try {
+    const { data: acct, error: aErr } = await supabaseAdmin.from("accounts").select("status").eq("id", p.accountId).maybeSingle()
+    if (aErr) throw new Error(aErr.message)
+    if (!acct || String((acct as Row).status ?? "").toLowerCase() === "closed") return none
+
+    const { data: jobs, error: jErr } = await supabaseAdmin
+      .from("service_deliveries")
+      .select("id, service_type, status, stage, service_name, source_offer_token")
+      .eq("account_id", p.accountId)
+    if (jErr) throw new Error(jErr.message)
+    const all = (jobs ?? []) as Array<OpenJob & { service_type: string; status: string | null }>
+    const closureJobs = all.filter((j) => j.service_type === "Company Closure")
+    if (closureJobs.length === 0) return none
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- service_delivery_notes is not in the generated types yet (lib/job-notes/read.ts)
+    const { data: notes, error: nErr } = await (supabaseAdmin as any).from("service_delivery_notes").select("service_delivery_id, body").in("service_delivery_id", closureJobs.map((j) => j.id)).ilike("body", CLOSING_MARKER_LIKE).order("created_at", { ascending: true })
+    if (nErr) throw new Error(nErr.message)
+    const byJob = new Map<string, Array<{ body: string | null }>>()
+    for (const n of (notes ?? []) as Array<{ service_delivery_id: string; body: string | null }>) byJob.set(n.service_delivery_id, [...(byJob.get(n.service_delivery_id) ?? []), { body: n.body }])
+    const waitingJob = closureJobs.find((j) => isWaitingClosureJob(j, byJob.get(j.id) ?? []))
+    if (!waitingJob) return none // nobody asked this company to wait (or the wait was ended) — a tax return finishing here closes nothing
+    closureJobId = waitingJob.id
+
+    const stillOpen = holdingReturns(all.filter((j) => (OPEN_SERVICE as readonly string[]).includes(String(j.status ?? ""))))
+    if (stillOpen.length > 0) {
+      return { ...none, waiting: true, lines: [`The company is still waiting for ${stillOpen.map(returnLabel).join(", ")} before it closes`] }
+    }
+
+    // the offers of every Tax Return job of the company — their unpaid invoices are reported, not cancelled
+    const protectOfferTokens = Array.from(keptOfferTokens(all.filter((j) => TAX_RETURN_SERVICES.includes(j.service_type))))
+    const done = await applyCompanyClosure({ accountId: p.accountId, deliveryId: waitingJob.id, wrapUpStepExists: false, skipFollowUps: true, protectOfferTokens })
+    if (done.problems.length > 0) await noteClosureProblem(waitingJob.id, done.problems)
+    return { ...done, lines: ["The final tax return is done — the company's closing is completed now", ...done.lines] }
+  } catch (e) {
+    const problem = `could not complete the company's closing after its tax return: ${e instanceof Error ? e.message : String(e)}`
+    if (closureJobId) await noteClosureProblem(closureJobId, [problem])
+    return { ...none, problems: [problem] }
+  }
 }

@@ -1,0 +1,5 @@
+{
+  "title": "Behind the scenes: a signed contract now remembers which agreements it contains",
+  "tag": "behind-the-scenes",
+  "text": "Nothing changes for any client until the \"several agreements in one contract\" switch is turned on. From then on, an offer with two services (for example a company closure and a tax return) is signed once and the contract records which agreements were in it, so the company page and the contact card say \"Closure + Tax return agreements\" instead of naming only the offer's main service. Contracts signed before this keep the name they always had. If the switch is changed while a client has the contract open, the client is asked to reload instead of signing a different document than the one on screen."
+}

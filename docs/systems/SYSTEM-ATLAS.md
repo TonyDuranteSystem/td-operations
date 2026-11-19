@@ -181,12 +181,12 @@ _Regenerated 2026-11-19 from the R-rule list in CLAUDE.md — **45 rules**, high
 <!-- GENERATED:deep-docs -->
 _Regenerated 2026-11-19. Every subsystem doc under `docs/systems/` (64 docs), with the date each was last verified against code — **an old date means treat that doc as a hint and check the code**._
 
-- [account-journey.md](account-journey.md) — Account journey (the card on the company page) _(verified 2026-11-14)_
-- [address-book.md](address-book.md) — Address book — standalone, reads the CRM, saves everyone else _(verified 2026-11-15)_
+- [account-journey.md](account-journey.md) — Account journey (the card on the company page) _(verified 2026-11-19)_
+- [address-book.md](address-book.md) — Address book — standalone, reads the CRM, saves everyone else _(verified 2026-11-19)_
 - [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-11-18)_
 - [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-11-13)_
 - [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-11-18)_
-- [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-11-09)_
+- [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-11-11)_
 - [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-11-19)_
 - [bofa-intake.md](bofa-intake.md) — Bank Application Intake (Bank of America, one-time link) _(verified 2026-11-06)_
 - [booking.md](booking.md) — Booking page — Calendly links per audience (Stage 1a engine + Stage 1b screens + Stage 3 paid links) _(verified 2026-11-16)_
@@ -194,7 +194,7 @@ _Regenerated 2026-11-19. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [client-app.md](client-app.md) — Client iPhone App (MyLLC Manager 2.0) _(verified 2026-11-18)_
 - [client-decision-requests.md](client-decision-requests.md) — Client Decision Requests _(verified 2026-11-18)_
 - [client-threads.md](client-threads.md) — Client Threads _(verified 2026-09-03)_
-- [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-11-10)_
+- [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-11-19)_
 - [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-11-18)_
 - [dashboard-navigation.md](dashboard-navigation.md) — Dashboard Navigation (the left menu, and opening pages without leaving the current one) _(verified 2026-11-17)_
 - [dev-tracker.md](dev-tracker.md) — Dev-Tracker Board _(verified 2026-07-16)_
@@ -205,15 +205,15 @@ _Regenerated 2026-11-19. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-11-18)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-11-19)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-11-12)_
-- [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-11-18)_
+- [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-11-19)_
 - [incoming-payments.md](incoming-payments.md) — Incoming payments (Stripe payments with no label — "Payments to confirm") _(verified 2026-11-15)_
 - [leads.md](leads.md) — Leads — the Leads list (a tab of the Booking page) and the lead page _(verified 2026-11-15)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-11-19)_
 - [marketing.md](marketing.md) — TD Marketing (Rocco's and Ale's sales workspace) _(verified 2026-11-13)_
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-11-10)_
-- [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-11-18)_
+- [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-11-19)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-11-11)_
-- [offers.md](offers.md) — Offers & Contracts _(verified 2026-11-14)_
+- [offers.md](offers.md) — Offers & Contracts _(verified 2026-11-19)_
 - [onboarding.md](onboarding.md) — Onboarding _(verified 2026-11-18)_
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-22)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-11-19)_
@@ -229,7 +229,7 @@ _Regenerated 2026-11-19. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_
 - [scan-document.md](scan-document.md) — Scan document (the chat attach tool) _(verified 2026-11-10)_
 - [service-contracts.md](service-contracts.md) — Service contracts (stored contract wording for NEW services) _(verified 2026-11-04)_
-- [signed-contracts.md](signed-contracts.md) — Signed contracts (the card on the Contact page) _(verified 2026-11-15)_
+- [signed-contracts.md](signed-contracts.md) — Signed contracts (the card on the Contact page) _(verified 2026-11-19)_
 - [slack-claude-worker.md](slack-claude-worker.md) — Slack Claude Worker — RETIRED (surface removed 2026-07-29) _(verified 2026-09-22)_
 - [social-app.md](social-app.md) — TD Social (iPhone app) — "app mode" on the web side _(verified 2026-11-17)_
 - [staff-notes.md](staff-notes.md) — Staff Sticky Notes (floating post-its) _(verified 2026-11-05)_
@@ -237,7 +237,7 @@ _Regenerated 2026-11-19. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [storage.md](storage.md) — CRM Storage _(verified 2026-11-16)_
 - [supabase-status.md](supabase-status.md) — Supabase status (the "it is Supabase, not you" message) _(verified 2026-11-05)_
 - [talk.md](talk.md) — TD Talk (standalone Team Chat app) _(verified 2026-11-18)_
-- [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-11-10)_
+- [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-11-19)_
 - [td-books-ledger-plan.md](td-books-ledger-plan.md) — TD Books — 2025 filing, then the ledger, then the agent _(no date recorded)_
 - [td-books.md](td-books.md) — TD Books (My Finances — the owner's company books) _(verified 2026-11-06)_
 - [td-communication.md](td-communication.md) — TD Communication _(verified 2026-11-18)_

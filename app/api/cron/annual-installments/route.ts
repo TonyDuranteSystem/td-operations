@@ -32,6 +32,7 @@
  * Schedule: 1st of every month via Vercel Cron
  */
 
+import { companiesWaitingForFinalReturn } from "@/lib/closure/closing-wait"
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
@@ -99,8 +100,10 @@ export async function GET(req: NextRequest) {
     )
 
     const results: Array<{ company: string; action: string; detail: string; paymentId?: string }> = []
+    // A company waiting for its final tax return before it closes stays Active but must not be invoiced (dev job 0a60f416, part C).
+    const waitingToClose = await companiesWaitingForFinalReturn()
 
-    for (const acct of accounts) {
+    for (const acct of accounts.filter((a) => !waitingToClose.has(a.id))) {
       // ── Gather the DB facts the pure decision function needs ──
 
       // 2027+ gate: a signed/completed annual agreement for this year.

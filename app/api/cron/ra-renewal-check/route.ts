@@ -1,5 +1,6 @@
 export const dynamic = 'force-dynamic'
 
+import { companiesWaitingForFinalReturn } from "@/lib/closure/closing-wait"
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logCron } from "@/lib/cron-log"
@@ -42,7 +43,9 @@ export async function GET(req: NextRequest) {
     if (qErr) throw qErr
     // No early return on an empty window — the renewal-date watchdog below
     // must run daily regardless of whether any renewal is currently due.
-    const dueAccounts = accounts || []
+    // A company waiting for its final tax return before it closes stays Active but must not get a renewal job (dev job 0a60f416, part C).
+    const waitingToClose = await companiesWaitingForFinalReturn()
+    const dueAccounts = (accounts || []).filter((a) => !waitingToClose.has(a.id))
 
     let created = 0
     let skipped = 0

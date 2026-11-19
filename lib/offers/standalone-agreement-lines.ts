@@ -1,6 +1,7 @@
 import { isStandaloneAgreementType, type ShortContractType } from '@/lib/offers/standalone-contract-types'
 import { isIncludedPrice, isRecurringPrice, parsePriceQuirk } from '@/lib/offers/compute-offer-totals'
 import type { OfferService } from '@/lib/types/offer'
+import { listOrEmpty } from '@/lib/offers/json-list'
 
 export interface AgreementEntry {
   type: ShortContractType
@@ -10,13 +11,7 @@ export interface AgreementEntry {
 type OfferLike = { services?: unknown; selected_services?: unknown }
 
 /** A JSONB list some legacy rows and MCP callers store as a JSON string (the pages parse both). */
-function asArray(v: unknown): unknown[] {
-  if (Array.isArray(v)) return v
-  if (typeof v === 'string') {
-    try { const p = JSON.parse(v); return Array.isArray(p) ? p : [] } catch { return [] }
-  }
-  return []
-}
+const asArray = (v: unknown): unknown[] => listOrEmpty(v)
 const servicesOf = (o: OfferLike): OfferService[] => asArray(o.services) as OfferService[]
 
 export interface PlanOptions {
