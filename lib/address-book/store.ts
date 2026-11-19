@@ -114,6 +114,15 @@ export async function findMatches(input: MatchKeys): Promise<MatchDto[]> {
   return out
 }
 
+/** People saved in the address book (not the CRM) who hold this number — used by the WhatsApp chat bar so a saved outside person is recognised. Throws on a failed read: that must never look like "not saved". */
+export async function findSavedByPhone(phone: string): Promise<{ id: string; name: string; company: string | null }[]> {
+  const keys = lookupKeys({ phones: [phone] }).phone_keys
+  if (keys.length === 0) return []
+  const r = await db().from("address_book_entries").select("id, full_name, company").is("archived_at", null).overlaps("phone_keys", keys).limit(5)
+  if (r.error) throw new Error(`address book: could not check saved people: ${r.error.message}`)
+  return ((r.data ?? []) as { id: string; full_name: string; company: string | null }[]).map((x) => ({ id: x.id, name: x.full_name, company: x.company }))
+}
+
 // ───────────────────────────── saving a person ─────────────────────────────
 
 function firstProblem(error: { issues: { path: PropertyKey[]; message: string }[] }): string {
