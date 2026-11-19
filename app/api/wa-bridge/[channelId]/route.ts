@@ -10,6 +10,7 @@ import {
   type WabridgeMessage,
 } from "@/lib/messaging/wabridge"
 import { parseHeartbeat } from "@/lib/messaging/wabridge-health"
+import { parseUpdateReport } from "@/lib/messaging/wabridge-update"
 import { emitUiEvent } from "@/lib/ui-events"
 import { isFreshInbound, inboundSignalPayload } from "@/lib/messaging/inbound-sound"
 import { alertNewWhatsApp } from "@/lib/app/inbound-alerts"
@@ -50,6 +51,7 @@ const MAX_NAME_ITEMS = 500
  *  - (GOWA's own webhook)  {event:"message", ...}     live message → saved
  *  - (GOWA's own webhook)  {event:"message.ack", payload:{ids, chat_id, receipt_type:"delivered"|"read"}}   receipt on one of OUR messages → ticks in the Inbox
  *  - {event:"bridge.heartbeat", ts, reachable, connected, logged_in}   health beat from the Mac (ts must be fresh)
+ *  - {event:"bridge.update.status", ts, state, message, current, latest}   the Mac's nightly WhatsApp-program update result (shown in the Inbox WhatsApp banner)
  *  - {event:"bridge.backfill", ts, items:[BackfillItem], live?}       history download batch (no unread, no revive);
  *                                                                     live:true = a recent CATCH-UP of messages the live path missed → treated as live (unread + revive)
  *  - {event:"bridge.names", ts, names:[{digits,name}]}                the phone's saved contact names
@@ -111,6 +113,21 @@ export async function POST(req: NextRequest, { params }: { params: { channelId: 
   }
   const now = new Date()
   const kind = typeof body === "object" && body !== null ? (body as Record<string, unknown>).event : undefined
+
+  // ─── The Mac's nightly update of the WhatsApp program reports what happened ───
+  if (kind === "bridge.update.status") {
+    const up = parseUpdateReport(body, now)
+    if (!up) return NextResponse.json({ error: "bad update report" }, { status: 400 })
+    if (up.ok === false) return NextResponse.json({ error: up.reason }, { status: 400 })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the two new columns are not in the generated types yet
+    const { error: upError } = await (supabaseAdmin as any)
+      .from("wa_bridge_state")
+      .update({ update_status: up.report, update_status_at: now.toISOString() })
+      .eq("channel_id", channel.id)
+    // Deployed before its database change (42703 = column missing): drop the report quietly, the banner just stays quiet.
+    if (upError && upError.code !== "42703") return NextResponse.json({ error: upError.message }, { status: 500 })
+    return NextResponse.json({ ok: true, update: true })
+  }
 
   // ─── Health beat from the Mac (GOWA itself emits no connect/disconnect event) ───
   if (kind === "bridge.heartbeat") {
