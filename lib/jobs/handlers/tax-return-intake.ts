@@ -25,6 +25,8 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createAccountFromWizard } from "@/lib/account-from-wizard"
 import { reanchorLeadConversations } from "@/lib/team/reanchor-conversations"
 import { advanceServiceDelivery } from "@/lib/service-delivery"
+import { taxYearFromServiceName } from "@/lib/flows/resolve-flows"
+import { nominalDeadline } from "@/lib/tax/ensure-tax-return"
 import { updateJobProgress, type Job, type JobResult } from "../queue"
 
 interface TaxReturnIntakePayload {
@@ -253,10 +255,12 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
 
   // ─── 5. BACKFILL TAX RETURN SD ACCOUNT_ID (CRITICAL) ───
   let taxReturnSdId: string | null = null
+  // The tax year the Tax Return SD is named for ("Tax Return 2026 - <company>"), or null (a plain "Tax Return - <company>" = this year, as before).
+  let sdTaxYear: number | null = null
   try {
     const { data: sd } = await supabaseAdmin
       .from("service_deliveries")
-      .select("id, stage")
+      .select("id, stage, service_name")
       .eq("service_type", "Tax Return")
       .eq("contact_id", contact_id)
       .eq("status", "active")
@@ -274,6 +278,7 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
     }
 
     taxReturnSdId = sd.id
+    sdTaxYear = taxYearFromServiceName(sd.service_name)
     // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
     await supabaseAdmin
       .from("service_deliveries")
@@ -293,7 +298,8 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
 
   // ─── 6. CREATE TAX_RETURNS ROW (CRITICAL) ───
   try {
-    const currentYear = new Date().getFullYear()
+    // The year the SD is named for; else this year, as before (dev job 0a60f416, part B).
+    const currentYear = sdTaxYear ?? new Date().getFullYear()
     const { data: existingTR } = await supabaseAdmin
       .from("tax_returns")
       .select("id")
@@ -310,7 +316,7 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
           account_id: accountId!,
           company_name: companyName,
           return_type: (p.entity_type || "SMLLC") as never,
-          deadline: `${currentYear + 1}-04-15`,
+          deadline: nominalDeadline(currentYear, p.entity_type === "MMLLC" ? "MMLLC" : "SMLLC"),
           tax_year: currentYear,
           data_received: false,
           paid: true,

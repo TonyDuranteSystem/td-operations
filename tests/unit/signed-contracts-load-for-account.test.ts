@@ -39,7 +39,7 @@ describe('loadSignedContractLinesForOffers', () => {
     const lines = await loadSignedContractLinesForOffers([{ token: 'T1', contract_type: 'onboarding' }, { token: 'T2', contract_type: 'formation' }])
     const c = calls.find((x) => x.table === 'contracts')!
     expect(c.filters).toContainEqual(['in offer_token', ['T1', 'T2']])
-    expect(c.select).toBe('id, offer_token, signed_at, created_at, pdf_path')
+    expect(c.select).toBe('id, offer_token, signed_at, created_at, pdf_path, agreements')
     expect(lines).toEqual([{ id: 'c1', name: 'Onboarding contract', signedOn: '2026-02-12', isMain: true, fileAvailable: true }])
   })
 

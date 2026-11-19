@@ -21,6 +21,7 @@ import { writeITINFields } from '@/lib/itin/write-itin-fields'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
 import { contactUploadRouting } from '@/lib/crm-store/contact-upload-routing'
 import type { WaitingWorkspaceStep } from '@/lib/flows/storage-step-rules'
+import { localeFromLanguage } from '@/lib/locale'
 
 const CATEGORY_MAP: Record<string, { num: number; subfolder: string }> = {
   Contacts: { num: 2, subfolder: '2. Contacts' },
@@ -374,7 +375,7 @@ export async function POST(req: NextRequest) {
       if (contactForEmail?.email) {
         const { gmailPost } = await import('@/lib/gmail')
         const clientName = contactForEmail.full_name?.split(' ')[0] || 'there'
-        const isItalian = contactForEmail.language === 'Italian'
+        const isItalian = localeFromLanguage(contactForEmail.language) === 'it'
 
         const subject = isItalian
           ? `Nuovo documento disponibile — ${docLabel}`

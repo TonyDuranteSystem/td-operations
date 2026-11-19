@@ -28,6 +28,7 @@ import { dbWrite, dbWriteSafe } from "@/lib/db"
 import { createSD } from "@/lib/operations/service-delivery"
 import { formationStateForClient } from "@/lib/formation/state-lookup"
 import type { Json } from "@/lib/database.types"
+import { localeFromLanguage } from "@/lib/locale"
 
 export async function POST(req: NextRequest) {
   try {
@@ -78,7 +79,7 @@ export async function POST(req: NextRequest) {
       if (lead) {
         leadName = lead.full_name || ""
         leadEmail = lead.email || ""
-        leadLanguage = lead.language === "Italian" || lead.language === "it" ? "it" : "en"
+        leadLanguage = localeFromLanguage(lead.language)
         referrerName = lead.referrer_name || ""
       }
 

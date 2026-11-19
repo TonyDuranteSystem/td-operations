@@ -1,4 +1,5 @@
 # Account journey (the card on the company page)
+_Last verified against code: 2026-11-19 (touch only) — Claude (dev job `20600f18`, SANDBOX → pull request; NO migration). `components/accounts/account-journey.tsx` changed ONLY in the Offer step's hover text for a sent/viewed offer: the price-breakdown totals are read through the shared `listOrEmpty()` (`lib/offers/json-list.ts`), so an offer whose breakdown was saved as text can no longer crash the card. Nothing else about the journey changed. See `offers.md` (2026-11-19)._
 _Last verified against code: 2026-11-14 — Claude (dev job `b3b013cd`, SANDBOX — Antonio ships; in a pull request): the card now **starts closed** with a one-line header saying where the client is right now; the form boxes became slim rows; Partner Bank Applications left the card and is a closed card of its own._
 
 ## What it is

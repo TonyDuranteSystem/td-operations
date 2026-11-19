@@ -13,6 +13,7 @@
  */
 
 import { isMissingTable } from "@/lib/booking-links/missing-table"
+import { isItalian } from "@/lib/locale"
 import { bookingUrisOf, decideBooking, loadStoredBookings, lookupEvents, canCancelBooking, type EventFacts, type LinkBooking, type StoredBooking } from "@/lib/booking/link-bookings"
 import { isPaidLink, moneyText, parsePayMode, payModeText, payStateOf, payUrl, paymentDraft } from "@/lib/booking/payment"
 import { nyWhen } from "@/lib/booking/links"
@@ -81,7 +82,7 @@ export function decidePaidCard(input: {
   const money = moneyText(row.pay_amount_cents as number, row.pay_currency as string)
   const url = payUrl(row.pay_code as string, input.baseUrl)
   const when = booking.startTime ? nyWhen(booking.startTime) : null
-  const language = row.person_language === "Italian" ? "Italian" : row.person_language === "English" ? "English" : null
+  const language = isItalian(row.person_language) ? "Italian" : "English"
   const sentCount = row.sent_count ?? 0
 
   const notes: string[] = []
