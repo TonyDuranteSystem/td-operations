@@ -8,7 +8,7 @@ const { runInboundJobsLive } = vi.hoisted(() => ({ runInboundJobsLive: vi.fn() }
 vi.mock("@/lib/app/inbound-alerts-live", () => ({ runInboundJobsLive }))
 
 import {
-  EMAIL_MAX_AGE_MS, alertNewEmails, alertNewWhatsApp, emailJobsFor, isNewEmailCandidate, isNewWhatsAppCandidate, whatsAppJobsFor, type EmailAlertFacts,
+  EMAIL_MAX_AGE_MS, alertNewEmails, alertNewWhatsApp, emailJobsFor, isNewEmailCandidate, isNewWhatsAppCandidate, whatsAppJobsFor, type EmailAlertFacts, whatsAppPreview,
 } from "@/lib/app/inbound-alerts"
 
 const NOW = new Date("2026-11-05T15:00:00Z")
@@ -69,13 +69,13 @@ describe("a new email: what may alert", () => {
 describe("the jobs a saved thread makes", () => {
   it("one job per thread, naming the mailbox, and carrying the CRM link of the sender", () => {
     const jobs = emailJobsFor("support", [
-      email({ message_id: "a", thread_id: "t1" }),
-      email({ message_id: "b", thread_id: "t1", contact_id: "c9" }),
+      email({ message_id: "a", thread_id: "t1", subject: "older", internal_date: ago(2 * 60_000) }),
+      email({ message_id: "b", thread_id: "t1", contact_id: "c9", subject: "Newest subject", internal_date: ago(60_000) }),
       email({ message_id: "c", thread_id: "t2", lead_id: "l3" }),
     ], NOW_MS)
     expect(jobs).toHaveLength(2)
     expect(jobs[0]).toEqual({
-      kind: "email_message", source: "email:support", messageIds: ["a", "b"], place: "support", tag: "email:support:t1",
+      kind: "email_message", source: "email:support", messageIds: ["a", "b"], place: "support", tag: "email:support:t1", preview: "Newest subject",
       who: { contactId: "c9", leadId: null, accountId: null },
     })
     expect(jobs[1].messageIds).toEqual(["c"])
@@ -195,5 +195,16 @@ describe("the doorways do NOTHING until the Apple key is set", () => {
     setKey()
     await expect(alertNewEmails("support", null as unknown as EmailAlertFacts[], NOW_MS)).resolves.toBeUndefined()
     await expect(alertNewWhatsApp(null as unknown as [], NOW)).resolves.toBeUndefined()
+  })
+})
+
+describe("the lock-screen words for a WhatsApp message", () => {
+  it("text shows itself; a photo, a voice note or a file shows fixed words; an unknown type shows nothing", () => {
+    expect(whatsAppPreview({ contentType: "text", contentText: "Hi" })).toBe("Hi")
+    expect(whatsAppPreview({ contentType: "image", contentText: "[Image: passport.jpg]" })).toBe("Sent a photo")
+    expect(whatsAppPreview({ contentType: "voice", contentText: "x" })).toBe("Sent a voice message")
+    expect(whatsAppPreview({ contentType: "document", contentText: "Rossi_Passport.pdf" })).toBe("Sent a file")
+    expect(whatsAppPreview({ contentType: "other", contentText: "secret" })).toBe("")
+    expect(whatsAppPreview({})).toBe("")
   })
 })
