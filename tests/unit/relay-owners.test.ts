@@ -213,7 +213,7 @@ describe('finalizeRelayAnswers', () => {
     expect(finalizeRelayAnswers(full, 2)).toEqual({ has_partner: 'No', equity_pct: 100, business_name: 'Z LLC' })
   })
   it('keeps the cards when there are other owners and stamps the card count', () => {
-    const yes = { has_partner: 'Yes', equity_pct: 1, member_0_member_type: 'individual', member_0_member_first_name: 'Pat', members_confirmed: true }
+    const yes: Record<string, unknown> = { has_partner: 'Yes', equity_pct: 1, member_0_member_type: 'individual', member_0_member_first_name: 'Pat', members_confirmed: true }
     const out = finalizeRelayAnswers(yes, 1)
     expect(out.member_count).toBe(1)
     expect(out.member_0_member_first_name).toBe('Pat')
@@ -226,7 +226,7 @@ describe('finalizeRelayAnswers', () => {
     expect(finalizeRelayAnswers(none, 0)).toEqual({ has_partner: 'No' })
   })
   it('caps the stamped count', () => {
-    expect(finalizeRelayAnswers({ has_partner: 'Yes' }, 1e9).member_count).toBe(MAX_OWNER_CARDS)
+    expect(finalizeRelayAnswers<Record<string, unknown>>({ has_partner: 'Yes' }, 1e9).member_count).toBe(MAX_OWNER_CARDS)
   })
   it('hasOtherOwners reads only a Yes', () => {
     expect(hasOtherOwners({ has_partner: 'Yes' })).toBe(true)
