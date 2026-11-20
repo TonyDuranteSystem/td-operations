@@ -1,0 +1,6 @@
+{
+  "title": "Team members: every change is now recorded, and a person can be switched off and on",
+  "tag": "behind-the-scenes",
+  "text": "Groundwork for the team screens. Every action on a team member (added, powers changed, removed, switched off or on, password reset) is now written to a record that nobody can edit or delete. A person can be switched off and back on, unlike Remove, and if Tony Durante LLC switched someone off the owner cannot switch them back on. Adding a team member can no longer leave a half-made login behind after a double click. The screens do not change yet.",
+  "points": []
+}

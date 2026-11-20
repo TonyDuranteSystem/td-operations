@@ -6,6 +6,7 @@
  */
 import { createClient } from '@/lib/supabase/server'
 import { assertAccountAdmin, createTeammate, listTeammates } from '@/lib/portal/team/server'
+import { ownerActorFromRequest } from '@/lib/portal/team/events'
 import { NextRequest, NextResponse } from 'next/server'
 
 export const dynamic = 'force-dynamic'
@@ -40,6 +41,7 @@ export async function POST(request: NextRequest) {
     capabilities: body.capabilities,
     createdByContactId: adminContactId,
     disclaimerAccepted: body.disclaimer_accepted === true,
+    ip: ownerActorFromRequest(adminContactId, request.headers).ip,
   })
 
   if (!result.ok) {
