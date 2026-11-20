@@ -62,6 +62,55 @@ export function isPersonalDocumentHiddenFrom(
   return doc.contact_id !== viewerContactId
 }
 
+/**
+ * Who is looking, for the personal-document rule: their own contact id (a client) and the owners who have SHARED their personal
+ * documents with them (a team login — Team Powers step 7). A client has no shares; a team login has no contact id. Both default to "nothing".
+ */
+export interface PersonalDocViewer {
+  contactId?: string | null
+  /** Contact ids of the owners whose personal documents this viewer may see because THEY chose to share them. */
+  sharedFrom?: readonly string[] | null
+}
+
+/**
+ * The same rule as isPersonalDocumentHiddenFrom, plus ONE exception: a document whose owner has shared their personal documents with this
+ * viewer (a team login) is visible. Everything else is unchanged — a document with no resolved owner is always hidden, and one belonging to
+ * a co-owner who did NOT share is hidden. Only the places that deliberately support sharing call this; every other place keeps calling
+ * isPersonalDocumentHiddenFrom, which never lets a team login see a personal document.
+ */
+export function isPersonalDocumentHiddenFromViewer(doc: DocumentOwnership, viewer: PersonalDocViewer): boolean {
+  if (doc.category !== PERSONAL_CATEGORY) return false
+  if (!doc.contact_id) return true
+  if (viewer.contactId && doc.contact_id === viewer.contactId) return false
+  return !(viewer.sharedFrom ?? []).includes(doc.contact_id)
+}
+
+/**
+ * May this viewer OPEN (download) this personal document? A client: only their own (isPersonalDocumentHiddenFrom). A team login (no contact id):
+ * only when the document's owner shared their personal documents with it AND staff have published the document (portal_visible) — a
+ * share never reaches a draft or an unreviewed upload. Used by the download route, the one place that serves the file itself.
+ * (A document that is not a personal one is not decided here: it returns true.)
+ */
+export function mayViewerOpenPersonalDocument(
+  doc: DocumentOwnership & { portal_visible?: boolean | null },
+  viewer: PersonalDocViewer,
+): boolean {
+  if (doc.category !== PERSONAL_CATEGORY) return true
+  if (viewer.contactId) return !isPersonalDocumentHiddenFrom(doc, viewer.contactId)
+  return doc.portal_visible === true && !isPersonalDocumentHiddenFromViewer(doc, viewer)
+}
+
+/**
+ * Is a shared personal document inside what the Documents page lists for a team login? Exactly the three places "My Documents" reads: a paper
+ * filed under THIS login's company, a person-level paper (no company), or a paper in the new storage. A paper filed under ANOTHER of the
+ * owner's companies is not — the download route must not open what the page does not show.
+ */
+export function sharedPersonalDocInScope(doc: { account_id?: string | null; drive_file_id?: string | null }, loginAccountId: string | null | undefined): boolean {
+  if (!doc.account_id) return true
+  if (loginAccountId && doc.account_id === loginAccountId) return true
+  return typeof doc.drive_file_id === 'string' && doc.drive_file_id.startsWith('store:')
+}
+
 export const UNRESOLVED_PERSONAL_DOC_MESSAGE =
   "This looks like a personal document (e.g. an ID or passport) that isn't linked to " +
   "one specific member yet, so we can't tell whose it is. Link it to the correct " +

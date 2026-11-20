@@ -4,7 +4,8 @@ import { downloadFileBinary } from '@/lib/google-drive'
 import { getClientContactId } from '@/lib/portal-auth'
 import { canAccessAccount } from '@/lib/portal/team/gate'
 import { NextRequest, NextResponse } from 'next/server'
-import { isPersonalDocumentHiddenFrom } from '@/lib/documents/visibility-guard'
+import { mayViewerOpenPersonalDocument, isPersonalDocumentHiddenFromViewer, sharedPersonalDocInScope } from '@/lib/documents/visibility-guard'
+import { getSharedPersonalDocOwners } from '@/lib/portal/team/personal-docs-server'
 import { isHiddenByHistoryCutoff } from '@/lib/documents/history-cutoff'
 import { getHistoryCutoff } from '@/lib/portal/history-cutoff'
 
@@ -57,12 +58,21 @@ export async function GET(
   const contactId = getClientContactId(user)
   const hasAccountAccess = doc.account_id ? await canAccessAccount(user, doc.account_id, 'documents') : false
   const hasContactAccess = !doc.account_id && !!contactId && doc.contact_id === contactId
-  if (!hasAccountAccess && !hasContactAccess) {
+  // Team Powers step 7: a team login (no contact id) may open a PERSONAL document ONLY when its owner shared their personal documents
+  // with that login, and only a document staff have published (portal_visible). Nobody else gets this door.
+  const isPersonal = doc.category === 2
+  const sharedOwners = !contactId && isPersonal && doc.contact_id ? await getSharedPersonalDocOwners(user) : []
+  const sharedFrom = sharedOwners.map(o => o.contactId)
+  const viewer = { contactId, sharedFrom }
+  // ...and only what the Documents page lists for this login: this company, person-level papers, or the new storage.
+  const hasSharedAccess = isPersonal && !!doc.contact_id && doc.portal_visible === true && !isPersonalDocumentHiddenFromViewer(doc, viewer)
+    && sharedPersonalDocInScope(doc, sharedOwners[0]?.accountId)
+  if (!hasAccountAccess && !hasContactAccess && !hasSharedAccess) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
   // Company access is not enough for a PERSONAL document (passport/ID/ITIN…): only
-  // its own person may open it — never a co-member or a teammate (Master Rules MM6).
-  if (isPersonalDocumentHiddenFrom(doc, contactId)) {
+  // its own person may open it — never a co-member (Master Rules MM6) — and a team login only through its owner's share.
+  if (!mayViewerOpenPersonalDocument(doc, viewer)) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 })
   }
 

@@ -4,7 +4,8 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { buildHandoverMessage } from '@/lib/portal/team/handover'
 import { CAPABILITY_GROUPS, CAPABILITY_LABELS, describeCapabilities, type NoticeLang } from '@/lib/portal/team/capability-labels'
-import { buildNotice, noticeCheckboxLabel, NOTICE_VERSION, type NoticeMode } from '@/lib/portal/team/notice'
+import { buildNotice, noticeCheckboxLabel, NOTICE_VERSION, type Notice, type NoticeMode } from '@/lib/portal/team/notice'
+import { buildPersonalDocsNotice, personalDocsCheckboxLabel, PERSONAL_DOCS_NOTICE_VERSION } from '@/lib/portal/team/personal-docs-notice'
 
 // The tick list (labels, hints, groups and the options that hang under a tick) lives in lib/portal/team/capability-labels.ts,
 // so this screen, the notice the owner accepts and the emails to the other owners can never drift apart.
@@ -31,6 +32,8 @@ export interface Teammate {
   capabilities: Record<string, boolean>
   status: string
   state: TeammateState
+  /** True when THIS signed-in owner has shared their own personal documents with this login (Team Powers step 7). */
+  sharesMyDocs?: boolean
 }
 
 type ApiResult = { ok: boolean; error?: string; needsConfirmation?: boolean; data?: Record<string, unknown> }
@@ -72,8 +75,9 @@ function TickPicker({ caps, onToggle }: { caps: Record<string, boolean>; onToggl
           </div>
         </div>
       ))}
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-300">Coming later</p>
-      <p className="text-xs text-zinc-300 -mt-2 ml-1.5">Personal documents: not available yet.</p>
+      <p className="text-[11px] leading-relaxed text-zinc-500" data-testid="personal-docs-hint">
+        <span className="font-medium text-zinc-600">Your personal documents</span> are not a tick here. Each owner shares their own, one person at a time, with the &ldquo;Share my personal documents&rdquo; button on that person&rsquo;s row.
+      </p>
       <div className="text-[11px] leading-relaxed text-zinc-500 bg-zinc-50 border border-zinc-100 rounded-lg p-2.5" data-testid="never-box">
         <span className="font-medium text-zinc-600">No tick can give:</span> signing anything, generating documents, changing owners or members, managing the team, changing your login. These always stay with you and Tony Durante LLC.
       </div>
@@ -83,13 +87,15 @@ function TickPicker({ caps, onToggle }: { caps: Record<string, boolean>; onToggl
 
 /** Step 2 of adding, or of giving more powers: the notice, the tick box and the owner's password. */
 function ConfirmStep({
-  lang, mode, memberName, companyName, caps, busy, error, onBack, onConfirm, confirmLabel,
+  lang, mode, memberName, companyName, caps, busy, error, onBack, onConfirm, confirmLabel, notice: readyNotice, checkboxLabel, draftVersion,
 }: {
   lang: NoticeLang; mode: NoticeMode; memberName: string; companyName: string; caps: Record<string, boolean>
   busy: boolean; error: string; onBack: () => void; confirmLabel: string
   onConfirm: (proof: { notice_accepted: true; notice_version: string; notice_text: string; owner_password: string }) => void
+  /** A notice already built by the caller (the personal-documents notice); otherwise the powers notice is built here. */
+  notice?: Notice; checkboxLabel?: string; draftVersion?: string
 }) {
-  const notice = buildNotice({ lang, mode, memberName, companyName, caps })
+  const notice = readyNotice ?? buildNotice({ lang, mode, memberName, companyName, caps })
   const [accepted, setAccepted] = useState(false)
   const [password, setPassword] = useState('')
   return (
@@ -102,11 +108,11 @@ function ConfirmStep({
         </ul>
         <p>{notice.responsibility}</p>
         <p>{notice.never}</p>
-        <p className="text-[10px] text-zinc-400">Draft wording ({NOTICE_VERSION}). The final text will be written by a lawyer, in English and Italian, before it goes live.</p>
+        <p className="text-[10px] text-zinc-400">Draft wording ({draftVersion ?? NOTICE_VERSION}).</p>
       </div>
       <label className="flex items-start gap-2 text-xs text-zinc-700">
         <input type="checkbox" checked={accepted} onChange={e => setAccepted(e.target.checked)} className="mt-0.5" data-testid="notice-accept" />
-        <span>{noticeCheckboxLabel(lang)}</span>
+        <span>{checkboxLabel ?? noticeCheckboxLabel(lang)}</span>
       </label>
       <div className="max-w-xs">
         <Field label="Your password, to confirm it is you">
@@ -144,6 +150,9 @@ export function TeamManager({ accountId, companyName, teammates, loginUrl, defau
   // Editing powers: giving MORE power goes through the same notice + password step.
   const [editing, setEditing] = useState<null | { t: Teammate; draft: Record<string, boolean>; step: 'ticks' | 'confirm' }>(null)
 
+  // Sharing the owner's OWN personal documents with one person (Team Powers step 7): the notice + password step, then a save.
+  const [sharing, setSharing] = useState<null | Teammate>(null)
+
   // The message the owner copies and sends himself, shown ONCE after creating a team member or resetting a password. English only.
   const [handover, setHandover] = useState<{ kind: 'new' | 'reset'; displayName: string; username: string; password: string } | null>(null)
   const [copied, setCopied] = useState(false)
@@ -172,6 +181,24 @@ export function TeamManager({ accountId, companyName, teammates, loginUrl, defau
     if (r.needsConfirmation) { setEditing(e => (e ? { ...e, step: 'confirm' } : e)); return }
     if (!r.ok) { setModalError(r.error || 'Update failed'); return }
     setEditing(null); router.refresh()
+  }
+
+  const submitShare = async (proof: { notice_accepted: true; notice_version: string; notice_text: string; owner_password: string }) => {
+    if (!sharing) return
+    setModalError(''); setBusy(true)
+    const r = await api(`/api/portal/team/${sharing.id}/personal-docs`, 'POST', { account_id: accountId, enabled: true, ...proof })
+    setBusy(false)
+    if (!r.ok) { setModalError(r.error || 'Could not share your documents'); return }
+    setSharing(null); router.refresh()
+  }
+
+  const stopSharing = async (t: Teammate) => {
+    if (!confirm(`Stop sharing your personal documents with ${t.display_name}? They stop seeing them at once.`)) return
+    setBusy(true); setError('')
+    const r = await api(`/api/portal/team/${t.id}/personal-docs`, 'POST', { account_id: accountId, enabled: false })
+    setBusy(false)
+    if (!r.ok) { setError(r.error || 'Could not stop sharing'); return }
+    router.refresh()
   }
 
   const revoke = async (id: string, name: string) => {
@@ -243,6 +270,17 @@ export function TeamManager({ accountId, companyName, teammates, loginUrl, defau
                 {t.state === 'off_td' && <span className="ml-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-50 text-red-700">Switched off by Tony Durante LLC</span>}
               </p>
               <p className="text-xs text-zinc-500 truncate">{describeCapabilities(t.capabilities, 'en').join(', ') || 'no access granted'}</p>
+              {t.state === 'active' && t.capabilities.documents && (
+                <p className="text-[11px] mt-0.5" data-testid="personal-docs-row">
+                  {t.sharesMyDocs ? (
+                    <><span className="text-amber-700 font-medium">Your personal documents are shared with this person.</span>{' '}
+                      <button onClick={() => stopSharing(t)} disabled={busy} className="underline text-zinc-500 hover:text-zinc-800 disabled:opacity-50" data-testid="personal-docs-stop">Stop sharing</button></>
+                  ) : (
+                    <><span className="text-zinc-400">Your personal documents: not shared.</span>{' '}
+                      <button onClick={() => { setModalError(''); setSharing(t) }} disabled={busy} className="underline text-blue-600 hover:text-blue-800 disabled:opacity-50" data-testid="personal-docs-share">Share my personal documents</button></>
+                  )}
+                </p>
+              )}
               {t.state === 'off_td' && <p className="text-[11px] text-zinc-400 mt-0.5">Please contact us to switch this person back on.</p>}
             </div>
             <div className="flex items-center gap-1.5 shrink-0">
@@ -320,6 +358,22 @@ export function TeamManager({ accountId, companyName, teammates, loginUrl, defau
                 onConfirm={saveEdit} confirmLabel="Give these powers"
               />
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Share my personal documents: the notice + password step (Team Powers step 7) */}
+      {sharing && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !busy && setSharing(null)}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg p-5 space-y-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-zinc-900">Share my personal documents with {sharing.display_name}</h3>
+            <ConfirmStep
+              lang={defaultLang} mode="more" memberName={sharing.display_name} companyName={companyName} caps={sharing.capabilities}
+              notice={buildPersonalDocsNotice({ lang: defaultLang, memberName: sharing.display_name, companyName })}
+              checkboxLabel={personalDocsCheckboxLabel(defaultLang)} draftVersion={PERSONAL_DOCS_NOTICE_VERSION}
+              busy={busy} error={modalError} onBack={() => { setModalError(''); setSharing(null) }}
+              onConfirm={submitShare} confirmLabel="Share my documents"
+            />
           </div>
         </div>
       )}
