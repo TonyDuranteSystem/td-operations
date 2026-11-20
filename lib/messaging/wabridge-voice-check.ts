@@ -24,7 +24,8 @@ export interface VoiceCheck {
 }
 
 export interface VoiceCheckView {
-  level: "ask" | "warning" | "problem"
+  /** "info" = the test is switched on and nothing has been sent this week yet (a quiet row with "Send a test now") */
+  level: "info" | "ask" | "warning" | "problem"
   title: string
   text: string
   /** which buttons the page shows */
@@ -81,9 +82,22 @@ export const VOICE_CHECK_ARRIVAL_MINUTES = 2
 /** A test nobody answered after this long is shown as a reminder. */
 export const VOICE_CHECK_REMIND_HOURS = 24
 
-/** What the WhatsApp page should show for the stored check (null = nothing to say). */
-export function voiceCheckView(vc: VoiceCheck | null, now: Date): VoiceCheckView | null {
-  if (!vc) return null
+/** What the WhatsApp page should show for the stored check (null = nothing to say). `enabled` = a test chat is chosen. */
+export function voiceCheckView(vc: VoiceCheck | null, now: Date, enabled = false): VoiceCheckView | null {
+  if (!vc || vc.week !== isoWeekKey(now)) {
+    // Switched on, but no test has gone out THIS week (just switched on, or the weekly job has not run yet): offer one now.
+    // Not shown once this week's test exists, and never when the feature is off. An older unanswered "No" still shows (below).
+    if (enabled && (!vc || vc.status === "played")) {
+      return {
+        level: "info",
+        title: "Weekly voice-note test is on",
+        text: "A short test voice note goes to your test phone every Monday, and you answer Yes or No here. You can send one now to try it.",
+        actions: ["resend"],
+        sentAt: vc?.sent_at ?? now.toISOString(),
+      }
+    }
+    if (!vc) return null
+  }
   const sentMs = Date.parse(vc.sent_at)
   if (Number.isNaN(sentMs)) return null
   if (vc.status === "played") return null

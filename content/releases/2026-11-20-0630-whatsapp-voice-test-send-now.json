@@ -1,0 +1,26 @@
+{
+  "title": "Try the weekly voice-note test right away",
+  "tag": "improved",
+  "text": "When the weekly voice-note test is switched on and no test has gone out this week yet, the WhatsApp page shows a quiet row with a Send a test now button. Before this you had to wait for Monday to see the first test.",
+  "points": [
+    "Send a test now button",
+    "Quiet row, no alarm mark",
+    "Hidden once this week's test exists"
+  ],
+  "stepsTitle": "Sending a test now",
+  "steps": [
+    {
+      "name": "Open the WhatsApp page",
+      "detail": "A grey row says the weekly test is on."
+    },
+    {
+      "name": "Press Send a test now",
+      "detail": "A short spoken test goes to your test phone.",
+      "flag": "new"
+    },
+    {
+      "name": "Answer Yes or No when it arrives",
+      "detail": "The card appears about two minutes later."
+    }
+  ]
+}

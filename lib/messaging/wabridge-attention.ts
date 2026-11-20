@@ -9,7 +9,7 @@ export interface AttentionInput {
   /** the link-problem headline, when there is one */
   problemText: string | null
   update: { level: "problem" | "warning"; title: string; text: string } | null
-  voiceCheck: { level: "ask" | "warning" | "problem"; title: string } | null
+  voiceCheck: { level: "info" | "ask" | "warning" | "problem"; title: string } | null
 }
 
 export interface Attention {
@@ -23,6 +23,6 @@ export function attentionSummary(i: AttentionInput): Attention | null {
   if (i.update?.level === "problem") return { level: "problem", text: i.update.title }
   if (i.voiceCheck?.level === "problem") return { level: "problem", text: i.voiceCheck.title }
   if (i.update) return { level: "warning", text: i.update.title }
-  if (i.voiceCheck) return { level: "warning", text: i.voiceCheck.title }
+  if (i.voiceCheck && i.voiceCheck.level !== "info") return { level: "warning", text: i.voiceCheck.title }
   return null
 }
