@@ -1,0 +1,5 @@
+{
+  "title": "The tax year on a Tax Return line now works in closure, ITIN and other offers",
+  "tag": "behind-the-scenes",
+  "text": "Before, only an offer led by a Tax Return kept the year written on its Tax Return line. A \"Tax Return 2026\" line inside a closure, ITIN or other offer lost it: the job had no year and the system assumed last year. Now the Tax year box appears on the Tax Return line of those offers, a year that cannot exist (after this year, or before the company was formed) is refused, and when the offer is paid the job and the tax record take that year. A line with no year still means last year. Formation and onboarding offers are unchanged: their Tax Return is created later by the company's own setup. Two Tax Return lines are still refused on a tax return offer and only warned about on any other."
+}

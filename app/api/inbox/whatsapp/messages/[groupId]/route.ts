@@ -58,6 +58,8 @@ export async function GET(
       contactId: string | null
       /** Where `name` came from — "whatsapp" means only the sender vouches for it (the header marks it). */
       nameSource: ChatNameSource
+      /** A WhatsApp GROUP (several people): its id is not a phone number, and replies from the CRM are not offered yet. */
+      isGroup: boolean
     } | null = null
     try {
       const { data: g } = await supabaseAdmin
@@ -92,11 +94,13 @@ export async function GET(
           senderName,
           externalGroupId: g.external_group_id,
         })
+        const isGroupChat = (g.external_group_id ?? "").endsWith("@g.us")
         chat = {
+          isGroup: isGroupChat,
           // "number" = nothing better exists: keep null so the screens fall back to the bare number exactly as before.
-          name: resolved.source === "number" ? null : resolved.name,
+          name: isGroupChat ? (g.group_name?.trim() || "WhatsApp group") : resolved.source === "number" ? null : resolved.name,
           nameSource: resolved.source,
-          phone: g.external_group_id ? jidToE164(g.external_group_id) : null,
+          phone: g.external_group_id && !isGroupChat ? jidToE164(g.external_group_id) : null,
           language: (contact.data as { language?: string } | null)?.language ?? null,
           accountId: g.account_id ?? null,
           contactId: g.contact_id ?? null,

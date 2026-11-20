@@ -35,10 +35,12 @@ describe("parseReceiptEvent", () => {
       expect(parseReceiptEvent(ev({ ids: ["A"], chat_id: "1@s.whatsapp.net", receipt_type: t }), NOW).action).toBe("ignore")
     }
   })
-  it("ignores groups, status, newsletters", () => {
-    for (const chat_id of ["12036@g.us", "status@broadcast", "1@newsletter"]) {
+  it("ignores status and newsletters; a GROUP receipt is applied (the first member's stamp)", () => {
+    for (const chat_id of ["status@broadcast", "1@newsletter"]) {
       expect(parseReceiptEvent(ev({ ids: ["A"], chat_id, receipt_type: "read" }), NOW).action).toBe("ignore")
     }
+    const g = parseReceiptEvent(ev({ ids: ["A"], chat_id: "120363432541591903@g.us", receipt_type: "delivered" }), NOW)
+    expect(g.action).toBe("apply")
   })
   it("ignores empty / non-string / oversized ids and bad shapes", () => {
     const base = { chat_id: "1@s.whatsapp.net", receipt_type: "read" }
@@ -80,6 +82,8 @@ describe("tickLabel", () => {
   const fmt = (s: string) => `<${s}>`
   it("labels each state", () => {
     expect(tickLabel("read", { read_at: "R" }, fmt)).toBe("Read · <R>")
+    expect(tickLabel("read", { read_at: "R" }, fmt, true)).toBe("Read (at least one member) · <R>")
+    expect(tickLabel("delivered", { delivered_at: "D" }, fmt, true)).toBe("Delivered (at least one member) · <D>")
     expect(tickLabel("delivered", { delivered_at: "D" }, fmt)).toBe("Delivered · <D>")
     expect(tickLabel("sent", {}, fmt)).toBe("Sent")
   })

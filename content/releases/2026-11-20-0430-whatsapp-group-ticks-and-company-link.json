@@ -1,0 +1,26 @@
+{
+  "title": "Link a WhatsApp group to a company, and ticks on group messages",
+  "tag": "new",
+  "text": "A group chat now has a bar above it where you can link the group to a company. Once linked, creating a task, service or invoice from the chat, team discussion and notes attach to that company. Your messages in a group also show delivered and read ticks. In a group the tick means at least one member received or read it; the hover text says so.",
+  "points": [
+    "Link a group to a company",
+    "Tasks and invoices attach to that company",
+    "Delivered / read ticks in groups"
+  ],
+  "stepsTitle": "Linking a group to a company",
+  "steps": [
+    {
+      "name": "Open a group chat",
+      "detail": "A bar shows above the messages."
+    },
+    {
+      "name": "Press Link to a company",
+      "detail": "Search the company name and pick it.",
+      "flag": "new"
+    },
+    {
+      "name": "Use the three dots on a message",
+      "detail": "Create task, service or invoice for that company."
+    }
+  ]
+}
