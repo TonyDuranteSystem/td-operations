@@ -1,0 +1,11 @@
+{
+  "title": "Owners can share their own personal documents with a team login",
+  "tag": "new",
+  "text": "On the Team screen, each person with the Documents tick now has a line, \"Your personal documents: not shared\". An owner or member can press \"Share my personal documents\", read a short notice that names passports, IDs and tax numbers, and confirm with their password. Only that owner's own papers are shared, never a co-owner's, and only those staff have already published. The team login then sees them in a separate section on its Documents page and can open them. \"Stop sharing\" ends it at once. It is off for everyone until an owner switches it on, and each switch is saved in the team record.",
+  "points": [
+    "Team tab: a new line under each person who has the Documents tick",
+    "The notice and your password are needed to switch it on; switching it off needs nothing",
+    "The team login sees a section named after the owner who shared; nothing else personal opens"
+  ],
+  "screenshot": "team-share-personal-docs.png"
+}

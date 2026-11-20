@@ -15697,6 +15697,33 @@ export type Database = {
           },
         ]
       }
+      portal_team_document_shares: {
+        Row: {
+          account_id: string
+          created_at: string
+          granted_ip: string | null
+          notice_version: string | null
+          owner_contact_id: string
+          team_member_id: string
+        }
+        Insert: {
+          account_id: string
+          created_at?: string
+          granted_ip?: string | null
+          notice_version?: string | null
+          owner_contact_id: string
+          team_member_id: string
+        }
+        Update: {
+          account_id?: string
+          created_at?: string
+          granted_ip?: string | null
+          notice_version?: string | null
+          owner_contact_id?: string
+          team_member_id?: string
+        }
+        Relationships: []
+      }
       portal_team_events: {
         Row: {
           account_id: string

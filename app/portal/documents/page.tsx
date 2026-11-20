@@ -8,7 +8,8 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { cookies } from 'next/headers'
 import { DocumentList } from '@/components/portal/document-list'
 import { getNewDocumentIds } from '@/lib/portal/document-alerts'
-import { isPersonalDocumentHiddenFrom } from '@/lib/documents/visibility-guard'
+import { isPersonalDocumentHiddenFrom, isPersonalDocumentHiddenFromViewer } from '@/lib/documents/visibility-guard'
+import { getSharedPersonalDocOwners, listPersonalDocsOfContact } from '@/lib/portal/team/personal-docs-server'
 import { placeWaitingUploads } from '@/lib/portal/own-uploads-waiting'
 import { filterByHistoryCutoff, isHiddenByHistoryCutoff } from '@/lib/documents/history-cutoff'
 import { filterCorrespondenceForViewer, getHistoryCutoff, getHistoryView } from '@/lib/portal/history-cutoff'
@@ -68,6 +69,8 @@ export default async function PortalDocumentsPage() {
 
   let companyDocs: DocRow[] = []
   let myDocs: DocRow[] = []
+  // Team Powers step 7: personal documents an OWNER shared with this team login, one group per sharing owner. Always empty for a client.
+  let sharedGroups: { ownerName: string; docs: DocRow[] }[] = []
   // Flow-linked documents (stamped with service_delivery_id by the flow upload
   // route), grouped into per-flow sections ("Tax Return 2025", etc.). These are
   // pulled OUT of the Company/My lists below so they never appear twice.
@@ -138,6 +141,16 @@ export default async function PortalDocumentsPage() {
       const seenMy = new Set<string>()
       myDocs = [...((mdData ?? []) as unknown as DocRow[]), ...((pdData ?? []) as unknown as DocRow[]), ...((sdData ?? []) as unknown as DocRow[])]
         .filter((d) => (seenMy.has(d.id) ? false : (seenMy.add(d.id), true)))
+    }
+
+    // A team login sees the personal documents of the owners who SHARED them with it, and nothing else personal. The rule is checked again
+    // row by row (belt and braces): a row that is not a personal paper of that owner is dropped.
+    if (!contactId) {
+      for (const owner of await getSharedPersonalDocOwners(user)) {
+        const rows = await listPersonalDocsOfContact(owner.contactId, selectedAccountId)
+        const docs = rows.filter(d => !isPersonalDocumentHiddenFromViewer({ category: d.category, contact_id: owner.contactId }, { sharedFrom: [owner.contactId] })) as unknown as DocRow[]
+        if (docs.length > 0) sharedGroups.push({ ownerName: owner.name, docs })
+      }
     }
 
     // Flow-linked docs — queried independently of category so any SD-stamped
@@ -281,6 +294,7 @@ export default async function PortalDocumentsPage() {
     const { dropStoreRowsClientCannotOpen } = await import('@/lib/portal/client-store-docs')
     companyDocs = await dropStoreRowsClientCannotOpen(companyDocs, { applyRowRule: false })
     myDocs = await dropStoreRowsClientCannotOpen(myDocs, { applyRowRule: false })
+    sharedGroups = (await Promise.all(sharedGroups.map(async (g) => ({ ...g, docs: await dropStoreRowsClientCannotOpen(g.docs, { applyRowRule: false }) })))).filter(g => g.docs.length > 0)
     flowGroups = await Promise.all(flowGroups.map(async (g) => ({ ...g, docs: await dropStoreRowsClientCannotOpen(g.docs, { applyRowRule: false }) })))
   }
 
@@ -372,7 +386,7 @@ export default async function PortalDocumentsPage() {
       ))}
 
       {/* Documents — split into Company and My */}
-      {companyDocs.length === 0 && myDocs.length === 0 && flowGroups.length === 0 ? (
+      {companyDocs.length === 0 && myDocs.length === 0 && flowGroups.length === 0 && sharedGroups.length === 0 ? (
         <div className="bg-white rounded-xl border shadow-sm p-12 text-center">
           <FileText className="h-12 w-12 text-zinc-300 mx-auto mb-3" />
           <h3 className="text-lg font-medium text-zinc-900 mb-1">{t('documents.noDocuments', locale)}</h3>
@@ -399,6 +413,17 @@ export default async function PortalDocumentsPage() {
               <DocumentList documents={myDocs} categoryLabels={CATEGORY_LABELS} newDocIds={newDocIds} waitingIds={Array.from(waitingIds)} />
             </div>
           )}
+
+          {/* Team login only: personal documents an owner chose to share (Team Powers step 7). */}
+          {sharedGroups.map(g => (
+            <div key={g.ownerName || 'owner'} data-testid="shared-personal-docs">
+              <div className="flex items-center gap-2 mb-3">
+                <User className="h-4 w-4 text-zinc-500" />
+                <h2 className="text-sm font-semibold text-zinc-700">{g.ownerName ? `Personal documents shared by ${g.ownerName}` : 'Personal documents shared with you'}</h2>
+              </div>
+              <DocumentList documents={g.docs} categoryLabels={CATEGORY_LABELS} newDocIds={newDocIds} />
+            </div>
+          ))}
         </>
       )}
     </div>
