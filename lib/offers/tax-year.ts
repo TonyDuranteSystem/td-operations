@@ -33,11 +33,25 @@ export interface OfferTaxYear {
 
 /** The Tax Return line of an offer and the year it states. Uses the same finder as activation and the confirm-payment check. */
 export function taxYearOfOffer(services: unknown): OfferTaxYear {
-  const list = Array.isArray(services) ? (services as Array<Record<string, unknown>>) : []
+  // a null / non-object entry in the list must never break an activation that only wants the year
+  const list = (Array.isArray(services) ? services : []).filter((s): s is Record<string, unknown> => !!s && typeof s === 'object')
   const found = findTaxReturnService(list)
   if (found.status === 'not_found') return { year: null, lineCount: 0 }
   if (found.status === 'multiple_matches') return { year: null, lineCount: found.count }
   return { year: taxYearFromLineName(found.entry.name), lineCount: 1 }
+}
+
+/**
+ * Does the tax year typed on a Tax Return line DO anything for this kind of offer? (dev job 06a3c8e9)
+ *
+ * Yes for every offer whose Tax Return is created by the general activation path — a tax-return offer, a closure, an ITIN, a name change, a custom
+ * service… — which reads the year and names / tracks the return for it.
+ * No for a FORMATION or ONBOARDING offer: their activation does not create the Tax Return job at payment at all (the new company's setup / the
+ * wizard does, later, and chooses its own year), so a year typed there would be ignored while the client signs "Tax Return 2026". They get no year
+ * box and no year check until those flows read the line (follow-up). Single source for the builder, the creation check and the activation.
+ */
+export function taxYearAppliesToOffer(contractType: string | null | undefined): boolean {
+  return contractType !== 'formation' && contractType !== 'onboarding'
 }
 
 /** What the activation records as the Tax Return service delivery's name: the year goes in when the offer states one. */

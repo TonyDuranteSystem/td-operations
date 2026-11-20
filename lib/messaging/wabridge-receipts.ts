@@ -38,10 +38,11 @@ export function parseReceiptEvent(body: unknown, now: Date = new Date()): Receip
   const p = body.payload
   if (!isObj(p)) return { action: "ignore", reason: "no payload" }
 
-  // Groups are excluded from the bridge entirely; belt and braces so a group receipt can never be applied.
+  // Newsletters and status are never ours. GROUP receipts ARE applied since 2026-11-20 (Antonio: ticks in groups): the database function
+  // matches the outgoing message by its WhatsApp id, so the FIRST member's delivery / read stamps it (the screen words it "at least one member").
   const chat = typeof p.chat_id === "string" ? p.chat_id : ""
-  if (chat.endsWith("@g.us") || chat.endsWith("@newsletter") || chat === "status@broadcast") {
-    return { action: "ignore", reason: "not a one-to-one chat" }
+  if (chat.endsWith("@newsletter") || chat === "status@broadcast") {
+    return { action: "ignore", reason: "not a chat of ours" }
   }
 
   const type = typeof p.receipt_type === "string" ? p.receipt_type.toLowerCase() : ""
@@ -85,8 +86,11 @@ export function tickLabel(
   state: TickState,
   m: { delivered_at?: string | null; read_at?: string | null },
   fmt: (iso: string) => string,
+  /** A group: the stamp is the FIRST member's, not everyone's — say so. */
+  isGroup = false,
 ): string {
-  if (state === "read" && m.read_at) return `Read · ${fmt(m.read_at)}`
-  if (state === "delivered" && m.delivered_at) return `Delivered · ${fmt(m.delivered_at)}`
+  const who = isGroup ? " (at least one member)" : ""
+  if (state === "read" && m.read_at) return `Read${who} · ${fmt(m.read_at)}`
+  if (state === "delivered" && m.delivered_at) return `Delivered${who} · ${fmt(m.delivered_at)}`
   return "Sent"
 }

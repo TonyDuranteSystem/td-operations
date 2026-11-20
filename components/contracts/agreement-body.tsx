@@ -1,6 +1,8 @@
 import { Fragment } from 'react'
 import { isNoChargeFee } from '@/lib/offers/fee-label'
 import { parseInline, type ContractWording } from '@/lib/contracts/contract-wording'
+import type { PlanPaymentWording } from '@/lib/contracts/plan-payment-wording'
+import { PaymentSentence } from '@/components/contracts/payment-sentence'
 
 type AgreementContent = ContractWording
 
@@ -29,10 +31,12 @@ export interface AgreementBodyProps {
   scopeClosing: string
   workPhrase: string
   liabilityPhrase: string
+  /** The offer's payment plan as the agreement states it (null / omitted = no usable plan: the ordinary "payable in full" sentence). */
+  plan?: PlanPaymentWording | null
 }
 
 /** One agreement's parties, service summary and sections 1-8 (no signature — that is the page's). */
-export function AgreementBody({ ct, clientName, serviceName, serviceDesc, fee, includes, scopeClosing, workPhrase, liabilityPhrase }: AgreementBodyProps) {
+export function AgreementBody({ ct, clientName, serviceName, serviceDesc, fee, includes, scopeClosing, workPhrase, liabilityPhrase, plan }: AgreementBodyProps) {
   // a $0 / "included" service still gets its agreement, but says so instead of "$0 payable in full"
   const noCharge = isNoChargeFee(fee)
   return (
@@ -99,7 +103,11 @@ export function AgreementBody({ ct, clientName, serviceName, serviceDesc, fee, i
             <p>No service fee is payable to the Service Provider for this service itself; it is included in your offer. Any third-party or government charges described in this Agreement remain the Client&rsquo;s responsibility.</p>
           ) : (
             <>
-              <p>The total fee for this service is <strong>{fee}</strong>, payable in full before {workPhrase} begins. Payment may be made via credit/debit card or bank wire transfer as indicated in the offer.</p>
+              <PaymentSentence
+                fee={fee}
+                plan={plan}
+                legacy={<>The total fee for this service is <strong>{fee}</strong>, payable in full before {workPhrase} begins. Payment may be made via credit/debit card or bank wire transfer as indicated in the offer.</>}
+              />
               <p><strong>All fees are non-refundable</strong> once {workPhrase} has commenced.</p>
             </>
           )}

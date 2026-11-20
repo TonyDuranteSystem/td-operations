@@ -12434,6 +12434,7 @@ export type Database = {
           is_active: boolean
           last_message_at: string | null
           lead_id: string | null
+          members: Json | null
           pinned: boolean
           unread_count: number
           updated_at: string
@@ -12450,6 +12451,7 @@ export type Database = {
           is_active?: boolean
           last_message_at?: string | null
           lead_id?: string | null
+          members?: Json | null
           pinned?: boolean
           unread_count?: number
           updated_at?: string
@@ -12466,6 +12468,7 @@ export type Database = {
           is_active?: boolean
           last_message_at?: string | null
           lead_id?: string | null
+          members?: Json | null
           pinned?: boolean
           unread_count?: number
           updated_at?: string
@@ -24456,6 +24459,10 @@ export type Database = {
       viewas_restore_last_sign_in: {
         Args: { p_ts: string; p_user_id: string }
         Returns: undefined
+      }
+      wabridge_apply_groups: {
+        Args: { p_channel_id: string; p_groups: Json }
+        Returns: number
       }
       wabridge_apply_names: {
         Args: { p_channel_id: string; p_names: Json }

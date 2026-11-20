@@ -24,6 +24,12 @@ export interface StaffReactionPill {
 export interface PhoneReactionPill {
   emoji: string
   side: 'client' | 'line'
+  /** unique per pill: the side in a one-to-one chat, "wa-client:<member>" for each member of a group */
+  key: string
+  /** a group member's name when the CRM knows it (null otherwise) */
+  name: string | null
+  /** true for one member of a group (their own reaction) */
+  member: boolean
 }
 
 export interface ReactionsView {
@@ -42,8 +48,14 @@ export function splitReactions(reactions: unknown, viewerId?: string | null): Re
     if (typeof raw !== 'object' || raw === null) continue
     if (typeof raw.emoji !== 'string' || raw.emoji === '') continue // junk or a tombstone — never drawn
     if (isPhoneSide(raw.reactor_type)) {
-      // one slot per side; the CRM already guarantees it, this just keeps a bad row from drawing twice
-      if (!phone.some((p) => p.side === raw.reactor_type)) phone.push({ emoji: raw.emoji, side: raw.reactor_type })
+      // A group member has their OWN reaction (reactor_id "wa-client:<member>"); in a one-to-one chat there is one slot per side.
+      // The CRM already guarantees both; this just keeps a bad row from drawing twice.
+      const memberId = typeof raw.reactor_id === 'string' && raw.reactor_id.startsWith('wa-client:') ? raw.reactor_id : null
+      const key = memberId ?? raw.reactor_type
+      if (!phone.some((p) => p.key === key)) {
+        const name = memberId && typeof raw.reactor_name === 'string' && raw.reactor_name.trim() ? raw.reactor_name.trim() : null
+        phone.push({ emoji: raw.emoji, side: raw.reactor_type, key, name, member: !!memberId })
+      }
       continue
     }
     let pill = staff.find((s) => s.emoji === raw.emoji)

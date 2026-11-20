@@ -1,0 +1,5 @@
+{
+  "title": "The closure document lock ignores empty files",
+  "tag": "behind-the-scenes",
+  "text": "A company closure job cannot move past a step that needs a document until one is uploaded. The app already refused empty files, but the database's own safety check still counted an empty file as the document. It now ignores empty files too, so the two agree. A document with an unknown size still counts. This changes nothing for jobs that already have a real file."
+}

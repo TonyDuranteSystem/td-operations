@@ -1,0 +1,25 @@
+{
+  "title": "The attach card in a WhatsApp chat is no longer hidden",
+  "tag": "fixed",
+  "text": "In the WhatsApp tab, pressing the paperclip opened the Scan document / Photo or file card underneath the message area, so it could not be clicked. The emoji picker had the same problem. Both now open fully on top of the chat.",
+  "points": [
+    "Paperclip card fully visible",
+    "Emoji picker fully visible"
+  ],
+  "stepsTitle": "Attaching a file in a WhatsApp chat",
+  "steps": [
+    {
+      "name": "Open a WhatsApp chat",
+      "detail": "Any chat in the WhatsApp tab."
+    },
+    {
+      "name": "Press the paperclip",
+      "detail": "The card opens above the message bar.",
+      "flag": "new"
+    },
+    {
+      "name": "Pick Photo or file",
+      "detail": "Choose what to send, then confirm."
+    }
+  ]
+}
