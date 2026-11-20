@@ -59,12 +59,13 @@ describe('matchesListFilter', () => {
     expect(matchesListFilter(thread({ has_people_messages: false }), 'chats')).toBe(false)
   })
 
-  it('Chats leaves out the conversations that have their own chip: pinned ones and ones with an unhandled client action', () => {
-    expect(matchesListFilter(thread({ has_people_messages: true, is_pinned: true }), 'chats')).toBe(false)
-    expect(matchesListFilter(thread({ account_id: 'acc-wn', has_people_messages: true }), 'chats', counts)).toBe(false)
-    expect(matchesListFilter(thread({ account_id: null, contact_id: 'con-wn', has_people_messages: true }), 'chats', counts)).toBe(false)
-    // …and a plain chat stays, also when What's New counts exist for other conversations
+  it('Chats keeps pinned conversations and ones with an unhandled client action too (2026-11-20) — all chats, newest first', () => {
+    expect(matchesListFilter(thread({ has_people_messages: true, is_pinned: true }), 'chats')).toBe(true)
+    expect(matchesListFilter(thread({ account_id: 'acc-wn', has_people_messages: true }), 'chats', counts)).toBe(true)
+    expect(matchesListFilter(thread({ account_id: null, contact_id: 'con-wn', has_people_messages: true }), 'chats', counts)).toBe(true)
     expect(matchesListFilter(thread({ account_id: 'acc-plain', has_people_messages: true }), 'chats', counts)).toBe(true)
+    // a notice-only conversation stays out even when pinned or with a What's New count
+    expect(matchesListFilter(thread({ account_id: 'acc-wn', has_people_messages: false, is_pinned: true }), 'chats', counts)).toBe(false)
     // they are still under their own chips
     expect(matchesListFilter(thread({ is_pinned: true }), 'pinned')).toBe(true)
     expect(matchesListFilter(thread({ account_id: 'acc-wn' }), 'whatsnew', counts)).toBe(true)
