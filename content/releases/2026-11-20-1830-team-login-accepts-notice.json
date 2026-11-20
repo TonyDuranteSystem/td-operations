@@ -1,0 +1,11 @@
+{
+  "title": "Team logins that existed before notices now accept their own notice",
+  "tag": "new",
+  "text": "Three team logins were created before the responsibility notice existed, so nothing on file says they accepted it. The next time one of them signs in, a banner shows the notice in their own language, with the powers they really have. Until they press accept, they see only the home page and the banner, and nothing else in the portal opens. After they accept, the rest of their access comes back at once, and the exact words, the time and the address are saved in the team record. Nobody is emailed and nobody is locked out for good.",
+  "points": [
+    "A team login with no notice on file sees the amber banner on its home page",
+    "Pressing \"I have read this and I accept\" brings back its menu and powers",
+    "The Team card on the company page in the CRM then shows the notice words and the time"
+  ],
+  "screenshot": "team-login-notice.png"
+}
