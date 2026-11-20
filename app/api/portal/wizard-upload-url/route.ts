@@ -46,6 +46,8 @@ export async function POST(req: NextRequest) {
     // the path below is built from the company id the browser names, so without this a team login could
     // write into (and, on this route, overwrite) any other company's files.
     const identity = await resolvePortalIdentity(user)
+    // A login that is nobody (no person, not an active team member: e.g. a team login still on its temporary password) uploads nothing.
+    if (identity.kind === 'none') return NextResponse.json({ error: 'Access denied' }, { status: 403 })
     if (identity.kind === 'teammate') {
       if (!teammateMayUseWizard(identity.capabilities, wizardType)) {
         return NextResponse.json({ error: 'Your team login cannot upload for this form. Ask the company owner.' }, { status: 403 })

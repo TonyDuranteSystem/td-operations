@@ -153,3 +153,45 @@ export async function mayManageTeam(contactId: string, accountId: string, deps: 
     return false
   }
 }
+
+
+// ─── Everyone who may manage a company's team (used to tell them when someone is added or given more powers) ───
+
+export interface ManagerContact {
+  contactId: string
+  fullName: string | null
+  email: string | null
+  language: string | null
+}
+
+export interface ManagerLinkRow extends ManageLink {
+  contact_id: string
+  contacts: { full_name: string | null; email: string | null; language: string | null } | null
+}
+
+/** PURE: every linked contact who passes the same rule as decideMayManageTeam. */
+export function pickManagers(links: ManagerLinkRow[], members: ManageMemberRow[], now: Date = new Date()): ManagerContact[] {
+  const out: ManagerContact[] = []
+  for (const l of links) {
+    const name = l.contacts?.full_name ?? null
+    const d = decideMayManageTeam({ contactId: l.contact_id, contactName: name, link: l, members }, now)
+    if (d.ok) out.push({ contactId: l.contact_id, fullName: name, email: l.contacts?.email ?? null, language: l.contacts?.language ?? null })
+  }
+  return out
+}
+
+/** All current owners and members of the company, with how to reach them. Throws on a read error (the caller must not guess). */
+export async function listTeamManagers(accountId: string): Promise<ManagerContact[]> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sb = supabaseAdmin as any
+  const [linksRes, membersRes] = await Promise.all([
+    sb
+      .from('account_contacts')
+      .select('contact_id, role, ended_at, access_revoked_at, access_until, contacts:contact_id(full_name, email, language)')
+      .eq('account_id', accountId),
+    sb.from('members').select('contact_id, start_date, end_date, full_name').eq('account_id', accountId),
+  ])
+  const failed = linksRes.error || membersRes.error
+  if (failed) throw new Error(failed.message || 'could not read the owners and members')
+  return pickManagers((linksRes.data ?? []) as ManagerLinkRow[], (membersRes.data ?? []) as ManageMemberRow[])
+}

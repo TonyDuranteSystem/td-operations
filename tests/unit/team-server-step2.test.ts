@@ -44,12 +44,15 @@ vi.mock('@/lib/supabase-admin', () => ({
     },
   },
 }))
+const { enqueueNotices } = vi.hoisted(() => ({ enqueueNotices: vi.fn() }))
+vi.mock('@/lib/portal/team/notify', () => ({ enqueueTeamNotices: enqueueNotices }))
 vi.mock('@/lib/portal/resolve-portal-identity', () => ({ resolvePortalIdentity: vi.fn() }))
 vi.mock('@/lib/portal/team/account-admin', () => ({ isAccountAdmin: vi.fn() }))
 
-import { resetTeammatePassword, updateTeammate, revokeTeammate, switchTeammateOff, switchTeammateOn } from '@/lib/portal/team/server'
+import { resetTeammatePassword, updateTeammate, revokeTeammate, switchTeammateOff, switchTeammateOn, ConfirmationRequiredError, listTeammates, teammateState } from '@/lib/portal/team/server'
 
 const owner = { kind: 'owner' as const, contactId: 'c1', ip: '1.1.1.1' }
+const confirm = { version: 'v1-draft', text: 'the words the owner read', ip: '1.1.1.1' }
 const td = { kind: 'td' as const, staffEmail: 'antonio.durante@tonydurante.us' }
 const teamAuth = { app_metadata: { role: 'client', kind: 'team_member', account_id: 'a1' }, user_metadata: { x: 1 } }
 const eventsWritten = () => state.ops.filter(o => o.table === 'portal_team_events' && o.op === 'insert').map(o => (o.payload as { event: string }).event)
@@ -60,6 +63,8 @@ beforeEach(() => {
   state.authUser = teamAuth
   state.authUpdates = []
   state.authUpdateError = null
+  enqueueNotices.mockReset()
+  enqueueNotices.mockResolvedValue(2)
 })
 
 describe('resetTeammatePassword', () => {
@@ -69,6 +74,8 @@ describe('resetTeammatePassword', () => {
     expect(r.username).toBe('mario')
     expect(r.password.length).toBeGreaterThan(8)
     expect(state.authUpdates[0].attrs.user_metadata).toMatchObject({ must_change_password: true, x: 1 })
+    // server-enforced: the flag goes into app metadata too, keeping what was already there
+    expect(state.authUpdates[0].attrs.app_metadata).toMatchObject({ role: 'client', kind: 'team_member', must_change_password: true })
     expect(eventsWritten()).toEqual(['password_reset'])
   })
   it('REFUSES a login that is not a team login (a real client\'s password can never be reset here)', async () => {
@@ -101,7 +108,7 @@ describe('updateTeammate', () => {
     before({ chat: true })
     state.answers['portal_team_members:update'] = { data: [{ id: 'tm1' }], error: null }
     state.answers['portal_team_events:insert'] = { data: null, error: { message: 'down' } }
-    await expect(updateTeammate('tm1', 'a1', { capabilities: { chat: true, documents: true } }, owner)).rejects.toThrow(/powers were not changed/)
+    await expect(updateTeammate('tm1', 'a1', { capabilities: { chat: true, documents: true } }, owner, confirm)).rejects.toThrow(/powers were not changed/)
     const updates = state.ops.filter(o => o.table === 'portal_team_members' && o.op === 'update')
     expect((updates[updates.length - 1].payload as { capabilities: unknown }).capabilities).toEqual({ chat: true })
   })
@@ -111,7 +118,7 @@ describe('updateTeammate', () => {
     let n = 0
     Object.defineProperty(answers, 'portal_team_members:update', { get: () => (++n === 1 ? { data: [{ id: 'tm1' }], error: null } : { data: [], error: null }), configurable: true })
     state.answers['portal_team_events:insert'] = { data: null, error: { message: 'down' } }
-    await expect(updateTeammate('tm1', 'a1', { capabilities: { chat: true, documents: true } }, owner)).rejects.toThrow(/could not put the old powers back/)
+    await expect(updateTeammate('tm1', 'a1', { capabilities: { chat: true, documents: true } }, owner, confirm)).rejects.toThrow(/could not put the old powers back/)
     const updates = state.ops.filter(o => o.table === 'portal_team_members' && o.op === 'update')
     expect(updates[1].filters.some(([c]) => c === 'updated_at')).toBe(true)
     expect(updates[1].filters.find(([c]) => c === 'updated_at')![1]).toBe((updates[0].payload as { updated_at: string }).updated_at)
@@ -121,7 +128,7 @@ describe('updateTeammate', () => {
     let n = 0
     Object.defineProperty(state.answers as Record<string, unknown>, 'portal_team_members:update', { get: () => (++n === 1 ? { data: [{ id: 'tm1' }], error: null } : { data: null, error: { message: 'db down' } }), configurable: true })
     state.answers['portal_team_events:insert'] = { data: null, error: { message: 'down' } }
-    await expect(updateTeammate('tm1', 'a1', { capabilities: { chat: true, documents: true } }, owner)).rejects.toThrow(/could not put the old powers back/)
+    await expect(updateTeammate('tm1', 'a1', { capabilities: { chat: true, documents: true } }, owner, confirm)).rejects.toThrow(/could not put the old powers back/)
   })
   it('removing a power never fails because of the record', async () => {
     before({ chat: true, documents: true })
@@ -221,5 +228,91 @@ describe('switch off / on through the real wiring', () => {
     const upd = state.ops.find(o => o.op === 'update')!
     expect(upd.filters).toContainEqual(['switched_off_by', 'owner'])
     expect(upd.filters).toContainEqual(['status', 'revoked'])
+  })
+})
+
+describe('step 4: giving MORE power needs the owner\'s confirmation, and everyone is told', () => {
+  const before = (caps: unknown, extra: Record<string, unknown> = {}) => {
+    state.answers['portal_team_members:select'] = { data: { capabilities: caps, status: 'active', notice_version: 'v0', notice_accepted_at: '2026-11-01T00:00:00Z', notice_accepted_ip: '9.9.9.9', ...extra }, error: null }
+    state.answers['portal_team_members:update'] = { data: [{ id: 'tm1' }], error: null }
+  }
+  const updates = () => state.ops.filter(o => o.table === 'portal_team_members' && o.op === 'update')
+
+  it('refuses to add a power without the confirmation — before touching anything', async () => {
+    before({ chat: true })
+    await expect(updateTeammate('tm1', 'a1', { capabilities: { chat: true, documents: true } }, owner)).rejects.toBeInstanceOf(ConfirmationRequiredError)
+    expect(updates()).toHaveLength(0)
+    expect(eventsWritten()).toEqual([])
+    expect(enqueueNotices).not.toHaveBeenCalled()
+  })
+  it('with the confirmation: saves the new notice, records the exact words, and tells the owners and members', async () => {
+    before({ chat: true })
+    await updateTeammate('tm1', 'a1', { capabilities: { chat: true, documents: true, answer_decisions: true } }, owner, confirm)
+    expect(updates()[0].payload).toMatchObject({ notice_version: 'v1-draft', notice_accepted_ip: '1.1.1.1' })
+    const ev = state.ops.find(o => o.table === 'portal_team_events' && o.op === 'insert')!
+    expect(ev.payload).toMatchObject({ event: 'powers_changed', detail: { notice_version: 'v1-draft', notice_text: 'the words the owner read' } })
+    expect(enqueueNotices).toHaveBeenCalledTimes(1)
+    expect(enqueueNotices.mock.calls[0][0]).toMatchObject({ accountId: 'a1', teamMemberId: 'tm1', kind: 'more', actorContactId: 'c1', addedKeys: ['documents', 'answer_decisions'] })
+  })
+  it('NO ONE TOLD, NO GRANT: if nobody can be told the powers and the notice go back as they were', async () => {
+    before({ chat: true })
+    enqueueNotices.mockRejectedValue(new Error('nobody could be told'))
+    await expect(updateTeammate('tm1', 'a1', { capabilities: { chat: true, documents: true } }, owner, confirm)).rejects.toThrow(/powers were not changed/)
+    const last = updates()[updates().length - 1].payload as Record<string, unknown>
+    expect(last).toMatchObject({ capabilities: { chat: true }, notice_version: 'v0', notice_accepted_ip: '9.9.9.9' })
+  })
+  it('taking a power away, or only renaming, needs no confirmation and tells nobody', async () => {
+    before({ chat: true, documents: true })
+    await updateTeammate('tm1', 'a1', { capabilities: { chat: true } }, owner)
+    await updateTeammate('tm1', 'a1', { display_name: 'New Name' }, owner)
+    expect(enqueueNotices).not.toHaveBeenCalled()
+    expect(updates()[0].payload).not.toHaveProperty('notice_version')
+  })
+  it('sending the same powers again is not "more"', async () => {
+    before({ chat: true })
+    await expect(updateTeammate('tm1', 'a1', { capabilities: { chat: true } }, owner)).resolves.toEqual({ ok: true })
+  })
+})
+
+describe('step 4: the Team list', () => {
+  it('names the four states from the status and the switch-off stamp', () => {
+    expect(teammateState({ status: 'active' })).toBe('active')
+    expect(teammateState({ status: 'revoked', switched_off_at: '2026-11-18', switched_off_by: 'owner' })).toBe('off_owner')
+    expect(teammateState({ status: 'revoked', switched_off_at: '2026-11-18', switched_off_by: 'td' })).toBe('off_td')
+    expect(teammateState({ status: 'revoked' })).toBe('removed')
+    expect(teammateState({ status: 'revoked', switched_off_at: null })).toBe('removed')
+  })
+  it('lists active and switched-off people, never the removed, with their powers cleaned', async () => {
+    state.answers['portal_team_members:select'] = { data: [
+      { id: 'a', status: 'active', capabilities: { chat: true, bogus: true } },
+      { id: 'b', status: 'revoked', switched_off_at: '2026-11-18', switched_off_by: 'td', capabilities: {} },
+      { id: 'c', status: 'revoked', capabilities: {} },
+    ], error: null }
+    const rows = await listTeammates('a1')
+    expect(rows.map(r => [r.id, r.state])).toEqual([['a', 'active'], ['b', 'off_td']])
+    expect(rows[0].capabilities).toEqual({ chat: true })
+  })
+  it('still lists people when the code runs before the database change (the switch-off fields are missing)', async () => {
+    let n = 0
+    Object.defineProperty(state.answers as Record<string, unknown>, 'portal_team_members:select', {
+      get: () => (++n === 1 ? { data: null, error: { message: 'column switched_off_at does not exist' } } : { data: [{ id: 'a', status: 'active', capabilities: { chat: true } }], error: null }),
+      configurable: true,
+    })
+    const rows = await listTeammates('a1')
+    expect(rows.map(r => r.id)).toEqual(['a'])
+    expect(n).toBe(2)
+  })
+})
+
+describe('step 4: an owner cannot make TD\'s switch-off permanent', () => {
+  it('refuses to remove a person Tony Durante LLC switched off', async () => {
+    state.answers['portal_team_members:select'] = { data: { auth_user_id: 'u1', switched_off_by: 'td' }, error: null }
+    await expect(revokeTeammate('tm1', 'a1', owner)).rejects.toThrow(/Tony Durante LLC switched this person off/)
+    expect(state.ops.some(o => o.op === 'update')).toBe(false)
+    expect(state.authUpdates).toEqual([])
+  })
+  it('still removes a person the owner switched off, or an active one', async () => {
+    state.answers['portal_team_members:select'] = { data: { auth_user_id: 'u1', switched_off_by: 'owner' }, error: null }
+    await expect(revokeTeammate('tm1', 'a1', owner)).resolves.toEqual({ ok: true })
   })
 })

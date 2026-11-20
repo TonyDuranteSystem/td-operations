@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
+import { teamMustChangePassword } from '@/lib/portal/team/password-flag'
 
 export const dynamic = 'force-dynamic'
 
@@ -34,6 +35,9 @@ export async function POST(request: NextRequest) {
   const { error } = await supabaseAdmin.auth.admin.updateUserById(user.id, {
     password,
     user_metadata: { ...user.user_metadata, must_change_password: false },
+    // A team login's "choose your own password" flag is server-written (app metadata); setting a new password through THIS route
+    // is the only thing that clears it. Other logins carry no such flag and keep their app metadata exactly as it was.
+    ...(teamMustChangePassword(user) ? { app_metadata: { ...user.app_metadata, must_change_password: false } } : {}),
   })
 
   if (error) {

@@ -73,6 +73,9 @@ export async function resolvePortalIdentity(
 
   // Teammate branch — gated by the token marker, verified against the live table.
   if (meta.kind === 'team_member') {
+    // Still on the temporary password the owner handed over: NO access until they choose their own. This flag lives in app
+    // metadata (server-written only), so the person cannot clear it from the browser; /api/portal/change-password clears it.
+    if (meta.must_change_password === true) return { kind: 'none' }
     const row = await deps.fetchTeamMemberByAuthId(user.id)
     // Deny-by-default: missing row or non-active status → no access.
     if (!row || row.status !== 'active' || !row.account_id) return { kind: 'none' }
