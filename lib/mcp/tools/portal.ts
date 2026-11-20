@@ -15,6 +15,7 @@ import { buildChatAttachmentPath } from "@/lib/portal/chat-attachment-path"
 import { guessMimeType } from "@/lib/mcp/tools/drive"
 import { validateChatAttachment } from "@/lib/portal/chat-attachment"
 import { buildPortalChatLink } from "@/lib/portal/chat-link"
+import { resolveLoginTarget } from "@/lib/members/portal-access-refusal"
 
 /**
  * Does this Drive file actually live inside the given account's own Drive
@@ -75,14 +76,15 @@ export function registerPortalTools(server: McpServer) {
         let userEmail = directEmail
         let userName = directName || "Client"
 
+        // A person with the "no portal access" mark on this company never gets a login made for it (the team gives the
+        // access back first); with nobody named, the first person who still has access is picked.
+        const loginTarget = account_id ? await resolveLoginTarget(account_id, contact_id) : null
+        // (A login made straight from an email, with nobody named, is not a login for a linked person: no refusal then.)
+        if (loginTarget?.refusal && (contact_id || !directEmail)) return { content: [{ type: "text" as const, text: loginTarget.refusal }] }
+
         if (account_id && !directEmail) {
-          let targetContactId = contact_id
-          if (!targetContactId) {
-            const { data: links } = await supabaseAdmin
-              .from("account_contacts").select("contact_id").eq("account_id", account_id).limit(1)
-            if (!links?.length) return { content: [{ type: "text" as const, text: "No contacts linked to this account" }] }
-            targetContactId = links[0].contact_id
-          }
+          const targetContactId = loginTarget?.contactId
+          if (!targetContactId) return { content: [{ type: "text" as const, text: "No contacts linked to this account" }] }
           const { data: contactData } = await supabaseAdmin
             .from("contacts").select("full_name, email").eq("id", targetContactId).single()
           if (!contactData?.email) return { content: [{ type: "text" as const, text: "Contact has no email address" }] }
@@ -99,9 +101,7 @@ export function registerPortalTools(server: McpServer) {
 
         let resolvedContactId = contact_id
         if (!resolvedContactId && account_id) {
-          const { data: links } = await supabaseAdmin
-            .from("account_contacts").select("contact_id").eq("account_id", account_id).limit(1)
-          resolvedContactId = links?.[0]?.contact_id || undefined
+          resolvedContactId = loginTarget?.contactId || undefined
         }
 
         const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.createUser({
@@ -278,6 +278,7 @@ Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are recei
             const { data: link } = await supabaseAdmin
               .from("account_contacts")
               .select("contact_id, contacts(full_name)")
+              .is("access_revoked_at", null) // a person with no portal access is not picked as the one we write to (dev job beb43385)
               .eq("account_id", account_id)
               .limit(1)
               .single()
@@ -703,6 +704,7 @@ Does NOT auto-mark messages as read. Use portal_chat_mark_read explicitly after 
           // their own account thread — "one message, one staff thread",
           // 2026-07-08, shared rule in lib/portal/thread-scope.ts).
           const { data: links } = await supabaseAdmin
+            // portal-access-ok: staff view of a person's thread, the same scope as the CRM inbox (whose database functions do not know the mark yet — see docs/systems/portal.md)
             .from("account_contacts")
             .select("account_id")
             .eq("contact_id", contact_id!)

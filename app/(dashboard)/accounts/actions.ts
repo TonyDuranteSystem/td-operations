@@ -16,7 +16,9 @@ import { createAccount as createAccountOp, createAndLinkContact as createAndLink
 import { setAccountRenewalDate, type RenewalDateColumn } from '@/lib/operations/renewal-dates'
 import { handNameEditProblem } from '@/lib/operations/account-name-change'
 import { allocateCompanySuite, adminChangeCompanySuite, syncPhysicalAddressToSuite } from '@/lib/operations/suite'
-import { isOwnerOnly, isStaffUser } from '@/lib/auth'
+import { isOwnerOnly, isStaffUser, isAdmin } from '@/lib/auth'
+import { memberPortalAccessOn } from '@/lib/portal/member-access-switch'
+import { takeAwayPortalAccess, givePortalAccess, type StaffAccessResult } from '@/lib/members/staff-portal-access'
 import type { Json } from '@/lib/database.types'
 
 const RENEWAL_DATE_FIELDS = new Set<string>(['ra_renewal_date', 'annual_report_due_date'])
@@ -722,6 +724,41 @@ export async function showEarlierHistoryToPerson(accountId: string, contactId: s
   }, {
     action_type: 'update', table_name: 'account_contacts', record_id: `${accountId}:${contactId}`,
     summary: `Showed the earlier documents to contact ${contactId} on account ${accountId}`,
+  })
+}
+
+/**
+ * Staff: take the company out of one member's portal ("No portal access"). The person stays an owner; their login and their
+ * other companies are untouched. Only while the member-portal-access switch is on for this company (dev job beb43385, delivery C).
+ */
+export async function takeAwayMemberPortalAccess(accountId: string, contactId: string): Promise<ActionResult<StaffAccessResult>> {
+  const { data: { user } } = await createClient().auth.getUser()
+  if (!user || !isStaffUser(user)) return { success: false, error: 'Not allowed.' }
+  if (!(await memberPortalAccessOn({ accountId }))) return { success: false, error: 'The portal-access tick is not switched on for this company.' }
+  return safeAction(async () => {
+    const r = await takeAwayPortalAccess({ accountId, contactId, staffUserId: user.id })
+    if (!r.success) throw new Error(r.message)
+    revalidatePath(`/accounts/${accountId}`)
+    return r
+  }, {
+    action_type: 'update', table_name: 'account_contacts', record_id: `${accountId}:${contactId}`, account_id: accountId,
+    summary: `Took away portal access to the company for contact ${contactId}`,
+  })
+}
+
+/** Staff: give a member's portal access back (and create their login with the welcome email when they have none yet). */
+export async function giveMemberPortalAccess(accountId: string, contactId: string): Promise<ActionResult<StaffAccessResult>> {
+  const { data: { user } } = await createClient().auth.getUser()
+  if (!user || !isStaffUser(user)) return { success: false, error: 'Not allowed.' }
+  if (!(await memberPortalAccessOn({ accountId }))) return { success: false, error: 'The portal-access tick is not switched on for this company.' }
+  return safeAction(async () => {
+    const r = await givePortalAccess({ accountId, contactId, canCreateLogin: isAdmin(user) })
+    if (!r.success) throw new Error(r.message)
+    revalidatePath(`/accounts/${accountId}`)
+    return r
+  }, {
+    action_type: 'update', table_name: 'account_contacts', record_id: `${accountId}:${contactId}`, account_id: accountId,
+    summary: `Gave portal access to the company back to contact ${contactId}`,
   })
 }
 

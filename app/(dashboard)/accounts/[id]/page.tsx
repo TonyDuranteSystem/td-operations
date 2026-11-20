@@ -8,6 +8,7 @@ import { isDashboardUser } from '@/lib/auth'
 import { ViewAsClientButton } from '@/components/accounts/view-as-client-button'
 import { isOwnerRole, pickViewAsFallback } from '@/lib/portal/pick-view-as-contact'
 import { getClientLoginContactIds, getClientLoginNeedsSetupIds } from '@/lib/portal/client-login-index'
+import { memberPortalAccessOn } from '@/lib/portal/member-access-switch'
 import { dropSupersededDrafts } from '@/lib/portal/wizard-progress-write'
 import { resolveAccountSigner } from '@/lib/members/resolve-signer'
 import { getBankReferralsForAccount } from '@/lib/bank-referrals'
@@ -85,7 +86,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     // Contacts via junction table
     supabase
       .from('account_contacts')
-      .select('role, history_visible_from, contact:contacts(*)')
+      .select('role, history_visible_from, access_revoked_at, access_revoked_by, contact:contacts(*)')
       .eq('account_id', params.id)
       // Deterministic order: without it, Postgres row order decided who the
       // fallback "primary contact" was, and it could change between loads.
@@ -164,7 +165,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
 
   const contacts: Contact[] = (contactsResult.data ?? []).map(c => {
     const contact = c.contact as unknown as Contact
-    return { ...contact, role: c.role, history_visible_from: c.history_visible_from }
+    return { ...contact, role: c.role, history_visible_from: c.history_visible_from, access_revoked_at: c.access_revoked_at, access_revoked_by: c.access_revoked_by }
   })
 
   // The resolved signer's contact id, when the resolver found exactly one
@@ -663,6 +664,17 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
     }
   }
 
+  // The per-member portal-access chips and buttons (dev job beb43385, delivery C): shown only while the switch is on for this company.
+  // Who has a portal login comes from the same cached scan the View-as button uses.
+  let memberAccess: { on: boolean; loginContactIds: string[] } = { on: false, loginContactIds: [] }
+  try {
+    if (await memberPortalAccessOn({ accountId: params.id })) {
+      memberAccess = { on: true, loginContactIds: Array.from(await getClientLoginContactIds()) }
+    }
+  } catch (e) {
+    console.error('[accounts/[id]] member access chips failed:', e) // the chips are optional; never break the page
+  }
+
   return (
     <div className="p-6 lg:p-8">
       <div className="mb-4 flex justify-end gap-2">
@@ -728,6 +740,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
         becameClientGuess={becameClientGuess}
         signedContractLines={signedContractLines}
         contractMismatches={contractMismatches}
+        memberAccess={memberAccess}
       />
     </div>
   )

@@ -97,6 +97,7 @@ export const taskWaitingWithOptionalMessage: WorkflowHandler = async (
   let resolvedContactId = contactId
   if (!resolvedContactId && accountId) {
     const { data: primary } = await supabaseAdmin
+      // portal-access-ok: asks for the PRIMARY contact, who is never marked (staff cannot take it away; the form never marks the owner)
       .from("account_contacts")
       .select("contact_id")
       .eq("account_id", accountId)

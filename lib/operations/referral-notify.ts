@@ -93,6 +93,7 @@ export async function notifyReferrerLinked(params: {
         const { data: link } = await supabaseAdmin
           .from("account_contacts")
           .select("account_id")
+          .is("access_revoked_at", null) // a company the referrer has no portal access to is not the one we tell
           .eq("contact_id", referrerContactId)
           .limit(1)
           .maybeSingle()
@@ -102,6 +103,7 @@ export async function notifyReferrerLinked(params: {
       const { data: link } = await supabaseAdmin
         .from("account_contacts")
         .select("contacts(email, full_name, language)")
+        .is("access_revoked_at", null) // a person with the no-portal-access mark is not picked as the one we write to (dev job beb43385)
         .eq("account_id", referrerAccountId)
         .limit(1)
         .maybeSingle()

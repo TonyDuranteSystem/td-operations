@@ -114,6 +114,7 @@ export async function processAgreementSigned(agreement_token: string): Promise<A
     const { data: contactLink } = await supabaseAdmin
       .from("account_contacts")
       .select("contact_id")
+      .is("access_revoked_at", null) // a person with the no-portal-access mark is not picked as the one we write to (dev job beb43385)
       .eq("account_id", account.id)
       .limit(1)
       .maybeSingle()
