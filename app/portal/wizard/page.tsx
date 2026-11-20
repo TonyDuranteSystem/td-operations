@@ -44,6 +44,7 @@ import {
 import { firstYearCoherent } from '@/lib/tax/prior-return-case'
 import { resolveExtensionDeadline, formatDeadlineForDisplay } from '@/lib/tax/extension-deadline'
 import { TaxExtensionFiledBanner } from '@/components/portal/tax-extension-filed-banner'
+import { buildRelayOwnersPrefill, type OwnerContactNames, type OwnerRow } from '@/lib/portal/relay-owners'
 
 export default async function WizardPage({
   searchParams,
@@ -1144,6 +1145,34 @@ export default async function WizardPage({
       }
     } catch (e) {
       console.error('[wizard] Members prefill failed (non-blocking):', e)
+    }
+  }
+
+  // Relay application — "other owners" step (dev job 2751fb26). The cards are prefilled from the CRM owners list
+  // (companies and their representatives too), so the client checks and confirms instead of typing. Read-only here:
+  // what the client corrects stays on the application, it never writes back to the CRM.
+  if (wizardType === 'banking_relay' && accountId) {
+    try {
+      const { data: ownerRows, error: ownerRowsErr } = await supabaseAdmin
+        .from('members')
+        .select('member_type, full_name, company_name, ein, email, phone, address_street, address_city, address_state, address_zip, address_country, ownership_pct, contact_id, representative_name, representative_email, representative_phone, representative_address_street, representative_address_city, representative_address_state, representative_address_zip, representative_address_country, end_date')
+        .eq('account_id', accountId)
+        .order('is_primary', { ascending: false })
+        .order('created_at', { ascending: true })
+      if (ownerRowsErr) console.error('[wizard] Relay owners prefill: could not read the owners list:', ownerRowsErr.message)
+      const rows = (ownerRows ?? []) as OwnerRow[]
+      const personContactIds = rows.filter(r => r.member_type !== 'company' && r.contact_id).map(r => r.contact_id as string)
+      const contactNames: Record<string, OwnerContactNames> = {}
+      if (personContactIds.length > 0) {
+        const { data: cs } = await supabaseAdmin.from('contacts').select('id, first_name, last_name').in('id', personContactIds)
+        for (const c of cs ?? []) contactNames[c.id as string] = { first_name: c.first_name as string | null, last_name: c.last_name as string | null }
+      }
+      Object.assign(
+        prefillData,
+        buildRelayOwnersPrefill(rows, { contactId: contactId ?? null, fullName: contact.full_name ?? null }, contactNames, new Date().toISOString().slice(0, 10)),
+      )
+    } catch (e) {
+      console.error('[wizard] Relay owners prefill failed (non-blocking):', e)
     }
   }
 

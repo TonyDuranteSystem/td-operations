@@ -10,6 +10,7 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { APP_BASE_URL } from "@/lib/config"
 import type { Json } from "@/lib/database.types"
 import { localeFromLanguage } from "@/lib/locale"
+import { listRelayOwners } from "@/lib/portal/relay-owners"
 
 export function registerBankingFormTools(server: McpServer) {
 
@@ -292,13 +293,27 @@ export function registerBankingFormTools(server: McpServer) {
           lines.push(`   Name: ${submitted.first_name || ""} ${submitted.last_name || ""}`)
           lines.push(`   Email: ${submitted.personal_email || ""}`)
           lines.push(`   Phone: ${submitted.personal_phone || ""}`)
-          lines.push(`   Equity: ${submitted.equity_pct ? `${submitted.equity_pct}%` : ""}`)
-          if (submitted.has_partner === "Yes") {
+          lines.push(`   Equity: ${submitted.equity_pct !== undefined && submitted.equity_pct !== null && submitted.equity_pct !== "" ? `${submitted.equity_pct}%` : ""}`)
+          // Other owners: people AND companies (with their representative); an older application carries one partner.
+          const otherOwners = listRelayOwners(submitted as Record<string, unknown>)
+          if (otherOwners.length > 0) {
             lines.push("")
-            lines.push("👥 Partner:")
-            lines.push(`   Name: ${submitted.partner_first_name || ""} ${submitted.partner_last_name || ""}`)
-            lines.push(`   Email: ${submitted.partner_email || ""}`)
-            lines.push(`   Equity: ${submitted.partner_equity_pct ? `${submitted.partner_equity_pct}%` : ""}`)
+            lines.push(`👥 Other owners (${otherOwners.length}):`)
+            otherOwners.forEach((o, i) => {
+              lines.push(`   ${i + 1}. ${o.kind === "company" ? "Company" : "Person"}: ${o.name}${o.ownershipPct ? ` — ${o.ownershipPct}%` : ""}`)
+              if (o.ein) lines.push(`      EIN: ${o.ein}`)
+              if (o.email) lines.push(`      Email: ${o.email}`)
+              if (o.phone) lines.push(`      Phone: ${o.phone}`)
+              if (o.address) lines.push(`      Address: ${o.address}`)
+              if (o.representative) {
+                lines.push(`      Representative: ${o.representative.name}${o.representative.email ? ` <${o.representative.email}>` : ""}${o.representative.phone ? ` ${o.representative.phone}` : ""}`)
+                if (o.representative.address) lines.push(`      Representative address: ${o.representative.address}`)
+              }
+            })
+            if (submitted.members_confirmed === true) lines.push("   ✅ Client confirmed these owners and representatives are correct.")
+          } else if (submitted.has_partner === "Yes") {
+            lines.push("")
+            lines.push("👥 Other owners: the client said yes but listed none — ask them.")
           }
         } else {
           // Payset: Personal + Business info
