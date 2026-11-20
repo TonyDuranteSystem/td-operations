@@ -1094,7 +1094,7 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
                       const tick = tickState(msg)
                       if (!tick) return null
                       return (
-                        <FastTooltip label={tickLabel(tick, msg, formatTimestamp)}>
+                        <FastTooltip label={tickLabel(tick, msg, formatTimestamp, isGroupChat)}>
                           <span data-testid={`wa-tick-${tick}`} className="inline-flex align-middle ml-1">
                             {tick === 'sent' ? (
                               <Check className="h-3 w-3 text-zinc-400" aria-label="Sent" />
