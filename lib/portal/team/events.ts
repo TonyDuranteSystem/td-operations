@@ -112,6 +112,13 @@ export function ownerActorFromRequest(contactId: string, headers: { get(name: st
   return { kind: 'owner', contactId, ip: ip || null }
 }
 
+/** A TD staff member who made a request (their login email), with the caller's address. */
+export function tdActorFromRequest(staffEmail: string, headers: { get(name: string): string | null }): TeamActor {
+  const forwarded = headers.get('x-forwarded-for')
+  const ip = forwarded ? forwarded.split(',')[0].trim() : null
+  return { kind: 'td', staffEmail, ip: ip || null }
+}
+
 /** True when `after` holds a power that `before` did not (a "tick added"). */
 export function powersGrew(before: Record<string, unknown> | null | undefined, after: Record<string, unknown> | null | undefined): boolean {
   const had = before ?? {}

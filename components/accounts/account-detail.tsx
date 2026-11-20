@@ -60,6 +60,7 @@ import { MemberAccessRow } from './member-access-row'
 import { LOGIN_LINKED_ERROR } from '@/lib/portal/login-email-change-staff-shared'
 import { updateAccountField as updateAccountFieldRaw, updateContactField as updateContactFieldRaw, addAccountNote, updateAccountContactRole as updateAccountContactRoleRaw, promoteAccountToActive, createDBA, updateDBADetails } from '@/app/(dashboard)/accounts/actions'
 import { StorageCheckBanner } from './storage-check-banner'
+import { TeamSection } from './team-section'
 import { notifyStorageCheck } from '@/lib/crm-store/storage-check-events'
 
 // Storage check: after a save that worked, the company page looks again at what the CRM and the storage say (a name, an owner,
@@ -2754,6 +2755,9 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
       {account.member_structure === 'multi_member' && (
         <MembersSection accountId={account.id} accountCompanyName={account.company_name} contacts={contacts} memberCount={account.member_count ?? null} accountUpdatedAt={account.updated_at} />
       )}
+
+      {/* Team logins — portal team members the company's owners added (draws nothing when there are none; staff-only, read-only except the silent switch) */}
+      <TeamSection accountId={account.id} />
 
       {/* Notes */}
       <div className="bg-white rounded-lg border p-5 space-y-3 lg:col-span-2">
