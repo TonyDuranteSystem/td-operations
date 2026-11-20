@@ -16,6 +16,9 @@ import { t, getLocale } from '@/lib/portal/i18n'
 import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 import { interpolateString } from '@/lib/template-interpolation'
 import { cookies } from 'next/headers'
+import { redirect } from 'next/navigation'
+import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
+import { teammateMayUseWizard } from '@/lib/portal/wizard-submit-access'
 import { WizardClient } from './wizard-client'
 import { isValidWizardType, isContactScopedWizard, isFlexibleWizardType, isPersonOwnedWizard, getContactScopedDiscoveryServiceTypes, type WizardType } from '@/lib/portal/wizard-map'
 import { wizardLabelFor } from '@/lib/portal/wizard-labels'
@@ -31,6 +34,7 @@ import { latestRound, parseReviewRequests } from '@/lib/tax/review-requests'
 import { identifyFormation, isFormationWizardEditable } from '@/lib/portal/formation-resubmit-gate'
 import { resolveClosureSubject } from '@/lib/portal/closure-subject'
 import { getPendingClosures, type PendingClosure } from '@/lib/portal/pending-closures'
+import { memberPortalAccessOn } from '@/lib/portal/member-access-switch'
 import {
   resolveTaxWizardEligibility,
   taxWizardSurfaceVisible,
@@ -58,6 +62,11 @@ export default async function WizardPage({
   }
 
   const contactId = getClientContactId(user)
+  // A team login (no contact of its own) is tied to its ONE company and may open only the wizards a
+  // tick covers (bank application, company data form) — see teammateMayUseWizard. Before this it fell back
+  // to the company cookie below, which it could set to any company's id and read that company's data.
+  const teamLogin = contactId ? null : await resolvePortalIdentity(user)
+  const teammate = teamLogin?.kind === 'teammate' ? teamLogin : null
   // Closures whose form is still owed — computed at most once per render, only
   // when a closure is actually involved (tab list or closure subject below).
   let owedClosuresPromise: Promise<PendingClosure[]> | null = null
@@ -222,7 +231,7 @@ export default async function WizardPage({
   // verified link; the cookie only selects AMONG owned accounts. For the
   // (defensive) no-contact case the prior cookie fallback is kept.
   // 2026-06-25 — Daniel Pasztor ITIN/formation wizard mis-resolution.
-  let accountId = contactId ? '' : (cookieAccountId || '')
+  let accountId = contactId ? '' : (teammate ? teammate.accountId : (cookieAccountId || ''))
   if (contactId && !formationLeadId && !onboardingOfferId && !formationOfferId) {
     // Default-company rule UNIFIED with the layout/home (2026-07-16, quirk
     // found during the MMLLC E2E walk): this page used to pick the first row
@@ -608,6 +617,9 @@ export default async function WizardPage({
     accountId = ''
     account = {}
   }
+
+  // The wizard is now final: a team login may open it only when its tick covers it.
+  if (teammate && !teammateMayUseWizard(teammate.capabilities, wizardType)) redirect('/portal')
 
   // ── Formation entity type: the signed CONTRACT decides, never a code default ──
   // Placement is load-bearing. It sits AFTER wizardType is final (the SD picker
@@ -1049,6 +1061,12 @@ export default async function WizardPage({
     sameEmailNote = (await getPortalAccounts(contactId)).length > 0
   }
 
+  // The per-member "portal access" tick on the Members step (dev job beb43385, delivery B). Off unless the switch says so for
+  // this record (on, or "test" and this is a test record); only the formation and onboarding wizards carry it.
+  const memberAccessTick =
+    (wizardType === 'formation' || wizardType === 'onboarding') &&
+    (await memberPortalAccessOn({ accountId, leadId: formationLeadId, contactId }))
+
   // ITIN Renewal: pre-fill previous ITIN from contact
   if (isItinRenewal && contact.itin_number) {
     prefillData.has_previous_itin = 'Yes'
@@ -1448,6 +1466,7 @@ export default async function WizardPage({
           prefillData={prefillData}
           lockedValues={lockedValues}
           sameEmailNote={sameEmailNote}
+          memberAccessTick={memberAccessTick}
           savedData={savedData as Record<string, string>}
           savedStep={savedStep}
           progressId={progressId}

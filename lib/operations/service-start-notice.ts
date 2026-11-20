@@ -150,6 +150,7 @@ export async function announceServiceStarted(sdId: string): Promise<ServiceStart
       const { data: link } = await supabaseAdmin
         .from('account_contacts')
         .select('contact_id')
+        .is('access_revoked_at', null) // a person with no portal access is not told about the company
         .eq('account_id', sd.account_id)
         .order('contact_id', { ascending: true })
         .limit(1)

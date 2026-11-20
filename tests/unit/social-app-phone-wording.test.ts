@@ -1,6 +1,6 @@
 /**
- * TD Social — what a lock screen may show (dev job 2072bc3e, Step 2 pull request C2). "Who, never what": only a direct or group message a person typed in TD Talk
- * with no client attached may show typed text; everything else is fixed words plus at most one cleaned name.
+ * TD Social — what a lock screen may show (dev job 2072bc3e, Step 2 pull request C2; previews added 20 Nov 2026 at Antonio's word "all chats"). Every CHAT kind shows
+ * the name and the start of the message (never the web title, never a file name); every other kind is fixed words plus at most one cleaned name.
  */
 import { describe, it, expect } from "vitest"
 import { ALERT_KINDS, MARKETING_ALERT_KINDS, STAFF_ALERT_KINDS, type AlertKind } from "@/lib/push/alert-kinds"
@@ -9,21 +9,24 @@ import { BODY_MAX, NAME_MAX, TITLE_MAX, phoneTabFor, phoneWording } from "@/lib/
 const SECRET_TITLE = "Maria Rossi EIN 12-3456789"
 const SECRET_BODY = "SSN 123-45-6789 balance $48,210.55 passport YA1234567"
 
-const w = (kind: unknown, extra: Record<string, unknown> = {}) => phoneWording({ kind, title: SECRET_TITLE, body: SECRET_BODY, ...extra } as Parameters<typeof phoneWording>[0])
+// the web title always carries a secret; the body is empty unless a test passes one (the chat kinds now show the body as the preview)
+const w = (kind: unknown, extra: Record<string, unknown> = {}) => phoneWording({ kind, title: SECRET_TITLE, body: "", ...extra } as Parameters<typeof phoneWording>[0])
+/** the chat kinds that show the start of the message under the name */
+const PREVIEW_KINDS: AlertKind[] = ["talk_direct_message", "client_chat", "client_thread_message", "whatsapp_message", "email_message", "marketing_lead_chat", "marketing_team_chat"]
 
-describe("the typed-text kind is the ONLY one that shows typed text", () => {
+describe("chat kinds show a preview; no other kind shows typed text", () => {
   it("a direct or group chat message shows its own title and text (cut, cleaned)", () => {
-    expect(w("talk_direct_message")).toEqual({ title: SECRET_TITLE, body: SECRET_BODY })
+    expect(w("talk_direct_message", { body: SECRET_BODY })).toEqual({ title: SECRET_TITLE, body: SECRET_BODY })
     expect(phoneWording({ kind: "talk_direct_message", title: "Luca", body: "x".repeat(500) })!.body.length).toBeLessThanOrEqual(BODY_MAX)
     expect(phoneWording({ kind: "talk_direct_message", title: "T".repeat(500), body: "" })!.title.length).toBeLessThanOrEqual(TITLE_MAX)
   })
 
-  it("EVERY other kind, whatever the web title and body say, shows neither of them (a sweep over the whole list)", () => {
+  it("a kind that is NOT a chat shows neither the web title nor the web body (a sweep over the whole list)", () => {
     const allowedToQuoteTheSender: AlertKind[] = ["talk_direct_message", "supabase_notice"]
     for (const kind of ALERT_KINDS) {
-      if (allowedToQuoteTheSender.includes(kind)) continue
+      if (allowedToQuoteTheSender.includes(kind) || PREVIEW_KINDS.includes(kind)) continue
       for (const dm of [true, false]) {
-        const out = w(kind, { dm, name: "Acme LLC" })
+        const out = w(kind, { dm, name: "Acme LLC", body: SECRET_BODY })
         if (!out) continue
         const shown = `${out.title} ${out.body}`
         expect(shown, `${kind} (dm=${dm})`).not.toContain("12-3456789")
@@ -32,6 +35,18 @@ describe("the typed-text kind is the ONLY one that shows typed text", () => {
         expect(shown, `${kind} (dm=${dm})`).not.toContain("YA1234567")
         expect(shown, `${kind} (dm=${dm})`).not.toContain("Maria")
       }
+    }
+  })
+
+  it("every chat kind shows the message start in the BODY, and never the web title", () => {
+    for (const kind of PREVIEW_KINDS) {
+      if (kind === "talk_direct_message") continue
+      const out = w(kind, { name: "Acme LLC", place: "support", body: "Hello, can you call me?" })!
+      expect(out.body, kind).toBe("Hello, can you call me?")
+      expect(out.title, kind).not.toContain("Maria")
+      // a file or a card line is built from a FILE NAME on the web side: fixed words instead
+      expect(w(kind, { name: "Acme LLC", body: `${String.fromCodePoint(0x1f4ce)} Rossi_Passport.pdf` })!.body, kind).toBe("Sent an attachment")
+      expect(w(kind, { name: "Acme LLC", body: "x".repeat(500) })!.body.length, kind).toBeLessThanOrEqual(BODY_MAX)
     }
   })
 
@@ -71,7 +86,7 @@ describe("who gets a phone alert at all", () => {
     }
   })
 
-  it("a client chat shows the company, or 'a client' when there is none", () => {
+  it("a client chat shows the company, or 'a client' when there is none (no body = just the title)", () => {
     expect(w("client_chat", { name: "Acme LLC" })).toEqual({ title: "Chat: Acme LLC", body: "" })
     expect(w("client_chat")).toEqual({ title: "Chat: a client", body: "" })
     expect(w("client_chat", { name: "   " })).toEqual({ title: "Chat: a client", body: "" })
@@ -84,7 +99,7 @@ describe("who gets a phone alert at all", () => {
   })
 })
 
-describe("Marketing is in Italian, with the lead's name and no text", () => {
+describe("Marketing is in Italian, with the lead's name", () => {
   it("each kind has its wording, with or without a name", () => {
     expect(w("marketing_lead_chat", { name: "Giulia Bianchi" })).toEqual({ title: "Nuovo messaggio · Giulia Bianchi", body: "" })
     expect(w("marketing_lead_chat")).toEqual({ title: "Nuovo messaggio", body: "" })
@@ -98,14 +113,14 @@ describe("Marketing is in Italian, with the lead's name and no text", () => {
   })
 })
 
-describe("WhatsApp and email alerts: who and where, never what", () => {
+describe("WhatsApp and email alerts: who and where, plus the start of the message", () => {
   it("a WhatsApp message shows the CRM name, or generic words when the number is not linked", () => {
     expect(w("whatsapp_message", { name: "Maria Rossi" })).toEqual({ title: "WhatsApp · Maria Rossi", body: "" })
     expect(w("whatsapp_message")).toEqual({ title: "New WhatsApp message", body: "" })
     expect(w("whatsapp_message", { name: "  " })).toEqual({ title: "New WhatsApp message", body: "" })
   })
 
-  it("an email shows the CRM name, or the mailbox it arrived in; the subject and the sender's own typed name are never used", () => {
+  it("an email shows the CRM name, or the mailbox it arrived in; the sender's own typed name is never used in the title", () => {
     expect(w("email_message", { name: "Acme LLC", place: "support" })).toEqual({ title: "Email · Acme LLC", body: "" })
     expect(w("email_message", { place: "support" })).toEqual({ title: "New email in support", body: "" })
     expect(w("email_message", { place: "antonio" })).toEqual({ title: "New email in antonio", body: "" })
@@ -117,10 +132,10 @@ describe("WhatsApp and email alerts: who and where, never what", () => {
     }
   })
 
-  it("the web title and body (which carry the subject / the message text) never reach the lock screen", () => {
+  it("the web TITLE never reaches the lock screen for these kinds (only the CRM name does)", () => {
     for (const kind of ["whatsapp_message", "email_message"]) {
       const out = w(kind, { name: "Acme LLC", place: "support" })!
-      expect(`${out.title} ${out.body}`).not.toMatch(/12-3456789|123-45-6789|48,210|YA1234567|Maria/)
+      expect(`${out.title} ${out.body}`).not.toMatch(/12-3456789|Maria/)
     }
   })
 

@@ -8,15 +8,18 @@ import { buildHandoverMessage, type HandoverLang } from '@/lib/portal/team/hando
 // Keys must match lib/portal/team/capabilities.ts.
 const CAPABILITIES: { key: string; label: string; hint?: string; parent?: string }[] = [
   { key: 'documents', label: 'Documents', hint: 'View documents incl. legal docs (cannot sign)' },
+  { key: 'answer_decisions', label: 'Can answer client decisions', hint: 'Approve or choose when we ask the company a question. Needs Documents.', parent: 'documents' },
   { key: 'invoices_billing', label: 'Invoices & Billing' },
   // Options that only make sense once Invoices & Billing is ticked (dev job e5d5400d, Antonio 2026-10-21).
   { key: 'payment_links', label: 'Can change payment links', hint: 'Add, remove or change the links customers use to pay. Off = they can only see them.', parent: 'invoices_billing' },
   { key: 'invoice_history', label: 'Can see invoices & expenses from before they joined', hint: 'Off = they only see what is saved from the day you add them.', parent: 'invoices_billing' },
   { key: 'chat', label: 'Chat' },
+  { key: 'request_services', label: 'Can ask for new services', hint: 'Sends a service request to us in the company chat. Needs Chat.', parent: 'chat' },
   { key: 'company_services', label: 'Company & Services' },
   { key: 'bank_applications', label: 'Bank Applications' },
   { key: 'sales_customers', label: 'Sales customers' },
   { key: 'company_data_form', label: 'Company data form' },
+  { key: 'company_forms', label: 'Company forms (tax questionnaire)', hint: 'Fill in and send the tax questionnaire for you. Signing the tax return always stays with you.' },
   { key: 'announcements', label: 'Announcements' },
 ]
 

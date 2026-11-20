@@ -43,6 +43,7 @@ import { extractMembersFromWizardData } from "@/lib/utils/wizard-members"
 import { resolveMemberContactId } from "@/lib/members/resolve-member-contact"
 import { normalizePersonName, normalizeEmail } from "@/lib/members/member-identity"
 import { upsertMemberRow } from "@/lib/members/write-member-row"
+import { applyFormPortalAccess } from "@/lib/members/apply-form-portal-access"
 import { syncTier } from "./sync-tier"
 import { resolveFormationLegalName, sameCompanyName } from "@/lib/flows/legal-name"
 import { normalizeFilingId } from "@/lib/articles-parse"
@@ -918,6 +919,10 @@ export async function materializeFormationCompany(
                   { onConflict: "account_id,contact_id" },
                 )
                 steps.push({ step: `member_${i + 1}_link`, status: "ok", detail: `${memberCompanyName} (rep: ${repName ?? repEmail})` })
+                // The "portal access" tick in the form (dev job beb43385): unticked puts the no-access mark on this link.
+                const repAccess = await applyFormPortalAccess({ accountId, contactId: repContactId, ownerContactId: params.contact_id, ticked: m.member_portal_access })
+                if (repAccess.error) steps.push({ step: `member_${i + 1}_portal_access`, status: "error", detail: `${memberCompanyName} — portal access mark could not be written: ${repAccess.error}` })
+                else if (repAccess.action === "mark") steps.push({ step: `member_${i + 1}_portal_access`, status: "ok", detail: `${memberCompanyName} — no portal access (unticked in the form); still an owner` })
               } else {
                 steps.push({ step: `member_${i + 1}_link`, status: "skipped", detail: `${memberCompanyName} — could not create representative contact` })
               }
@@ -1014,6 +1019,10 @@ export async function materializeFormationCompany(
               )
 
               steps.push({ step: `member_${i + 1}_link`, status: "ok", detail: `${memberName}${isPrimary ? " [PRIMARY]" : ""}` })
+              // The "portal access" tick in the form (dev job beb43385): unticked puts the no-access mark on this link.
+              const memberAccess = await applyFormPortalAccess({ accountId, contactId: membContactId, ownerContactId: params.contact_id, ticked: m.member_portal_access })
+              if (memberAccess.error) steps.push({ step: `member_${i + 1}_portal_access`, status: "error", detail: `${memberName} — portal access mark could not be written: ${memberAccess.error}` })
+              else if (memberAccess.action === "mark") steps.push({ step: `member_${i + 1}_portal_access`, status: "ok", detail: `${memberName} — no portal access (unticked in the form); still an owner` })
 
               // Copy member passport from Supabase storage to Drive (we'll add to
               // the company folder after we create it; for now, just queue the

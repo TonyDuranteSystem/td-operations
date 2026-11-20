@@ -124,6 +124,20 @@ export const MEMBER_ITIN_FIELD: FieldConfig = {
   conditional: { field: 'member_type', value: 'individual' },
 }
 
+// ─── "Portal access" tick per additional member (dev job beb43385, delivery B) ──
+// Injected by wizard-client ONLY when the switch is on for this record (formation and onboarding, multi-member), so
+// while the switch is off the Members step is exactly what it was. Starts ticked. Unticking keeps the person as an
+// owner everywhere (Operating Agreement, SS-4, ownership list) and only keeps this company out of their portal.
+export const MEMBER_PORTAL_ACCESS_FIELD: FieldConfig = {
+  name: 'member_portal_access',
+  label: 'Client portal access',
+  labelIt: 'Accesso al portale cliente',
+  type: 'checkbox',
+  required: false,
+  hint: 'Give this member a client portal login for this company. Untick it if they own part of the company but should not use the portal: they stay an owner on every document.',
+  hintIt: 'Dai a questo membro un accesso al portale cliente per questa società. Togli la spunta se è titolare di una quota ma non deve usare il portale: resta titolare su tutti i documenti.',
+}
+
 // ─── FORMATION ─────────────────────────────────────────────
 
 export const FORMATION_STEPS: WizardStep[] = [

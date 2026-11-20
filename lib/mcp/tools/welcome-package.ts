@@ -73,6 +73,7 @@ Prerequisites:
         const { data: contactLinks } = await supabaseAdmin
           .from("account_contacts")
           .select("contact_id")
+          .is("access_revoked_at", null) // a person with the no-portal-access mark is not picked as the one we write to (dev job beb43385)
           .eq("account_id", account_id)
           .limit(1)
 
@@ -120,6 +121,7 @@ Prerequisites:
 
             // Determine entity type: check if account has multiple contacts
             const { data: allContacts } = await supabaseAdmin
+              // portal-access-ok: roster — every owner counts as a member of the company, with or without portal access
               .from("account_contacts")
               .select("contact_id")
               .eq("account_id", account_id)

@@ -21717,6 +21717,8 @@ export type Database = {
           update_status: Json | null
           update_status_at: string | null
           updated_at: string
+          voice_check: Json | null
+          voice_check_group_id: string | null
         }
         Insert: {
           alerted_state?: string | null
@@ -21760,6 +21762,8 @@ export type Database = {
           update_status?: Json | null
           update_status_at?: string | null
           updated_at?: string
+          voice_check?: Json | null
+          voice_check_group_id?: string | null
         }
         Update: {
           alerted_state?: string | null
@@ -21803,6 +21807,8 @@ export type Database = {
           update_status?: Json | null
           update_status_at?: string | null
           updated_at?: string
+          voice_check?: Json | null
+          voice_check_group_id?: string | null
         }
         Relationships: [
           {
