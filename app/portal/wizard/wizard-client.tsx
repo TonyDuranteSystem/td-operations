@@ -6,7 +6,7 @@ import { WizardShell, type WizardStep } from '@/components/portal/wizard/wizard-
 import { WizardField, type FieldConfig } from '@/components/portal/wizard/wizard-field'
 import { ReviewNote, FLAGGED_FIELD_CLASS } from '@/components/portal/wizard/review-note'
 import { resolveClientLabel } from '@/lib/tax/review-labels'
-import { getWizardConfig, wizardCollectsOwnerMembers, wizardRequiresSs4Signer, OWNER_ITIN_FIELD, MEMBER_ITIN_FIELD, TAX_MEMBER_FIELDS } from '@/components/portal/wizard/wizard-configs'
+import { getWizardConfig, wizardCollectsOwnerMembers, wizardRequiresSs4Signer, OWNER_ITIN_FIELD, MEMBER_ITIN_FIELD, MEMBER_PORTAL_ACCESS_FIELD, TAX_MEMBER_FIELDS } from '@/components/portal/wizard/wizard-configs'
 import { useLocale } from '@/lib/portal/use-locale'
 import { LOGIN_EMAIL_FIELD, mustReadAckKey } from '@/lib/portal/login-email-field'
 import { ChangeLoginEmailDialog } from '@/components/portal/change-login-email-dialog'
@@ -37,11 +37,14 @@ function SignerRadio({
   onSelect,
   label,
   hint,
+  why,
 }: {
   checked: boolean
   onSelect: () => void
   label: string
   hint?: string
+  /** Orange line under the choice: what being the Responsible Party means (shown only while the portal-access switch is on). */
+  why?: string
 }) {
   return (
     <label
@@ -58,8 +61,22 @@ function SignerRadio({
       <span className="text-sm">
         <span className="font-medium text-zinc-800">{label}</span>
         {hint && <span className="block text-xs text-zinc-500 mt-0.5">{hint}</span>}
+        {why && <span className="block text-xs font-medium text-orange-700 mt-0.5">{why}</span>}
       </span>
     </label>
+  )
+}
+
+/**
+ * The clear notice above the SS-4 Responsible Party choice (Antonio, 2026-11-19): whoever signs the SS-4 is the person who
+ * appears on the EIN letter. Shown on the Owner step and on the Members step, only while the portal-access switch is on.
+ */
+function Ss4EinLetterNotice({ title, text }: { title: string; text: string }) {
+  return (
+    <div className="rounded-lg border-2 border-orange-300 bg-orange-50 px-3 py-2.5" role="note">
+      <p className="text-sm font-semibold text-orange-900">{title}</p>
+      <p className="text-xs text-orange-900 mt-0.5 leading-relaxed">{text}</p>
+    </div>
   )
 }
 
@@ -125,6 +142,9 @@ interface WizardClientProps {
   lockedValues?: Record<string, string>
   /** Show the extra paragraph of the login-email block: the client already has a company, so the same email must be kept. */
   sameEmailNote?: boolean
+  /** The per-member "portal access" tick (dev job beb43385, delivery B): set by the server only when the switch is on for this
+   *  record, on the formation and onboarding wizards. False/absent = the Members step and the SS-4 choice look exactly as before. */
+  memberAccessTick?: boolean
 }
 
 // isFieldVisible lives in lib/portal/wizard-money.ts (dev job 89195c68) so
@@ -333,6 +353,7 @@ export function WizardClient({
   reviewRequests = null,
   lockedValues,
   sameEmailNote = false,
+  memberAccessTick = false,
 }: WizardClientProps) {
   // Any language beyond en/it (dev job 12cab351) — see the identical
   // comment in wizard-field.tsx. Layered UNDER the existing it/en choice,
@@ -362,13 +383,19 @@ export function WizardClient({
   // members step when the offer bundled ITIN (itinCount > 0). Done here (not in
   // the static config) so the question only appears for clients who bought ITIN.
   // dev_task fcf5e254.
+  // The same goes for the "portal access" tick on each additional member (dev job beb43385): only when the server says the
+  // switch is on for this record, and only on the formation and onboarding wizards.
+  const memberTickOn = memberAccessTick && (wizardType === 'formation' || wizardType === 'onboarding')
   const fields = useMemo(() => {
-    if (itinCount <= 0) return baseFields
+    if (itinCount <= 0 && !memberTickOn) return baseFields
     const f: Record<string, typeof baseFields[string]> = { ...baseFields }
-    if (Array.isArray(f.owner)) f.owner = [...f.owner, OWNER_ITIN_FIELD]
-    if (Array.isArray(f.members)) f.members = [...f.members, MEMBER_ITIN_FIELD]
+    if (itinCount > 0) {
+      if (Array.isArray(f.owner)) f.owner = [...f.owner, OWNER_ITIN_FIELD]
+      if (Array.isArray(f.members)) f.members = [...f.members, MEMBER_ITIN_FIELD]
+    }
+    if (memberTickOn && Array.isArray(f.members)) f.members = [...f.members, MEMBER_PORTAL_ACCESS_FIELD]
     return f
-  }, [baseFields, itinCount])
+  }, [baseFields, itinCount, memberTickOn])
 
   // Merge prefill → saved → current (saved takes precedence over prefill, but only for non-empty values)
   // Empty saved values (from stale records saved before prefill fix) must NOT override prefill
@@ -430,6 +457,23 @@ export function WizardClient({
       return next
     })
   }, [memberCount])
+
+  // The "portal access" tick starts ticked: every member row that has no answer yet is stamped true, so the answer is saved
+  // with the rest of the form (an unticked box is stored as false). Only while the switch is on (dev job beb43385).
+  useEffect(() => {
+    if (!memberTickOn || !isMMLLC) return
+    setFormData(prev => {
+      let next: typeof prev | null = null
+      for (let i = 0; i < memberCount; i++) {
+        const k = `member_${i}_member_portal_access`
+        if (prev[k] === undefined || prev[k] === '' || prev[k] === null) {
+          next = next ?? { ...prev }
+          next[k] = true
+        }
+      }
+      return next ?? prev
+    })
+  }, [memberTickOn, isMMLLC, memberCount])
   // Track row counts for inline repeater fields (e.g., related_party_transactions)
   const [repeaterCounts, setRepeaterCounts] = useState<Record<string, number>>(() => {
     const counts: Record<string, number> = {}
@@ -1511,6 +1555,12 @@ export function WizardClient({
       ) : isMembersStep ? (
         /* Members repeater — add/remove members */
         <div className="space-y-6">
+          {memberTickOn && requiresSs4Signer && (
+            <Ss4EinLetterNotice
+              title={pickText('The person who signs the SS-4 is the person who appears on the EIN letter.', 'La persona che firma il modulo SS-4 è la persona che compare sulla lettera EIN.')!}
+              text={pickText('Choose the SS-4 Responsible Party carefully: this is the person the IRS prints on the EIN letter.', "Scegli con attenzione il Responsible Party del modulo SS-4: è la persona che l'IRS stampa sulla lettera EIN.")!}
+            />
+          )}
           {Array.from({ length: memberCount }).map((_, idx) => (
             <div key={idx} className="border rounded-lg p-4 space-y-3">
               <div className="flex items-center justify-between">
@@ -1570,7 +1620,13 @@ export function WizardClient({
                     <div key={`${idx}_${field.name}`} data-field-key={`member_${idx}_${field.name}`} className={`${field.type === 'select' || field.type === 'textarea' || field.type === 'file' ? 'md:col-span-2' : ''} ${noteFor(`member_${idx}_${field.name}`) ? FLAGGED_FIELD_CLASS : ''}`}>
                       <WizardField
                         field={field}
-                        value={formData[`member_${idx}_${field.name}`] ?? ''}
+                        value={field.name === MEMBER_PORTAL_ACCESS_FIELD.name
+                          ? (() => {
+                              // Starts ticked: no answer yet reads as ticked; a saved "false" stays unticked.
+                              const v = formData[`member_${idx}_${field.name}`]
+                              return v === undefined || v === null || v === '' ? true : v === true || v === 'true'
+                            })()
+                          : formData[`member_${idx}_${field.name}`] ?? ''}
                         onChange={(name, value) => handleFieldChange(`member_${idx}_${name}`, value)}
                         onFileUpload={(name, file, onProgress) => handleFileUpload(`member_${idx}_${name}`, file, onProgress)}
                         locale={locale}
@@ -1589,6 +1645,7 @@ export function WizardClient({
                   checked={signerIndex === idx}
                   onSelect={() => setSigner(idx)}
                   label={interpolateString(pickText('Member {n} is the SS-4 Responsible Party.', 'Membro {n} è il Responsible Party del modulo SS-4.')!, { n: idx + 1 })}
+                  why={memberTickOn ? pickText('Signs the SS-4 and appears on the EIN letter.', 'Firma il modulo SS-4 e compare sulla lettera EIN.') : undefined}
                 />
               )}
             </div>
@@ -1600,6 +1657,7 @@ export function WizardClient({
               handleFieldChange('member_count', memberCount + 1)
               // Pre-set new member type to individual so individual fields show immediately
               handleFieldChange(`member_${memberCount}_member_type`, 'individual')
+              if (memberTickOn) handleFieldChange(`member_${memberCount}_member_portal_access`, true)
             }}
             className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-700 font-medium"
           >
@@ -1639,6 +1697,14 @@ export function WizardClient({
             <p className="text-sm font-semibold text-zinc-700 mb-1.5">
               {pickText('SS-4 Responsible Party', 'Responsible Party (SS-4)')}
             </p>
+            {memberTickOn && (
+              <div className="mb-2">
+                <Ss4EinLetterNotice
+                  title={pickText('The person who signs the SS-4 is the person who appears on the EIN letter.', 'La persona che firma il modulo SS-4 è la persona che compare sulla lettera EIN.')!}
+                  text={pickText('Choose the SS-4 Responsible Party carefully: this is the person the IRS prints on the EIN letter.', "Scegli con attenzione il Responsible Party del modulo SS-4: è la persona che l'IRS stampa sulla lettera EIN.")!}
+                />
+              </div>
+            )}
             <SignerRadio
               checked={signerIndex === -1}
               onSelect={() => setSigner(-1)}
@@ -1647,6 +1713,7 @@ export function WizardClient({
                 'Exactly one person across the owner and members must be selected.',
                 'Una sola persona tra titolare e membri può essere selezionata.',
               )}
+              why={memberTickOn ? pickText('Signs the SS-4 and appears on the EIN letter.', 'Firma il modulo SS-4 e compare sulla lettera EIN.') : undefined}
             />
           </div>
         )}

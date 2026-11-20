@@ -89,6 +89,8 @@ export interface TaxSection {
 export interface Account {
   id: string
   company_name: string
+  // accounts.portal_tier: lead | formation | onboarding | active (or a lifecycle marker) — the company page's portal-access chips read it
+  portal_tier?: string | null
   entity_type: string | null
   status: string | null
   ein_number: string | null
@@ -164,6 +166,9 @@ export interface Contact {
   full_name: string
   // account_contacts.history_visible_from for the account being viewed: this person sees the company's history only from then (NULL = everything)
   history_visible_from?: string | null
+  // account_contacts.access_revoked_at / access_revoked_by for the account being viewed: the person has NO portal access to this company (still an owner). by = the team member who took it away; NULL = unticked in the form.
+  access_revoked_at?: string | null
+  access_revoked_by?: string | null
   first_name: string | null
   last_name: string | null
   email: string | null

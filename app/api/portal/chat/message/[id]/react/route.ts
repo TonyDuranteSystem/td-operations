@@ -216,7 +216,7 @@ async function notifyAdminOfReaction(accountId: string | null, contactId: string
   await sendPushToStaff({
     title: `Reaction: ${displayName}`,
     body: `${emoji} on your message`,
-    url: `/portal-chats${accountId ? `?account=${accountId}` : ''}`,
+    url: `/portal-chats${accountId ? `?account=${accountId}` : contactId ? `?contact=${contactId}` : ''}`,
     tag: `admin-chat-reaction-${accountId || contactId || 'unknown'}`,
     alertKind: 'client_chat',
     phoneName: displayName,

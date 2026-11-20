@@ -95,6 +95,7 @@ export async function GET(req: NextRequest) {
       let contactId = task.contact_id
       if (!contactId && task.account_id) {
         const { data: primary } = await supabaseAdmin
+          // portal-access-ok: asks for the PRIMARY contact, who is never marked (staff cannot take it away; the form never marks the owner)
           .from("account_contacts")
           .select("contact_id")
           .eq("account_id", task.account_id)

@@ -1,0 +1,26 @@
+{
+  "title": "A red dot when WhatsApp needs attention, and a weekly voice-note test",
+  "tag": "new",
+  "text": "The left menu now shows a red (problem) or amber (worth a look) exclamation mark next to WhatsApp, with a one-line description when you hover it. It lights up when the WhatsApp link is down, the nightly update needs attention, or the weekly voice-note test failed. Once a week the system also sends a short test voice note to one test phone and asks you in the WhatsApp page: Did it play? Yes or No. A No turns the page red and offers Send a new test.",
+  "points": [
+    "Red or amber mark beside WhatsApp",
+    "Hover for the one-line reason",
+    "Weekly voice-note test with Yes / No"
+  ],
+  "stepsTitle": "Answering the weekly voice test",
+  "steps": [
+    {
+      "name": "Open the WhatsApp page on Monday",
+      "detail": "A card asks if the test voice note played."
+    },
+    {
+      "name": "Listen on the test phone",
+      "detail": "A short spoken test message arrives.",
+      "flag": "new"
+    },
+    {
+      "name": "Press Yes or No",
+      "detail": "A No turns the page red until you test again."
+    }
+  ]
+}
