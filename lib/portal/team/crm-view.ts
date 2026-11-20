@@ -90,6 +90,14 @@ function whoActed(e: CardEventRow, names: Record<string, string>): string {
   return 'The system'
 }
 
+/** The words of a history line. A 'powers_changed' line that is about an owner's personal documents says so (Team Powers step 7). */
+function labelOf(e: CardEventRow): string {
+  if (e.event === 'powers_changed' && typeof e.detail?.personal_documents === 'boolean') {
+    return e.detail.personal_documents ? 'Shared their personal documents' : 'Stopped sharing their personal documents'
+  }
+  return EVENT_LABELS[e.event] ?? e.event
+}
+
 function reasonOf(e: CardEventRow): string | null {
   const r = e.detail?.reason
   return typeof r === 'string' && r.trim() ? r.trim() : null
@@ -141,7 +149,7 @@ export function buildTeamCard(input: {
       lastSignIn: (m.auth_user_id && signIns[m.auth_user_id]) || null,
       history: evs.slice(0, HISTORY_LIMIT).map((e) => ({
         event: e.event,
-        label: EVENT_LABELS[e.event] ?? e.event,
+        label: labelOf(e),
         when: e.created_at,
         by: whoActed(e, names),
         reason: reasonOf(e),

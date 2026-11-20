@@ -8,6 +8,7 @@ import { getClientContactId } from '@/lib/portal-auth'
 import { getPortalAccounts } from '@/lib/portal/queries'
 import { isAccountAdmin } from '@/lib/portal/team/account-admin'
 import { listTeammates } from '@/lib/portal/team/server'
+import { getMySharedMemberIds } from '@/lib/portal/team/personal-docs-server'
 import { TeamManager, type Teammate } from '@/components/portal/team-manager'
 import { cookies } from 'next/headers'
 import { PORTAL_BASE_URL } from '@/lib/config'
@@ -38,7 +39,10 @@ export default async function PortalTeamPage() {
   if (!admin) return <NotAvailable />
 
   const companyName = accounts.find(a => a.id === accountId)?.company_name ?? 'Your company'
-  const teammates = (await listTeammates(accountId)) as unknown as Teammate[]
+  const listed = (await listTeammates(accountId)) as unknown as Teammate[]
+  // Which of these logins THIS owner has shared their own personal documents with (Team Powers step 7). Each owner sees only their own switch.
+  const sharedByMe = await getMySharedMemberIds(accountId, contactId)
+  const teammates = listed.map(t => ({ ...t, sharesMyDocs: sharedByMe.has(t.id) }))
 
   // The handover message defaults to the owner's language (an Italian owner writes to Italian colleagues).
   const defaultLang = getLocale(user) === 'it' ? 'it' : 'en'
