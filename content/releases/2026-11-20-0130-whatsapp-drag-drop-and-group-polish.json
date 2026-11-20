@@ -1,0 +1,26 @@
+{
+  "title": "Drag a file onto a WhatsApp chat, and better group names and AI drafts",
+  "tag": "improved",
+  "text": "You can now drag a file from your computer onto any WhatsApp chat to attach it, the same as the paperclip. In groups, the Members list now shows the names you saved in your phone, and the AI \"Suggest a reply\" now reads the group's own messages instead of drafting blind.",
+  "points": [
+    "Drag and drop a file onto the chat",
+    "Group members show your saved names",
+    "AI reply suggestion works in groups"
+  ],
+  "stepsTitle": "Attaching a file by dragging",
+  "steps": [
+    {
+      "name": "Open a WhatsApp chat",
+      "detail": "A chat where you can reply."
+    },
+    {
+      "name": "Drag a file onto the chat",
+      "detail": "A blue box says: Drop the file to attach it.",
+      "flag": "new"
+    },
+    {
+      "name": "Release, then send",
+      "detail": "The file is attached like with the paperclip."
+    }
+  ]
+}
