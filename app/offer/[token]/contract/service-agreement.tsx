@@ -11,6 +11,8 @@ import { contractVersionLabel, portalChatVoiceWording, type PortalChatVoiceWordi
 import { contractWordingFor, ContractNotReady } from './standalone-service-agreement'
 import { InlineText, AgreementBody } from '@/components/contracts/agreement-body'
 import { isNoChargeFee } from '@/lib/offers/fee-label'
+import { planPaymentWordingFor } from '@/lib/contracts/plan-payment-wording'
+import { PaymentSentence } from '@/components/contracts/payment-sentence'
 import { euroBankAddress } from '@/lib/offers/bank-address'
 import { isStandaloneAgreementType, isCustomContractType, type ShortContractType } from '@/lib/offers/standalone-contract-types'
 
@@ -96,6 +98,8 @@ interface Props {
 }
 
 export default function ServiceAgreement({ offer, token: _token, cred }: Props) {
+  // The offer's payment plan, as section 5 of each add-on agreement states it (null = no usable plan: the ordinary "payable in full" sentence).
+  const planWording = planPaymentWordingFor(offer as unknown as Record<string, unknown>)
   const cl = CL[offer.language || 'en']
   const [signing, setSigning] = useState(false)
   // Blocking on a failed write makes RETRY a real path. The PDF-capture step
@@ -775,7 +779,7 @@ export default function ServiceAgreement({ offer, token: _token, cred }: Props) 
 
               {isCustomContractType(svcCt) ? (
                 // a NEW service's agreement reads exactly as the owner approved it (the preview uses the same body)
-                <AgreementBody ct={ct} clientName={form.name || ''} serviceName={svc.name || ''} serviceDesc={svc.description || ''} fee={svcFee} includes={(svc.includes || []) as string[]} scopeClosing={ct.scope.closing} workPhrase={ct.workPhrase ?? ''} liabilityPhrase={ct.liabilityPhrase ?? ''} />
+                <AgreementBody ct={ct} clientName={form.name || ''} serviceName={svc.name || ''} serviceDesc={svc.description || ''} fee={svcFee} includes={(svc.includes || []) as string[]} scopeClosing={ct.scope.closing} workPhrase={ct.workPhrase ?? ''} liabilityPhrase={ct.liabilityPhrase ?? ''} plan={planWording} />
               ) : (
               <>
 
@@ -827,7 +831,7 @@ export default function ServiceAgreement({ offer, token: _token, cred }: Props) 
                   <p>No service fee is payable to the Service Provider for this service itself; it is included in your offer. Any third-party or government charges described in this Agreement remain the Client&rsquo;s responsibility.</p>
                 ) : (
                   <>
-                    <p>The total fee for this service is <strong>{svcFee}</strong>, payable in full before services begin. Payment may be made via credit/debit card or bank wire transfer as indicated in the offer.</p>
+                    <PaymentSentence fee={svcFee} plan={planWording} legacy={<>The total fee for this service is <strong>{svcFee}</strong>, payable in full before services begin. Payment may be made via credit/debit card or bank wire transfer as indicated in the offer.</>} />
                     <p><strong>All fees are non-refundable</strong> once services have commenced.</p>
                   </>
                 )}

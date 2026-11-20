@@ -22,9 +22,36 @@ const closure = { name: 'Company Closure', price: '$700', contract_type: 'closur
 const tr = (name: string) => ({ name, price: '$500', contract_type: 'tax_return' })
 
 describe('checkTaxYearOnOffer', () => {
-  it('a formation or onboarding offer is never judged', async () => {
-    for (const contractType of ['formation', 'onboarding', 'closure', undefined]) {
-      expect(await checkTaxYearOnOffer({ contractType, services: [tr('Tax Return'), tr('Tax Return 2')], accountId: 'a', now })).toEqual({ error: null, warnings: [] })
+  it('ANY offer whose Tax Return is created at payment is judged — a closure, an ITIN, a name change, a custom service… (job 06a3c8e9)', async () => {
+    for (const contractType of ['closure', 'itin', 'company_change_name', 'custom_notary_pack', undefined]) {
+      // a year that cannot exist is refused wherever the line sits
+      expect((await checkTaxYearOnOffer({ contractType, services: [closure, tr('Tax Return 2027')], accountId: 'a', now })).error).toMatch(/not started/)
+      // no year: warned, never refused
+      const none = await checkTaxYearOnOffer({ contractType, services: [closure, tr('Tax Return')], accountId: 'a', now })
+      expect(none.error).toBeNull()
+      expect(none.warnings[0]).toMatch(/tracked as 2025/)
+      // a good year: nothing said
+      expect(await checkTaxYearOnOffer({ contractType, services: [closure, tr('Tax Return 2026')], accountId: 'a', now })).toEqual({ error: null, warnings: [] })
+    }
+  })
+  it('a FORMATION or ONBOARDING offer is never judged: their Tax Return is created later by the company\'s own setup, which picks its year', async () => {
+    for (const contractType of ['formation', 'onboarding']) {
+      expect(await checkTaxYearOnOffer({ contractType, services: [tr('Tax Return 2027')], accountId: 'a', now })).toEqual({ error: null, warnings: [] })
+      expect(await checkTaxYearOnOffer({ contractType, services: [tr('Tax Return')], accountId: 'a', now })).toEqual({ error: null, warnings: [] })
+      expect(await checkTaxYearOnOffer({ contractType, services: [tr('Tax Return 2025'), tr('Tax Return 2026')], accountId: 'a', now })).toEqual({ error: null, warnings: [] })
+    }
+  })
+  it('an offer with no Tax Return line is never judged', async () => {
+    for (const contractType of ['formation', 'onboarding', 'closure', 'tax_return', undefined]) {
+      expect(await checkTaxYearOnOffer({ contractType, services: [closure], accountId: 'a', now })).toEqual({ error: null, warnings: [] })
+    }
+  })
+  it('two Tax Return lines on a NON-tax-return offer are warned, not refused — such an offer is sold today and keeps working', async () => {
+    for (const contractType of ['closure', 'itin', undefined]) {
+      const r = await checkTaxYearOnOffer({ contractType, services: [tr('Tax Return 2025'), tr('Tax Return 2026')], accountId: 'a', now })
+      expect(r.error).toBeNull()
+      expect(r.warnings[0]).toMatch(/2 Tax Return lines/)
+      expect(r.warnings[0]).toMatch(/will not be used/)
     }
   })
   it('two Tax Return lines are refused — one offer per year', async () => {

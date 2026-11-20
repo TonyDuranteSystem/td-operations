@@ -10,6 +10,7 @@ import { isBuiltInAgreementType, isCustomContractType, type ShortContractType } 
 import { wordingFromSnapshot, type ContractWording } from '@/lib/contracts/contract-wording'
 import { planAgreements } from '@/lib/offers/standalone-agreement-lines'
 import { AgreementBody, contractToday } from '@/components/contracts/agreement-body'
+import { planPaymentWordingFor } from '@/lib/contracts/plan-payment-wording'
 
 const today = contractToday
 
@@ -416,6 +417,8 @@ function StandaloneServiceAgreementPage({ offer, token, contractType = 'tax_retu
   // `multi_agreements` from the switch; OFF (or absent) = the original single agreement.
   const plan = planAgreements(offer, contractType, offer.multi_agreements === true)
   const agreements = plan.entries
+  // The offer's payment plan, as section 5 of each agreement states it (null = no usable plan: the ordinary "payable in full" sentence).
+  const planWording = planPaymentWordingFor(offer as unknown as Record<string, unknown>)
   const multi = plan.mode === 'multi'
   const mainType: ShortContractType = agreements[0]?.type ?? contractType
   const ct = contractWordingFor(mainType, offer) as ContractWording // the wrapper guarantees it exists
@@ -706,14 +709,14 @@ function StandaloneServiceAgreementPage({ offer, token, contractType = 'tax_retu
               return (
                 <div key={i} data-agreement={type} style={i > 0 ? { pageBreakBefore: 'always', marginTop: 48 } : undefined}>
                   <div className="contract-part-divider"><h2>{xct.title}</h2></div>
-                  <AgreementBody ct={xct} clientName={name} serviceName={line.name || xct.shortTitle} serviceDesc={line.description || ''} fee={line.price || ''} includes={(line.includes || []) as string[]} scopeClosing={scopeClosingFor(type, xct, line)} workPhrase={ph.workPhrase} liabilityPhrase={ph.liabilityPhrase} />
+                  <AgreementBody ct={xct} clientName={name} serviceName={line.name || xct.shortTitle} serviceDesc={line.description || ''} fee={line.price || ''} includes={(line.includes || []) as string[]} scopeClosing={scopeClosingFor(type, xct, line)} workPhrase={ph.workPhrase} liabilityPhrase={ph.liabilityPhrase} plan={planWording} />
                 </div>
               )
             })}
           </>
         ) : (
           /* AGREEMENT — parties, summary and sections 1-8 */
-          <AgreementBody ct={ct} clientName={name} serviceName={serviceName} serviceDesc={serviceDesc} fee={fee} includes={includes as string[]} scopeClosing={scopeClosing} workPhrase={workPhrase} liabilityPhrase={liabilityPhrase} />
+          <AgreementBody ct={ct} clientName={name} serviceName={serviceName} serviceDesc={serviceDesc} fee={fee} includes={includes as string[]} scopeClosing={scopeClosing} workPhrase={workPhrase} liabilityPhrase={liabilityPhrase} plan={planWording} />
         )}
 
         {/* CLIENT INFORMATION */}

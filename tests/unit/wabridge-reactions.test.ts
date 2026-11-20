@@ -104,3 +104,20 @@ describe("mergeReactionResults", () => {
     expect(mergeReactionResults(entries, [{ i: 0, r: "weird" }, { i: 1, r: "noop" }])[0].r).toBe("invalid")
   })
 })
+
+describe("parseReactionsBatch — a WhatsApp group member's reaction", () => {
+  const now = new Date("2026-11-20T10:00:00Z")
+  const batch = (items: unknown[]) => ({ ts: now.getTime(), scan_ms: now.getTime(), items })
+  const base = { ext_id: "3A005FCF60C597CA99D0", chat: "120363432541591903", side: "client", op: "set", emoji: "👍" }
+  it("accepts a long group id with the member who reacted; keeps one-to-one items as they were", () => {
+    const r = parseReactionsBatch(batch([{ ...base, reactor: "17274521093" }, { ...base, chat: "17274234285" }]), now)
+    expect(r.entries.map((e) => e.valid)).toEqual([true, true])
+    expect(r.entries[0].item?.reactor).toBe("17274521093")
+    expect(r.entries[1].item?.reactor).toBeUndefined()
+  })
+  it("refuses a reactor on the business-phone side, a malformed reactor, and a chat longer than a group id", () => {
+    const r = parseReactionsBatch(batch([{ ...base, side: "line", reactor: "17274521093" }, { ...base, reactor: "12ab" }, { ...base, chat: "1".repeat(31) }]), now)
+    expect(r.entries.map((e) => e.valid)).toEqual([false, false, false])
+  })
+})
+

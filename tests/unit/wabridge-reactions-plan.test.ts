@@ -21,7 +21,7 @@ describe("currentReactions", () => {
     // a hidden-id (@lid) reactor on a normal phone chat is still the client side
     expect(P.currentReactions([row({ reactor_jid: "1234567890123@lid" })]).get("3A005FCF60C597CA99D0|client").emoji).toBe("👍")
   })
-  it("keeps 1:1 phone chats only and ignores groups, hidden-id chats, empty emoji and junk rows", () => {
+  it("ignores a malformed group id, hidden-id chats, empty emoji and junk rows", () => {
     const m = P.currentReactions([
       row({ chat_jid: "120363402106XXXXX@g.us" }),
       row({ chat_jid: "1234567890123@lid", message_id: "AAAA1111" }),
@@ -231,6 +231,43 @@ describe("paced retries for a reaction on a message the CRM does not have yet", 
   it("the thresholds keep their real-time meaning at 10-second scans", () => {
     expect(P.ABSENT_SCANS_BEFORE_REMOVAL * 10).toBeGreaterThanOrEqual(60) // a vanished reaction must stay gone ~1 minute
     expect(P.MAX_EMPTY_SCANS * 10).toBeGreaterThanOrEqual(600)           // an empty read is distrusted ~10 minutes
+  })
+})
+
+describe("a WhatsApp GROUP — every member has their own reaction", () => {
+  const G = "120363432541591903@g.us"
+  const grow = (over: Record<string, unknown> = {}) => row({ chat_jid: G, reactor_jid: "17274521093@s.whatsapp.net", ...over })
+  it("keys each member separately, names the group by its long id, and keeps the business phone as 'line'", () => {
+    const m = P.currentReactions([
+      grow(),
+      grow({ reactor_jid: "16479788038@s.whatsapp.net", emoji: "❤️" }),
+      grow({ is_from_me: 1, reactor_jid: "393331112222@s.whatsapp.net", emoji: "🙏" }),
+    ])
+    expect([...m.keys()].sort()).toEqual(["3A005FCF60C597CA99D0|client:16479788038", "3A005FCF60C597CA99D0|client:17274521093", "3A005FCF60C597CA99D0|line"])
+    expect(m.get("3A005FCF60C597CA99D0|client:17274521093").chat).toBe("120363432541591903")
+    expect(m.get("3A005FCF60C597CA99D0|client:17274521093").reactor).toBe("17274521093")
+    expect(m.get("3A005FCF60C597CA99D0|line").reactor).toBeUndefined()
+  })
+  it("a member hidden behind a linked id is still told apart; one with no usable address is skipped", () => {
+    const m = P.currentReactions([grow({ reactor_jid: "9999999999999@lid" }), grow({ reactor_jid: "garbage", message_id: "ZZZZ9999" })])
+    expect([...m.keys()]).toEqual(["3A005FCF60C597CA99D0|client:9999999999999"])
+  })
+  it("a one-to-one chat is unchanged (no reactor on its items)", () => {
+    const plan = P.planScan({ rows: [row()], state: P.emptyState(), existingParentIds: none })
+    expect(plan.items).toEqual([{ ext_id: "3A005FCF60C597CA99D0", chat: "17274234285", side: "client", op: "set", emoji: "👍", reacted_at: "2026-10-07T01:11:03.000Z" }])
+  })
+  it("reports a member's reaction WITH the member, and a later removal names the same member", () => {
+    const plan = P.planScan({ rows: [grow()], state: P.emptyState(), existingParentIds: none })
+    expect(plan.items[0]).toMatchObject({ chat: "120363432541591903", side: "client", op: "set", reactor: "17274521093" })
+    let st = P.applyResults({ state: P.emptyState(), plan, results: [{ i: 0, r: "applied" }], current: plan.current })
+    let removal: any = null
+    for (let i = 0; i < P.ABSENT_SCANS_BEFORE_REMOVAL; i++) {
+      const p = P.planScan({ rows: [row({ message_id: "OTHERMSG77", emoji: "🙏" })], state: st, existingParentIds: new Set(["3A005FCF60C597CA99D0"]), acceptRemovals: true })
+      const r = p.items.find((x: { op: string }) => x.op === "remove")
+      if (r) { removal = r; break }
+      st = p.nextState
+    }
+    expect(removal).toEqual({ ext_id: "3A005FCF60C597CA99D0", chat: "120363432541591903", side: "client", op: "remove", reactor: "17274521093" })
   })
 })
 
