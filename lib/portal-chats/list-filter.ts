@@ -6,10 +6,11 @@
  *   - All       every conversation.
  *   - Unread    the client wrote and nobody on the team has read it yet.
  *   - What's New  unhandled client-action notes (payments, signatures, forms…).
- *   - Chats     plain chats, newest first: conversations where a PERSON wrote (the client or the team),
- *               that are NOT pinned and have NO unhandled client action. A conversation that holds only
- *               automatic notices (sender_type 'system') is left out; pinned ones are under Pinned and
- *               ones with an unhandled client action under What's New (all three are still in All).
+ *   - Chats     ALL chats, newest first: every conversation where a PERSON wrote (the client or the team),
+ *               pinned or not, with or without an unhandled client action (Antonio, 2026-11-20: "Chat is for
+ *               all chats from the newest to the older"). Only a conversation that holds nothing but automatic
+ *               notices (sender_type 'system') is left out. Pinned ones are also under Pinned and ones with an
+ *               unhandled client action also under What's New.
  *   - Pinned    the manually pinned conversations (shared by all staff).
  *
  * "Chats" depends on a flag the threads route computes (`has_people_messages`). If that flag is
@@ -52,9 +53,9 @@ export function matchesListFilter(
     case "whatsnew":
       return whatsNewCountForThread(thread, counts) > 0
     case "chats":
-      // A plain chat: a person wrote (unknown, undefined, counts as written — see the file header), and it is not one of the
-      // conversations that have their own chip: pinned ones live under Pinned, ones with an unhandled client action under What's New.
-      return thread.has_people_messages !== false && thread.is_pinned !== true && whatsNewCountForThread(thread, counts) === 0
+      // A chat: a person wrote (unknown, undefined, counts as written — see the file header). Pinned and What's New do NOT take a
+      // conversation out of Chats any more (2026-11-20); only a notice-only conversation is left out.
+      return thread.has_people_messages !== false
     case "pinned":
       return thread.is_pinned === true
     default:
@@ -64,7 +65,7 @@ export function matchesListFilter(
 
 /**
  * The order the list is shown in. Under "Chats" it is a plain list, newest conversation first — no pinned or needs-attention
- * conversations floated to the top (Antonio, 2026-11-10: "in Chats … only chats, from the newest to the oldest"). Every other chip keeps
+ * conversations floated to the top (Antonio, 2026-11-10: "in Chats … only chats, from the newest to the oldest"; 2026-11-20: pinned too). Every other chip keeps
  * the usual order (pinned first, then what needs a look, then newest first).
  */
 export function orderThreadsForChip<T extends FilterableThread>(threads: T[], filter: ListFilter, counts?: WhatsNewCounts | null): T[] {
