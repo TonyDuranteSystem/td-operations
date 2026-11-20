@@ -1,0 +1,22 @@
+{
+  "title": "Portal Chats: the Chats tab shows all chats, newest first",
+  "tag": "improved",
+  "text": "A conversation with a pin or a What's New note used to disappear from the Chats tab. Now Chats lists every conversation where a person wrote, from the newest message to the oldest. Pinned and What's New keep their own tabs.",
+  "points": [
+    "Pinned conversations are in Chats, in date order",
+    "Conversations with a What's New note are in Chats too",
+    "Automatic-notice-only conversations stay out of Chats"
+  ],
+  "stepsTitle": "Finding a chat",
+  "steps": [
+    {
+      "name": "Open Portal Chats",
+      "detail": "The list opens on the Chats tab."
+    },
+    {
+      "name": "Read the list top to bottom",
+      "detail": "Newest message first, pinned or not.",
+      "flag": "new"
+    }
+  ]
+}
