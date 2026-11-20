@@ -25,6 +25,7 @@ import { handleClosureSetup } from "./handlers/closure-setup"
 import { handleCrmStoreRegisterUpload } from "./handlers/crm-store-register-upload"
 import { handleCrmStoreBackupOwner } from "./handlers/crm-store-backup-owner"
 import { handleStoreFileAnalyze } from "./handlers/store-file-analyze"
+import { handleTeamChangeNotice } from "./handlers/team-change-notice"
 
 /** Runner-supplied execution context (Phase 3R): the hard wall-clock deadline
  *  anchored to the RUNNER's invocation start — a chunked handler must stop
@@ -36,6 +37,8 @@ export interface JobRunContext {
 type JobHandler = (job: Job, ctx?: JobRunContext) => Promise<JobResult>
 
 const handlers: Record<string, JobHandler> = {
+  // Added 2026-11-18 — tells every owner/member when someone joins a company's team or gets more powers (Team Powers step 4).
+  team_change_notice: handleTeamChangeNotice,
   onboarding_setup: handleOnboardingSetup,
   formation_setup: handleFormationSetup,
   tax_form_setup: handleTaxFormSetup,

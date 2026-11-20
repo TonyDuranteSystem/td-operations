@@ -108,3 +108,17 @@ describe('resolvePortalIdentity', () => {
     expect(id.kind).toBe('contact')
   })
 })
+
+describe('the three newer ticks hang under the tick they need', () => {
+  it('"ask for new services" needs Chat; "answer decisions" needs Documents', () => {
+    expect(normalizeCapabilities({ request_services: true })).toEqual({})
+    expect(normalizeCapabilities({ chat: true, request_services: true })).toEqual({ chat: true, request_services: true })
+    expect(normalizeCapabilities({ answer_decisions: true })).toEqual({})
+    expect(normalizeCapabilities({ documents: true, answer_decisions: true })).toEqual({ documents: true, answer_decisions: true })
+  })
+  it('"company forms" stands on its own and is kept', () => {
+    expect(normalizeCapabilities({ company_forms: true })).toEqual({ company_forms: true })
+    expect(hasCapability(normalizeCapabilities({ company_forms: true }), 'company_forms')).toBe(true)
+    expect(hasCapability(normalizeCapabilities({}), 'company_forms')).toBe(false)
+  })
+})

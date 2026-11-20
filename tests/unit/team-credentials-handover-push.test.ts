@@ -97,7 +97,7 @@ describe('wiring (read from the source)', () => {
     expect(c).not.toContain('body.email')
     expect(c).not.toContain('body.password')
     const r = read('app/api/portal/team/[id]/reset-password/route.ts')
-    expect(r).toContain('resetTeammatePassword(params.id, accountId)')
+    expect(r).toContain('resetTeammatePassword(params.id, accountId, ownerActorFromRequest(')
     expect(r).not.toContain('body.password')
   })
   it('Team page: no email or password fields, handover pop-up, the notice for Nicholas and the members rule', () => {

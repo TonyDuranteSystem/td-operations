@@ -143,7 +143,7 @@ describe('/api/portal/wizard-submit — banking lane', () => {
     expect(st.personCalls[1].uploadPaths).toEqual([PASSPORT])
   })
   it('a teammate login (no person of its own) in a company with SEVERAL people: the personal papers are held with ONE alarm, never guessed', async () => {
-    st.identity = { kind: 'teammate', accountId: 'acc-1' }
+    st.identity = { kind: 'teammate', accountId: 'acc-1', capabilities: { bank_applications: true } }
     st.rows.account_contacts = [{ contact_id: 'c1' }, { contact_id: 'c2' }]
     await submit({ contact_id: null })
     await vi.waitFor(() => expect(st.recorded.some((r) => r.table === 'tasks' && r.op === 'insert')).toBe(true), { timeout: 3000 })
@@ -151,14 +151,14 @@ describe('/api/portal/wizard-submit — banking lane', () => {
     expect(st.alarms.filter((a) => a === 'banking_package_problem')).toHaveLength(1)
   })
   it('a teammate login in a company with ONE person: the row\'s contact is that person, so the first attempt files their papers (no false alarm)', async () => {
-    st.identity = { kind: 'teammate', accountId: 'acc-1' }
+    st.identity = { kind: 'teammate', accountId: 'acc-1', capabilities: { bank_applications: true } }
     await submit({ contact_id: null })
     await vi.waitFor(() => expect(st.personCalls.length).toBe(1), { timeout: 3000 })
     expect(st.personCalls[0].target.id).toBe('c1')
     expect(st.alarms).toEqual([])
   })
   it('a teammate login naming a contact that is NOT one of the company\'s people is refused', async () => {
-    st.identity = { kind: 'teammate', accountId: 'acc-1' }
+    st.identity = { kind: 'teammate', accountId: 'acc-1', capabilities: { bank_applications: true } }
     st.rows.account_contacts = null
     expect((await submit({ contact_id: 'someone-else' })).status).toBe(403)
     expect(st.personCalls).toEqual([])

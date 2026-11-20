@@ -8,6 +8,8 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { cookies } from 'next/headers'
 import { getClientContactId } from '@/lib/portal-auth'
+import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
+import { hasCapability } from '@/lib/portal/team/capabilities'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { ServiceRequestClient } from './service-request-client'
 
@@ -23,6 +25,12 @@ export default async function ServiceRequestPage() {
   // account chat (not the contact-fallback chat). Prefer the cookie set by
   // the account switcher; fall back to the contact's first account link.
   let accountId = ''
+  if (!contactId) {
+    // A team login (no contact): allowed only with the "Can ask for new services" tick, and always for its OWN company.
+    const identity = await resolvePortalIdentity(user)
+    if (identity.kind !== 'teammate' || !hasCapability(identity.capabilities, 'request_services')) redirect('/portal')
+    accountId = identity.accountId
+  }
   if (contactId) {
     const cookieAccountId = (await cookies()).get('portal_account_id')?.value
     const { data: links } = await supabaseAdmin

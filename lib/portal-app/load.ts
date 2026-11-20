@@ -30,6 +30,7 @@ import {
 } from '@/lib/portal/queries'
 import { resolveSelectedEntity, type SelectedEntity } from '@/lib/portal/select-entity'
 import { isAccountAdmin } from '@/lib/portal/team/account-admin'
+import { teamMustChangePassword } from '@/lib/portal/team/password-flag'
 import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
 import { computeHasWizardPending } from '@/lib/portal/wizard-visibility'
 import { getLocale, t as portalT } from '@/lib/portal/i18n'
@@ -123,6 +124,8 @@ export async function resolveAppAudience(
 ): Promise<AppAudience | AppRefusal> {
   // A team member a client added (Portal Team Access): scoped to ONE company, the menu follows what the owner granted.
   if ((user.app_metadata as Record<string, unknown> | undefined)?.kind === 'team_member') {
+    // Still on the temporary password: the website is where they choose their own (the app has no such screen).
+    if (teamMustChangePassword(user)) return refuse('NO_ACCESS', 'Please sign in on the website once and choose your own password, then open the app again.')
     const identity = await deps.resolveIdentity(user)
     if (identity.kind !== 'teammate') return refuse('NO_ACCESS', 'Your access has been removed. Please contact the company owner.')
     const account = await deps.getAccountById(identity.accountId)

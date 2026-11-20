@@ -30,6 +30,12 @@ export type PortalIdentity =
       capabilities: CapabilityFlags
       /** When the team member was added (their start date for company history unless the owner ticked 'invoice_history'). */
       createdAt?: string | null
+      /**
+       * True while this login has no notice on file (a login created before notices existed, until it accepts its own — step 6).
+       * While true, `capabilities` is EMPTY on purpose: every page and route that reads it sees "no powers", so the person can
+       * only reach the always-on home page and the banner. The real powers come back the moment they accept.
+       */
+      noticePending?: boolean
     }
   | { kind: 'none' }
 
@@ -43,6 +49,8 @@ export interface ResolveDeps {
     capabilities: unknown
     status: string
     created_at?: string | null
+    /** null = no notice on file yet (waiting). undefined (not selected) is treated as "not waiting". */
+    notice_version?: string | null
   } | null>
   getContactId: (user: User) => string | null
   getAccountIds: (contactId: string) => Promise<string[]>
@@ -56,7 +64,7 @@ const defaultDeps: ResolveDeps = {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data } = await (supabaseAdmin as any)
       .from('portal_team_members')
-      .select('id, account_id, display_name, email, capabilities, status, created_at')
+      .select('id, account_id, display_name, email, capabilities, status, created_at, notice_version')
       .eq('auth_user_id', authUserId)
       .maybeSingle()
     return (data as TeamMemberRow) ?? null
@@ -73,17 +81,25 @@ export async function resolvePortalIdentity(
 
   // Teammate branch — gated by the token marker, verified against the live table.
   if (meta.kind === 'team_member') {
+    // Still on the temporary password the owner handed over: NO access until they choose their own. This flag lives in app
+    // metadata (server-written only), so the person cannot clear it from the browser; /api/portal/change-password clears it.
+    if (meta.must_change_password === true) return { kind: 'none' }
     const row = await deps.fetchTeamMemberByAuthId(user.id)
     // Deny-by-default: missing row or non-active status → no access.
     if (!row || row.status !== 'active' || !row.account_id) return { kind: 'none' }
+    // No notice on file (strictly null — a value that was not selected does not count): hold every power back until the login
+    // accepts its own notice. One place, so no page or route can forget it.
+    const noticePending = row.notice_version === null
     return {
       kind: 'teammate',
       teamMemberId: row.id,
       accountId: row.account_id,
       displayName: row.display_name,
       email: row.email ?? null,
-      capabilities: normalizeCapabilities(row.capabilities),
+      capabilities: noticePending ? normalizeCapabilities({}) : normalizeCapabilities(row.capabilities),
       createdAt: row.created_at ?? null,
+      // Only present when true, so every other login's identity keeps exactly its old shape.
+      ...(noticePending ? { noticePending: true } : {}),
     }
   }
 

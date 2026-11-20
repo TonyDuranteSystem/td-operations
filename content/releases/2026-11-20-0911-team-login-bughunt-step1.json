@@ -1,0 +1,31 @@
+{
+  "title": "Team members: the owner decides, with three new ticks",
+  "tag": "improved",
+  "text": "The owner now decides, with three new ticks on the Team screen: \"Company forms (tax questionnaire)\", \"Can ask for new services\" and \"Can answer client decisions\". A team member can do these only when the owner ticks them. Their forms and uploads always stay inside their own company, and a service request is always filed under the person who is signed in. Signing, generating documents, changing owners and members, and managing the team stay with the owners.",
+  "points": [
+    "Team screen, add or edit a team member: the three new boxes are there",
+    "A team member with \"Can ask for new services\" sees Request a service in the menu"
+  ],
+  "stepsTitle": "What the owner can now allow",
+  "steps": [
+    {
+      "name": "Owner adds or edits a team member",
+      "detail": "On the Team screen, as before."
+    },
+    {
+      "name": "Owner ticks what they may do",
+      "detail": "Three new boxes: company forms (tax questionnaire), ask for new services, answer client decisions.",
+      "flag": "new"
+    },
+    {
+      "name": "The team member sees only that",
+      "detail": "Their menu and pages follow the ticks, always inside their own company.",
+      "flag": "auto"
+    },
+    {
+      "name": "These stay with the owners",
+      "detail": "Signing, generating documents, changing owners and members, managing the team.",
+      "flag": "locked"
+    }
+  ]
+}

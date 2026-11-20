@@ -10,6 +10,8 @@ vi.mock('@/lib/supabase/server', () => ({
   createClient: () => ({ auth: { getUser: async () => ({ data: { user: { id: 'u1', email: 'client@example.com' } } }) } }),
 }))
 vi.mock('@/lib/auth', () => ({ isClient: () => true }))
+// A real client login is a PERSON (a contact); a login that is nobody cannot mint an upload path.
+vi.mock('@/lib/portal/resolve-portal-identity', () => ({ resolvePortalIdentity: async () => ({ kind: 'contact', contactId: 'c1', accountIds: ['a1'] }) }))
 vi.mock('@/lib/supabase-admin', () => ({ supabaseAdmin: { storage: { from: () => ({ upload: async () => ({ error: null }) }) } } }))
 
 import { POST } from '@/app/api/portal/wizard-upload-url/route'

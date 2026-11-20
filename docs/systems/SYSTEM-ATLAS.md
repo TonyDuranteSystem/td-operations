@@ -107,7 +107,7 @@ _Regenerated 2026-11-20 by directory scan._
 - Client portal pages (32): `activity` `addresses` `banks` `billing` `change-password` `chat` `company` `customers` `deadlines` `documents` `flows` `forgot-password` `form` `guide` `invoices` `login` `members` `notifications` `offer` `partner` `profile` `referrals` `reset-password` `services` `settings` `sign` `tax-documents` `tax-financials` `td-communication` `team` `undo-email-change` `wizard`
 - API route groups (105)
 - Code modules (102): `accounts` `address-book` `ai-agent` `app` `app-mode` `archive` `audit` `auth` `billing` `bofa-intake` `booking` `booking-links` `calendly` `captures` `case-view` `catalog` `chat` `circleback` `closure` `code-tasks` `contacts` `contracts` `crm-lists` `crm-storage` `crm-store` `cron` `crypto` `decisions` `dev-tracker` `documents` `email` `email-index` `email-store` `embed` `errors` `esign` `exceptions` `fax` `finance` `flows` `formation` `forms` `forms-hub` `harbor-compliance` `hooks` `inbox` `incoming-payments` `infra` `internal` `invoices` `itin` `job-notes` `jobs` `leads` `lease` `legal` `marketing` `mcp` `media` `members` `messaging` `nav` `new-calendar` `notes` `notifications` `oa` `offers` `open-services` `operations` `partners` `payments` `pdf` `per-record-activity` `plan-invoices` `portal` `portal-app` `portal-chats` `public-forms` `push` `release` `research` `scan` `schemas` `security` `services` `signed-contracts` `ss4` `storage` `storage-app` `supabase` `system-health` `talk` `tasks` `tax` `td-communication` `team` `theme` `todo-board` `types` `ui` `utils` `windows`
-- Database tables: 326 _(ground truth: `lib/database.types.ts`)_
+- Database tables: 327 _(ground truth: `lib/database.types.ts`)_
 <!-- /GENERATED:surface -->
 
 ## Seed priority — write these deep docs first
@@ -192,7 +192,7 @@ _Regenerated 2026-11-20. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [booking.md](booking.md) — Booking page — Calendly links per audience (Stage 1a engine + Stage 1b screens + Stage 3 paid links) _(verified 2026-11-16)_
 - [captures.md](captures.md) — Capture / Share (screenshot tool) _(verified 2026-11-05)_
 - [client-app.md](client-app.md) — Client iPhone App (MyLLC Manager 2.0) _(verified 2026-11-18)_
-- [client-decision-requests.md](client-decision-requests.md) — Client Decision Requests _(verified 2026-10-20)_
+- [client-decision-requests.md](client-decision-requests.md) — Client Decision Requests _(verified 2026-11-18)_
 - [client-threads.md](client-threads.md) — Client Threads _(verified 2026-09-03)_
 - [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-11-19)_
 - [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-11-18)_

@@ -83,7 +83,7 @@ interface PortalSidebarProps {
   inProgressOnboardings?: InProgressOnboarding[]
   /** Set when an in-progress onboarding is the current selection. */
   selectedOnboardingId?: string
-  /** True when the logged-in user is the account admin for the selected company (can manage the Team tab). */
+  /** True when the logged-in user is a current owner or member of the selected company (can manage the Team tab). */
   canManageTeam?: boolean
   /** True when the logged-in user is a teammate (Portal Team Access) — nav filtered by capability. */
   isTeammate?: boolean
@@ -140,7 +140,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
   }, [])
   const { t } = useLocale()
 
-  // "NEW" badge on the Team nav item — shown to account-admins until they've seen
+  // "NEW" badge on the Team nav item — shown to owners and members until they've seen
   // the Team Access announcement. Shares the home banner's localStorage key so the
   // badge and banner clear together. Read in an effect to avoid hydration mismatch.
   const [showTeamNew, setShowTeamNew] = useState(false)

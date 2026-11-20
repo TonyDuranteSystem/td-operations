@@ -1,0 +1,32 @@
+{
+  "title": "Team screen: the owner confirms with a notice and password, and everyone is told",
+  "tag": "new",
+  "text": "Adding a team member now takes two steps. The owner ticks what the person can do, then reads a short responsibility notice, ticks that they understand and types their own password. Every other owner and member gets an email saying who was added and what they can do. Giving more power later asks for the same confirmation. The owner can switch a person off and on, and the sign-in message is in English. A new colleague can do nothing until they have chosen their own password.",
+  "points": [
+    "Team tab, Add team member: pick the powers, then confirm with the notice and your password",
+    "The other owners and members receive an email",
+    "Switch off and Switch on sit next to Reset password and Remove"
+  ],
+  "stepsTitle": "Adding a team member",
+  "steps": [
+    {
+      "name": "The owner picks the powers",
+      "detail": "Name and ticks, grouped in plain words. Signing and the owner-only things are listed as always locked."
+    },
+    {
+      "name": "The owner confirms",
+      "detail": "Reads the notice, ticks that they understand and types their own password.",
+      "flag": "new"
+    },
+    {
+      "name": "Everyone who owns or is a member is told",
+      "detail": "One email each, in their language. The sign-in details are shown once, only to the owner.",
+      "flag": "auto"
+    },
+    {
+      "name": "The colleague chooses their own password",
+      "detail": "Until then they can see nothing, and the server refuses everything else.",
+      "flag": "locked"
+    }
+  ]
+}

@@ -18,6 +18,8 @@ vi.mock('@/lib/supabase/server', () => ({
 }))
 
 vi.mock('@/lib/auth', () => ({ isClient: () => true }))
+// A real client login is a PERSON (a contact); a login that is nobody cannot mint an upload path.
+vi.mock('@/lib/portal/resolve-portal-identity', () => ({ resolvePortalIdentity: async () => ({ kind: 'contact', contactId: 'c1', accountIds: ['a1'] }) }))
 
 import { POST } from '@/app/api/portal/wizard-upload-url/route'
 import { WIZARD_UPLOAD_MAX_FILE_SIZE_BYTES } from '@/lib/portal/wizard-uploads'
