@@ -1,0 +1,6 @@
+{
+  "title": "Portal chat only opens your own conversations",
+  "tag": "behind-the-scenes",
+  "text": "The portal chat now checks, every time, that the person a request names is the person who is signed in. Before, a request that named the signed-in person's own company could also name someone else and be answered. Nothing changes on screen: the normal company chat, the personal chat and sending a message work as before, and TD staff can still read and answer every conversation from the dashboard.",
+  "points": []
+}
