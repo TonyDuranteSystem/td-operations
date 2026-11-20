@@ -73,3 +73,19 @@ describe("maskIdentifiers — the program's error text never keeps a customer's 
     expect(r.error).toContain("<chat>")
   })
 })
+
+describe("validateClaim — a WhatsApp GROUP", () => {
+  const claim = (over: Record<string, unknown> = {}) => ({ id: "0b1b3c1e-0000-4000-8000-000000000001", to_digits: "120363432541591903@g.us", external_message_id: "3A005FCF60C597CA99D0", emoji: "👍", attempt: 1, ...over })
+  it("accepts a group id and addresses the group as it is", () => {
+    const v = P.validateClaim(claim())
+    expect(v.ok).toBe(true)
+    expect(v.jid).toBe("120363432541591903@g.us")
+    expect(P.reactionPayload(v)).toEqual({ phone: "120363432541591903@g.us", emoji: "👍" })
+  })
+  it("a person is still a phone number; junk is still refused", () => {
+    expect(P.validateClaim(claim({ to_digits: "17274234285" })).jid).toBe("17274234285@s.whatsapp.net")
+    expect(P.validateClaim(claim({ to_digits: "1203@g.us" })).ok).toBe(false)
+    expect(P.validateClaim(claim({ to_digits: "abc@g.us" })).ok).toBe(false)
+  })
+})
+

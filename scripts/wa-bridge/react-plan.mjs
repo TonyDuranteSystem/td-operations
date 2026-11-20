@@ -33,11 +33,13 @@ export function backoffSeconds(reason, waitSeconds) {
 export function validateClaim(c) {
   if (typeof c !== "object" || c === null) return { ok: false, reason: "no claim" }
   if (typeof c.id !== "string" || !UUID_RE.test(c.id)) return { ok: false, reason: "bad id" }
-  if (typeof c.to_digits !== "string" || !/^[0-9]{6,15}$/.test(c.to_digits)) return { ok: false, reason: "bad number" }
+  // a person is a phone number; a WhatsApp GROUP arrives as its own id (<digits>@g.us) and is used as it is
+  const isGroup = typeof c.to_digits === "string" && /^[0-9]{16,30}@g\.us$/.test(c.to_digits)
+  if (typeof c.to_digits !== "string" || !(isGroup || /^[0-9]{6,15}$/.test(c.to_digits))) return { ok: false, reason: "bad number" }
   if (typeof c.external_message_id !== "string" || !/^[A-Za-z0-9]{4,64}$/.test(c.external_message_id)) return { ok: false, reason: "bad message id" }
   if (typeof c.emoji !== "string" || c.emoji.length > 32 || /\s/.test(c.emoji) || /^[A-Za-z0-9]+$/.test(c.emoji)) return { ok: false, reason: "bad emoji" }
   if (!Number.isInteger(c.attempt) || c.attempt < 1 || c.attempt > 100) return { ok: false, reason: "bad claim number" }
-  return { ok: true, id: c.id, attempt: c.attempt, jid: `${c.to_digits}@s.whatsapp.net`, extId: c.external_message_id, emoji: c.emoji }
+  return { ok: true, id: c.id, attempt: c.attempt, jid: isGroup ? c.to_digits : `${c.to_digits}@s.whatsapp.net`, extId: c.external_message_id, emoji: c.emoji }
 }
 
 /** The request body for the program's reaction endpoint (POST /message/{id}/reaction). */
