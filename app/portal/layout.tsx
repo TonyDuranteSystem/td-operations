@@ -33,6 +33,9 @@ import { EnablePushCard } from '@/components/portal/enable-push-card'
 import { PasswordGate } from '@/components/portal/password-gate'
 import { SuspendedGuard } from '@/components/portal/suspended-guard'
 import { ViewAsBanner } from '@/components/portal/view-as-banner'
+import { TeamLoginNoticeBanner } from '@/components/portal/team-login-notice-banner'
+import { getWaitingNotice } from '@/lib/portal/team/login-notice-server'
+import { teamLoginNoticeAcceptLabel, teamLoginNoticeBannerTitle, teamLoginNoticeLimitLine } from '@/lib/portal/team/login-notice'
 import { verifyViewAs, VIEW_AS_COOKIE } from '@/lib/portal/view-as'
 import { isValidTimeZone, shouldRefreshLastSeen } from '@/lib/portal/last-seen-location'
 import { supabaseAdmin } from '@/lib/supabase-admin'
@@ -112,6 +115,9 @@ export default async function PortalLayout({
     const tmTier = tmAccount?.portal_tier ?? 'active'
     const tmSuspended = tmAccount?.status === 'Suspended'
     const tmCanChat = identity.capabilities.chat === true
+    // Step 6: a login created before notices existed shows its own notice until it accepts (its powers are held back meanwhile).
+    const tmNoticeLang = tmLocale === 'it' ? 'it' : 'en'
+    const tmWaitingNotice = identity.noticePending ? await getWaitingNotice(user.id, tmNoticeLang) : null
     const [tmActiveServices, tmNavVisibility, tmTranslations] = tmSelectedAccountId
       ? await Promise.all([getPortalActiveServices(tmSelectedAccountId), getPortalNavVisibility(tmSelectedAccountId), loadTranslationsForLocale(tmLocale)])
       : [[] as string[], await getContactOnlyNavVisibility(), await loadTranslationsForLocale(tmLocale)]
@@ -154,6 +160,15 @@ export default async function PortalLayout({
                     <OfficeClock />
                   </div>
                 </>
+              )}
+              {tmWaitingNotice && (
+                <TeamLoginNoticeBanner
+                  lang={tmNoticeLang}
+                  bannerTitle={teamLoginNoticeBannerTitle(tmNoticeLang)}
+                  limitLine={teamLoginNoticeLimitLine(tmNoticeLang)}
+                  acceptLabel={teamLoginNoticeAcceptLabel(tmNoticeLang)}
+                  notice={tmWaitingNotice}
+                />
               )}
               {/* Team members have no email: chat alerts reach them ONLY through the installed app. So a team member who may
                   see chat gets the same notification switch and install prompts as a client (dev job e5d5400d). */}
