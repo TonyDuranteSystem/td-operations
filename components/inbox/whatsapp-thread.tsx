@@ -1112,13 +1112,13 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
                   {isRealMessage && (
                     <div className={cn('flex flex-wrap items-center gap-1 mt-1', isOutbound ? 'justify-end' : 'justify-start')}>
                       {reactionView.phone.map((p) => (
-                        <FastTooltip key={p.side} label={PHONE_SIDE_LABEL[p.side]}>
+                        <FastTooltip key={p.key} label={p.member ? `${p.name ?? 'A group member'} reacted on WhatsApp` : PHONE_SIDE_LABEL[p.side]}>
                           <span
                             data-testid={`wa-phone-reaction-${p.side}`}
                             className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-xs leading-none"
                           >
                             <span className="leading-none">{p.emoji}</span>
-                            <span className="text-[10px] text-emerald-700">{p.side === 'client' ? 'client' : 'phone'}</span>
+                            <span className="text-[10px] text-emerald-700">{p.member ? (p.name ? p.name.split(' ')[0] : 'member') : p.side === 'client' ? 'client' : 'phone'}</span>
                           </span>
                         </FastTooltip>
                       ))}

@@ -35,10 +35,22 @@ export const MAX_EMPTY_SCANS = 60
 
 export const emptyState = () => ({ acked: {}, tries: {}, absent: {}, emptyScans: 0, triedAt: {}, triedSig: {} })
 
-const keyOf = (messageId, side) => `${messageId}|${side}`
+const keyOf = (messageId, sideKey) => `${messageId}|${sideKey}`
+// A one-to-one chat is its phone number; a WhatsApp GROUP is its own long id (digits before @g.us). The CRM tells them apart by length.
 const digitsOfChat = (jid) => {
-  const m = /^(\d{6,15})@s\.whatsapp\.net$/.exec(typeof jid === "string" ? jid : "")
+  const m = /^(\d{6,15})@s\.whatsapp\.net$/.exec(typeof jid === "string" ? jid : "") || /^(\d{16,30})@g\.us$/.exec(typeof jid === "string" ? jid : "")
   return m ? m[1] : null
+}
+const isGroupJid = (jid) => typeof jid === "string" && jid.endsWith("@g.us")
+// WHO reacted in a group: the user part of their address (a phone number, or WhatsApp's hidden id when the number is not shared).
+const reactorOf = (jid) => {
+  const m = /^(\d{5,30})(?::\d+)?@(?:s\.whatsapp\.net|lid)$/.exec(typeof jid === "string" ? jid : "")
+  return m ? m[1] : null
+}
+/** "client:123" → { side: "client", reactor: "123" }; "client" / "line" → { side, reactor: null }. */
+export const splitSideKey = (sideKey) => {
+  const i = sideKey.indexOf(":")
+  return i < 0 ? { side: sideKey, reactor: null } : { side: sideKey.slice(0, i), reactor: sideKey.slice(i + 1) }
 }
 const toIso = (t) => {
   if (typeof t !== "string") return undefined
@@ -48,7 +60,8 @@ const toIso = (t) => {
 
 /**
  * Turn the raw rows (message_reactions LEFT JOIN messages) into the current picture: one entry per (message, side),
- * 1:1 phone chats only, newest write wins if the program holds two rows for the same side.
+ * newest write wins if the program holds two rows for the same side. In a one-to-one chat there are two sides (client / line);
+ * in a GROUP every member is their own reactor (key "<message>|client:<member>"), the business phone is still just "line".
  */
 export function currentReactions(rows) {
   const out = new Map()
@@ -58,11 +71,16 @@ export function currentReactions(rows) {
     if (!chat || typeof r.message_id !== "string" || !r.message_id) continue
     if (typeof r.emoji !== "string" || r.emoji === "") continue // an empty emoji row is not a reaction
     const side = Number(r.is_from_me) === 1 ? "line" : "client"
-    const key = keyOf(r.message_id, side)
+    let reactor = null
+    if (isGroupJid(r.chat_jid) && side === "client") {
+      reactor = reactorOf(r.reactor_jid)
+      if (!reactor) continue // a group reaction we cannot attribute to anyone is not drawn
+    }
+    const key = keyOf(r.message_id, reactor ? `${side}:${reactor}` : side)
     const prev = out.get(key)
     if (prev && String(prev.updated_at) >= String(r.updated_at)) continue
     out.set(key, {
-      key, ext_id: r.message_id, chat, side, emoji: r.emoji, ts: String(r.reaction_timestamp ?? ""), updated_at: String(r.updated_at ?? ""),
+      key, ext_id: r.message_id, chat, side, ...(reactor ? { reactor } : {}), emoji: r.emoji, ts: String(r.reaction_timestamp ?? ""), updated_at: String(r.updated_at ?? ""),
     })
   }
   return out
@@ -107,7 +125,7 @@ export function planScan({ rows, state, existingParentIds, acceptRemovals = fals
     if (a && a.emoji === c.emoji && a.ts === c.ts) continue
     // Reported before and the CRM said "I do not have that message yet": wait before asking again.
     if (st.tries[c.key] && st.triedSig[c.key] === `${c.emoji}|${c.ts}` && now - (st.triedAt[c.key] ?? 0) < UNMATCHED_RETRY_MS) continue
-    const it = { ext_id: c.ext_id, chat: c.chat, side: c.side, op: "set", emoji: c.emoji }
+    const it = { ext_id: c.ext_id, chat: c.chat, side: c.side, op: "set", emoji: c.emoji, ...(c.reactor ? { reactor: c.reactor } : {}) }
     const iso = toIso(c.ts)
     if (iso) it.reacted_at = iso
     items.push(it)
@@ -137,10 +155,10 @@ export function planScan({ rows, state, existingParentIds, acceptRemovals = fals
       for (const key of wantRemoval) {
         const sep = key.lastIndexOf("|")
         const messageId = key.slice(0, sep)
-        const side = key.slice(sep + 1)
+        const { side, reactor } = splitSideKey(key.slice(sep + 1))
         const chat = state.acked[key]?.chat ?? st.acked[key]?.chat
         if (!chat) { delete st.acked[key]; delete st.absent[key]; continue }
-        items.push({ ext_id: messageId, chat, side, op: "remove" })
+        items.push({ ext_id: messageId, chat, side, op: "remove", ...(reactor ? { reactor } : {}) })
         keys.push(key)
       }
     }
