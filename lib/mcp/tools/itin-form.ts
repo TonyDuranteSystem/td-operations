@@ -11,6 +11,7 @@ import { legacyFormSlug } from "@/lib/portal/submission-token"
 import { contactIdForLead } from "@/lib/crm-store/lead-form-store"
 import { APP_BASE_URL } from "@/lib/config"
 import type { Json } from "@/lib/database.types"
+import { localeFromLanguage } from "@/lib/locale"
 
 export function registerITINFormTools(server: McpServer) {
 
@@ -51,7 +52,7 @@ export function registerITINFormTools(server: McpServer) {
           fullName = lead.full_name || ""
           email = lead.email || ""
           phone = lead.phone || ""
-          _detectedLang = lead.language === "Italian" || lead.language === "it" ? "it" : "en"
+          _detectedLang = localeFromLanguage(lead.language)
 
           // Check if contact already exists
           if (!resolvedContactId && lead.email) {
@@ -82,7 +83,7 @@ export function registerITINFormTools(server: McpServer) {
               fullName = contact.full_name || ""
               email = contact.email || ""
               phone = contact.phone || ""
-              _detectedLang = contact.language === "Italian" || contact.language === "it" ? "it" : "en"
+              _detectedLang = localeFromLanguage(contact.language)
             }
           }
         }
@@ -209,10 +210,10 @@ export function registerITINFormTools(server: McpServer) {
         let lang: "en" | "it" = "en"
         if (sub.contact_id) {
           const { data: c } = await supabaseAdmin.from("contacts").select("language").eq("id", sub.contact_id).single()
-          if (c?.language === "Italian" || c?.language === "it") lang = "it"
+          if (localeFromLanguage(c?.language) === "it") lang = "it"
         } else if (sub.lead_id) {
           const { data: l } = await supabaseAdmin.from("leads").select("language").eq("id", sub.lead_id).single()
-          if (l?.language === "Italian" || l?.language === "it") lang = "it"
+          if (localeFromLanguage(l?.language) === "it") lang = "it"
         }
 
         const formUrl = `${APP_BASE_URL}/itin-form/${token}/${sub.access_code || ""}`

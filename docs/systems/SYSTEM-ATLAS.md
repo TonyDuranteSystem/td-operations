@@ -81,7 +81,7 @@ This is the single map of the whole system: every feature, where it lives, the r
 
 ## Appendix A — MCP tools
 <!-- GENERATED:mcp-tools -->
-_Regenerated 2026-11-19. Source of truth: uncommented `register*Tools(server)` in `app/api/[transport]/route.ts` (never a grep across tool files — an unregistered file is not active)._
+_Regenerated 2026-11-20. Source of truth: uncommented `register*Tools(server)` in `app/api/[transport]/route.ts` (never a grep across tool files — an unregistered file is not active)._
 
 **52 active tool groups**, **228 distinct tool names defined** in `lib/mcp/tools/` (a definition count, NOT a registration count — an unregistered file would inflate it; the group list below is the authoritative active set).
 
@@ -90,7 +90,7 @@ _Regenerated 2026-11-19. Source of truth: uncommented `register*Tools(server)` i
 
 ## Appendix B — Hooks & guardrails
 <!-- GENERATED:hooks -->
-_Regenerated 2026-11-19. Files in `.claude/hooks/` (test harnesses excluded); "registered" = referenced by a command in `.claude/settings.json`._
+_Regenerated 2026-11-20. Files in `.claude/hooks/` (test harnesses excluded); "registered" = referenced by a command in `.claude/settings.json`._
 
 **26 hook scripts**, of which **24 are registered** in settings.
 
@@ -101,7 +101,7 @@ _(bold = registered and firing; plain = present but not wired, e.g. a manual uti
 
 ## Appendix C — Surface area
 <!-- GENERATED:surface -->
-_Regenerated 2026-11-19 by directory scan._
+_Regenerated 2026-11-20 by directory scan._
 
 - CRM dashboard pages (59): `accounts` `address-book` `addresses` `audit` `bofa-intake` `booking` `calendar` `captures` `cases` `catalog` `client-health` `clients` `code-tasks` `config` `contacts` `conversations` `dashboard` `dev-board` `dev-tools` `email-templates` `exceptions` `finance` `flows` `forms` `inbox` `intake` `invoice-aging` `invoice-settings` `leads` `marketing-leads` `new-calendar` `notes` `onboarding-review` `owner` `partners` `payments` `pipeline` `pipeline-overview` `portal-chats` `portal-launch` `reconciliation` `referrals` `releases` `research` `sandbox-mail` `service-catalog` `services` `storage` `storage-app` `system-health` `tasks` `tax-returns` `td-talk` `team-chat` `team-management` `tools` `trackers` `workflow-issues` `workflows`
 - Client portal pages (32): `activity` `addresses` `banks` `billing` `change-password` `chat` `company` `customers` `deadlines` `documents` `flows` `forgot-password` `form` `guide` `invoices` `login` `members` `notifications` `offer` `partner` `profile` `referrals` `reset-password` `services` `settings` `sign` `tax-documents` `tax-financials` `td-communication` `team` `undo-email-change` `wizard`
@@ -128,7 +128,7 @@ Every system listed above now has a deep doc under `docs/systems/`, each written
 
 ## Appendix D — Guardrail rules
 <!-- GENERATED:rules -->
-_Regenerated 2026-11-19 from the R-rule list in CLAUDE.md — **45 rules**, highest is R116._
+_Regenerated 2026-11-20 from the R-rule list in CLAUDE.md — **45 rules**, highest is R116._
 
 - **R005** — td-operations.vercel.app is INTERNAL: NEVER send this domain to clients. {file:lib/config.ts}
 - **R012** — All client-facing URLs MUST use APP_BASE_URL from {file:lib/config.ts} — never hardcode domains; the .husky/pre-push hook blocks hardcoded domains.
@@ -179,14 +179,14 @@ _Regenerated 2026-11-19 from the R-rule list in CLAUDE.md — **45 rules**, high
 
 ## Appendix E — Subsystem deep docs
 <!-- GENERATED:deep-docs -->
-_Regenerated 2026-11-19. Every subsystem doc under `docs/systems/` (64 docs), with the date each was last verified against code — **an old date means treat that doc as a hint and check the code**._
+_Regenerated 2026-11-20. Every subsystem doc under `docs/systems/` (64 docs), with the date each was last verified against code — **an old date means treat that doc as a hint and check the code**._
 
 - [account-journey.md](account-journey.md) — Account journey (the card on the company page) _(verified 2026-11-19)_
 - [address-book.md](address-book.md) — Address book — standalone, reads the CRM, saves everyone else _(verified 2026-11-19)_
 - [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-11-18)_
 - [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-11-13)_
 - [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-11-18)_
-- [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-11-09)_
+- [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-11-11)_
 - [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-11-19)_
 - [bofa-intake.md](bofa-intake.md) — Bank Application Intake (Bank of America, one-time link) _(verified 2026-11-06)_
 - [booking.md](booking.md) — Booking page — Calendly links per audience (Stage 1a engine + Stage 1b screens + Stage 3 paid links) _(verified 2026-11-16)_
@@ -205,19 +205,19 @@ _Regenerated 2026-11-19. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-11-17)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-11-19)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-11-12)_
-- [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-11-19)_
+- [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-11-20)_
 - [incoming-payments.md](incoming-payments.md) — Incoming payments (Stripe payments with no label — "Payments to confirm") _(verified 2026-11-15)_
 - [leads.md](leads.md) — Leads — the Leads list (a tab of the Booking page) and the lead page _(verified 2026-11-15)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-11-19)_
 - [marketing.md](marketing.md) — TD Marketing (Rocco's and Ale's sales workspace) _(verified 2026-11-13)_
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-11-10)_
-- [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-11-19)_
+- [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-11-20)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-11-11)_
-- [offers.md](offers.md) — Offers & Contracts _(verified 2026-11-19)_
+- [offers.md](offers.md) — Offers & Contracts _(verified 2026-11-20)_
 - [onboarding.md](onboarding.md) — Onboarding _(verified 2026-11-19)_
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-22)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-11-19)_
-- [payment-plans.md](payment-plans.md) — Payment plans (a setup fee paid in parts) and the Calendar's "Invoices to raise" _(verified 2026-11-11)_
+- [payment-plans.md](payment-plans.md) — Payment plans (a setup fee paid in parts) and the Calendar's "Invoices to raise" _(verified 2026-11-20)_
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_
 - [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-11-19)_
 - [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-11-19)_
@@ -228,7 +228,7 @@ _Regenerated 2026-11-19. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [releases.md](releases.md) — Releases (what each release does — update bar panel + history page) _(verified 2026-11-12)_
 - [research-console.md](research-console.md) — Research Console _(verified 2026-08-18)_
 - [scan-document.md](scan-document.md) — Scan document (the chat attach tool) _(verified 2026-11-10)_
-- [service-contracts.md](service-contracts.md) — Service contracts (stored contract wording for NEW services) _(verified 2026-11-04)_
+- [service-contracts.md](service-contracts.md) — Service contracts (stored contract wording for NEW services) _(verified 2026-11-20)_
 - [signed-contracts.md](signed-contracts.md) — Signed contracts (the card on the Contact page) _(verified 2026-11-19)_
 - [slack-claude-worker.md](slack-claude-worker.md) — Slack Claude Worker — RETIRED (surface removed 2026-07-29) _(verified 2026-09-22)_
 - [social-app.md](social-app.md) — TD Social (iPhone app) — "app mode" on the web side _(verified 2026-11-17)_

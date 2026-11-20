@@ -25,7 +25,7 @@ function deps(results: Record<string, MemberLoginResult>, links: string[]) {
   const d: MemberLoginDeps = {
     listOpenLinks: async () => links,
     createLogin: async ({ contactId }) => { created.push(contactId); return results[contactId] },
-    contactInfo: async (id) => ({ fullName: `Name ${id}`, language: id === "it-member" ? "Italian" : "English" }),
+    contactInfo: async (id) => ({ fullName: `Name ${id}`, language: id === "it-member" ? "Italian" : id === "italiano-member" ? "Italiano" : "English" }),
     sendWelcome: async (p) => { sent.push(p); return { success: true } },
   }
   return { d, created, sent }
@@ -62,6 +62,12 @@ describe("createLoginsForLinkedMembers", () => {
 
   it("switch on: the email goes out in the member's own language", async () => {
     const { d, sent } = deps({ "it-member": fresh("it@x.com") }, ["it-member"])
+    await createLoginsForLinkedMembers({ accountId: "acc", tier: "active", welcomeEmailOn: true }, d)
+    expect(sent[0].language).toBe("it")
+  })
+
+  it("switch on: a free-text language like 'Italiano' still gets the Italian email (shared language helper)", async () => {
+    const { d, sent } = deps({ "italiano-member": fresh("ita@x.com") }, ["italiano-member"])
     await createLoginsForLinkedMembers({ accountId: "acc", tier: "active", welcomeEmailOn: true }, d)
     expect(sent[0].language).toBe("it")
   })

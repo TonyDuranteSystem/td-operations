@@ -12,6 +12,7 @@
  */
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import type { PortalTier } from '@/lib/portal/tier-config'
+import { localeFromLanguage } from '@/lib/locale'
 
 export interface MemberLoginResult {
   success: boolean
@@ -84,7 +85,7 @@ export async function createLoginsForLinkedMembers(
       counts.created++
       if (p.welcomeEmailOn && pr.tempPassword && pr.email) {
         const info = await deps.contactInfo(contactId)
-        const language = info.language === 'Italian' || info.language === 'it' ? 'it' : 'en'
+        const language = localeFromLanguage(info.language)
         const mail = await deps.sendWelcome({
           email: pr.email,
           fullName: info.fullName || pr.email,

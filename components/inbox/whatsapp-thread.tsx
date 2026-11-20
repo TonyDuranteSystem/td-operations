@@ -109,7 +109,7 @@ interface WhatsappThreadProps {
   /** Antonio, 2026-09-28: "I want to see the phone number next to the name" — this component already
    *  fetches the chat's own name/phone (for the send-confirm screen); this just reports it up to the
    *  header, which lives in the parent (inbox-shell.tsx), rather than that header re-fetching it itself. */
-  onChatInfo?: (info: { name: string | null; phone: string | null; nameSource?: string } | null) => void
+  onChatInfo?: (info: { name: string | null; phone: string | null; nameSource?: string; isGroup?: boolean } | null) => void
 }
 
 interface StagedFile {
@@ -153,6 +153,7 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
   const [text, setText] = useState('')
   const [file, setFile] = useState<StagedFile | null>(null)
   const [uploading, setUploading] = useState(false)
+  const [dragActive, setDragActive] = useState(false)
   const [confirming, setConfirming] = useState(false)
   // The confirm screen's language dropdown — like the Portal Chats card, switching it REWRITES the message
   // (Antonio, 2026-08-01 precedent). Reset whenever confirm opens, never carried over between chats/drafts.
@@ -249,7 +250,7 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
   const { data, isLoading, error } = useQuery<{
     messages: WhatsAppMessage[]
     send?: { mode: SendMode; hasInbound: boolean } | null
-    chat?: { name: string | null; phone: string | null; language: string | null; accountId: string | null; contactId: string | null; nameSource?: string } | null
+    chat?: { name: string | null; phone: string | null; language: string | null; accountId: string | null; contactId: string | null; nameSource?: string; isGroup?: boolean } | null
   }>({
     queryKey: ['whatsapp-messages', groupId],
     queryFn: () =>
@@ -275,7 +276,7 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
   useEffect(() => { onChatInfoRef.current = onChatInfo }, [onChatInfo])
   useEffect(() => { onChatInfoRef.current?.(null) }, [groupId])
   useEffect(() => {
-    if (data?.chat) onChatInfoRef.current?.({ name: data.chat.name, phone: data.chat.phone, nameSource: data.chat.nameSource })
+    if (data?.chat) onChatInfoRef.current?.({ name: data.chat.name, phone: data.chat.phone, nameSource: data.chat.nameSource, isGroup: data.chat.isGroup === true })
   }, [data?.chat])
   useEffect(() => () => onChatInfoRef.current?.(null), [])
 
@@ -752,14 +753,44 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
 
   const messages = data?.messages ?? []
   // Self-hosted line: `send` is present. The server enforces every rule; this only avoids offering a button that would be refused.
+  const isGroupChat = data?.chat?.isGroup === true
   const notice = data?.send ? sendNotice(data.send) : null
   const canSend = !data?.send || (data.send.mode !== 'paused' && data.send.hasInbound)
+
+  // Drag a file onto the chat to attach it (Antonio 2026-11-20: "I can't drag and drop a file in the group"). Same path as the
+  // paperclip: one file at a time, only while no file is staged, nothing is being recorded and the confirm step is not open.
+  const canDrop = !!data?.send && canSend && !file && !uploading && !confirming && !audioNoteRecorder.isRecording
+  const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files')
+  const handleDragOver = (e: React.DragEvent) => {
+    if (!hasFiles(e)) return
+    e.preventDefault() // without this the browser opens the file instead of handing it to us
+    if (canDrop) setDragActive(true)
+  }
+  const handleDragLeave = (e: React.DragEvent) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+    setDragActive(false)
+  }
+  const handleDrop = (e: React.DragEvent) => {
+    if (!hasFiles(e)) return
+    e.preventDefault()
+    setDragActive(false)
+    if (!canDrop) { toast.error(!canSend || !data?.send ? 'You cannot send in this chat right now.' : 'Finish or remove the current attachment first.'); return }
+    const files = Array.from(e.dataTransfer.files)
+    if (files.length === 0) return
+    if (files.length > 1) toast.message('One file at a time — attaching the first one.')
+    void uploadAndStageFile(files[0])
+  }
   // Attachments/voice notes ARE supported on the self-hosted line now (Antonio 2026-09-27) — kept as a named
   // constant since the paperclip button still needs to know "is this the wabridge line" for its upload route.
   const isWabridgeLine = !!data?.send
 
   return (
-    <div className="flex flex-col flex-1 min-h-0">
+    <div className="relative flex flex-col flex-1 min-h-0" onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop} data-testid="wa-thread-root">
+      {dragActive && (
+        <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center rounded-lg border-2 border-dashed border-blue-400 bg-blue-50/80 text-sm font-medium text-blue-700" data-testid="wa-drop-overlay">
+          Drop the file to attach it
+        </div>
+      )}
       {isLoading ? (
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {Array.from({ length: 6 }).map((_, i) => (
@@ -1081,13 +1112,13 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
                   {isRealMessage && (
                     <div className={cn('flex flex-wrap items-center gap-1 mt-1', isOutbound ? 'justify-end' : 'justify-start')}>
                       {reactionView.phone.map((p) => (
-                        <FastTooltip key={p.side} label={PHONE_SIDE_LABEL[p.side]}>
+                        <FastTooltip key={p.key} label={p.member ? `${p.name ?? 'A group member'} reacted on WhatsApp` : PHONE_SIDE_LABEL[p.side]}>
                           <span
                             data-testid={`wa-phone-reaction-${p.side}`}
                             className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-xs leading-none"
                           >
                             <span className="leading-none">{p.emoji}</span>
-                            <span className="text-[10px] text-emerald-700">{p.side === 'client' ? 'client' : 'phone'}</span>
+                            <span className="text-[10px] text-emerald-700">{p.member ? (p.name ? p.name.split(' ')[0] : 'member') : p.side === 'client' ? 'client' : 'phone'}</span>
                           </span>
                         </FastTooltip>
                       ))}
@@ -1156,7 +1187,9 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
           sending, so replying from an open conversation isn't a different,
           thinner experience than starting one (Antonio, 2026-09-17). */}
       {/* The footer can never be taller than the chat pane: it scrolls inside itself, and the confirm buttons stay pinned at its bottom (Antonio, 2026-11-06). */}
-      <div className="border-t bg-white shrink-0 max-h-[70%] overflow-y-auto">
+      {/* Scrolls ONLY on the confirm screen (a long message must not push its buttons off the screen). The normal message bar must NOT scroll or clip:
+          the attach menu and the emoji picker pop up ABOVE it, and a scrolling box cut them off (Antonio 2026-11-19: "the card to attach is behind the screen"). */}
+      <div className={cn('border-t bg-white shrink-0', confirming && 'max-h-[70%] overflow-y-auto')}>
         {notice && (
           <p className={cn('text-xs px-3 pt-2', notice.tone === 'warn' ? 'text-amber-700' : 'text-zinc-500')}>{notice.text}</p>
         )}
@@ -1323,13 +1356,19 @@ export function WhatsappThread({ groupId, registerInsertDraft, onChatInfo }: Wha
         ) : (
           <div className="p-3 space-y-2">
             {/* WHO it is going to — always shown, never assumed (a wrong open chat must be obvious here). */}
-            <p className="text-xs text-zinc-500">
-              Sending to{' '}
-              <span className="font-medium text-zinc-700">
-                {data?.chat?.name ?? 'this chat'}
-                {data?.chat?.phone ? ` (${data.chat.phone})` : ''}
-              </span>
-            </p>
+            {isGroupChat ? (
+              <p className="text-xs rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-amber-900" data-testid="wa-group-confirm-warning">
+                Sending to the <span className="font-semibold">GROUP “{data?.chat?.name ?? 'WhatsApp group'}”</span> — everyone in the group will see this message, and it cannot be taken back.
+              </p>
+            ) : (
+              <p className="text-xs text-zinc-500">
+                Sending to{' '}
+                <span className="font-medium text-zinc-700">
+                  {data?.chat?.name ?? 'this chat'}
+                  {data?.chat?.phone ? ` (${data.chat.phone})` : ''}
+                </span>
+              </p>
+            )}
             {/* A long message must never push Edit / Confirm & Send off the bottom of the window (Antonio, 2026-11-06): the preview scrolls inside itself. */}
             <div className="bg-zinc-50 rounded-lg p-3 text-sm whitespace-pre-wrap break-words max-h-[40vh] overflow-y-auto">
               {rewriting ? <span className="text-zinc-400">Rewriting…</span> : text || <span className="text-zinc-400">(no caption — just the attachment)</span>}
