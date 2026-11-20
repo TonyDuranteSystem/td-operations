@@ -1,0 +1,12 @@
+{
+  "title": "Relay bank application: owners can now be companies, with their representative",
+  "tag": "new",
+  "text": "The Relay application in the client portal had room for only one other owner, and only a person. Step 3 now lists every other owner as a card: a person, or a company together with its representative. The cards are filled in from the owners we already have on file; the client checks them, corrects anything wrong, adds a missing owner and ticks a confirmation. What the client changes stays on the application for the team to review, and the company's records are not changed automatically. The team's review and the filed copy list every owner and each representative.",
+  "points": [
+    "Client portal, Bank Applications, Relay, step 3: one card per other owner, person or company",
+    "A company card also asks for its representative (name, email, phone, address)",
+    "Everything we hold is filled in; the client confirms it at the bottom",
+    "The ownership must add up to 100% before the application can be sent"
+  ],
+  "screenshot": "relay-company-owners-and-representatives.png"
+}
