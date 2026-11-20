@@ -19,6 +19,7 @@ import { NewWhatsAppConversationDialog } from '@/components/messaging/new-whatsa
 import { NewWhatsAppRecipientPicker, type WhatsAppRecipient } from '@/components/messaging/new-whatsapp-recipient-picker'
 import { WhatsAppContactMatchBanner } from '@/components/messaging/whatsapp-contact-match-banner'
 import { WhatsAppGroupMembersDialog } from '@/components/inbox/whatsapp-group-members'
+import { WhatsAppGroupCompanyBar } from '@/components/inbox/whatsapp-group-company-bar'
 import { WhatsAppBackfillMatchesDialog } from '@/components/messaging/whatsapp-backfill-matches-dialog'
 import { ComposeReply } from './compose-reply'
 import { AppThreadActions } from './app-thread-actions'
@@ -2327,6 +2328,7 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
                         queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
                       }}
                     />
+                    {(selected.isGroup || waChatInfo?.isGroup) && <WhatsAppGroupCompanyBar key={`co-${whatsappGroupId}`} groupId={whatsappGroupId} />}
                     <WhatsappThread groupId={whatsappGroupId} registerInsertDraft={registerWaInsertDraft} onChatInfo={handleWaChatInfo} />
                   </div>
                   {/* Keyed per chat, like WorkerChatPanel below: no state may survive a chat switch. */}

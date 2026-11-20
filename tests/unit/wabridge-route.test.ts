@@ -781,8 +781,14 @@ describe("POST /api/wa-bridge/[channelId] — delivery / read receipts (message.
     expect(state.rpcCalls.map((c) => c.fn)).not.toContain("wabridge_ingest_message")
   })
 
-  it("answers 200 and writes nothing for unusable receipts (played, group, no ids)", async () => {
-    for (const over of [{ receipt_type: "played" }, { chat_id: "1203@g.us" }, { ids: [] }]) {
+  it("applies a GROUP receipt (the first member's stamp)", async () => {
+    const r = await call(ack({ chat_id: "120363432541591903@g.us" }))
+    expect(r.status).toBe(200)
+    expect(state.rpcCalls.map((c) => c.fn)).toEqual(["wabridge_apply_receipts"])
+  })
+
+  it("answers 200 and writes nothing for unusable receipts (played, status, no ids)", async () => {
+    for (const over of [{ receipt_type: "played" }, { chat_id: "status@broadcast" }, { ids: [] }]) {
       const r = await call(ack(over))
       expect(r.status).toBe(200)
     }
