@@ -1,5 +1,5 @@
 /**
- * Portal Team tab — account-admin only. Lets the company's main person invite
+ * Portal Team tab — company owners and members only. Lets an owner or member add
  * and manage employee logins. Teammates themselves can NEVER reach this page
  * (they are not contacts; the admin check fails) and the nav link is hidden.
  */
@@ -33,7 +33,7 @@ export default async function PortalTeamPage() {
 
   if (!accountId) return <NotAvailable />
 
-  // Only the account admin (main person) may manage the team.
+  // Only a current owner or member of this company may manage its team.
   const admin = await isAccountAdmin(contactId, accountId)
   if (!admin) return <NotAvailable />
 
@@ -50,7 +50,7 @@ function NotAvailable() {
   return (
     <div className="max-w-2xl mx-auto px-4 lg:px-8 py-16 text-center">
       <h1 className="text-lg font-semibold text-zinc-900">Team</h1>
-      <p className="text-sm text-zinc-500 mt-2">Team management is only available to the company&rsquo;s main contact.</p>
+      <p className="text-sm text-zinc-500 mt-2">Team management is only available to the company&rsquo;s owners and members.</p>
     </div>
   )
 }

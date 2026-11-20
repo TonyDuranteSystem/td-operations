@@ -938,7 +938,7 @@ export default async function PortalDashboardPage() {
   const taxTrackerShown = !!(trackerSteps && trackerTr)
   const flowsForStatus = flows.filter(f => !(taxTrackerShown && f.flow_type === 'Tax Return'))
 
-  // Team Access announcement is shown only to the account-admin (the only user
+  // Team Access announcement is shown only to owners and members (the only users
   // who can invite teammates). Same resolver the sidebar/layout uses.
   const canManageTeam = !!contactId && !!selectedAccountId
     ? await isAccountAdmin(contactId, selectedAccountId)
@@ -1057,7 +1057,7 @@ export default async function PortalDashboardPage() {
           {/* Relay Wire guide announcement — dismissible per device via localStorage */}
           <GuideAnnouncementBanner locale={locale} />
 
-          {/* Team Access feature announcement — account-admins only, dismissible per device */}
+          {/* Team Access feature announcement — owners and members only, dismissible per device */}
           {canManageTeam && <TeamAccessAnnouncementBanner locale={locale} />}
 
           {/* DB-backed portal announcements — managed from CRM Config → Announcements */}

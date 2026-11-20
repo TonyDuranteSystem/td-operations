@@ -7,7 +7,7 @@ import { TEAM_COPY, TEAM_DISMISS_KEY, TEAM_HREF } from '@/lib/portal-app/news'
 
 /**
  * One-time (per device) announcement for Portal Team Access. Rendered ONLY for
- * account-admins (the only users who can invite teammates) — the parent gates on
+ * owners and members (the only users who can add teammates) — the parent gates on
  * canManageTeam. Dismissal is stored in localStorage, mirroring
  * GuideAnnouncementBanner. Links to the "Invite your team" guide article.
  */
