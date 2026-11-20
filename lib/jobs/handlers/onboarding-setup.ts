@@ -30,6 +30,7 @@ import { validateOnboardingData, normalizeEIN } from "../validation"
 import { runOCRCrossCheck } from "../ocr-crosscheck"
 import { extractMembersFromWizardData } from "@/lib/utils/wizard-members"
 import { applyFormPortalAccess } from "@/lib/members/apply-form-portal-access"
+import { buildPortalInviteReminder } from "@/lib/jobs/portal-invite-reminder"
 import { resolveMemberContactId } from "@/lib/members/resolve-member-contact"
 import { upsertMemberRow } from "@/lib/members/write-member-row"
 import { normalizePersonName, normalizeEmail } from "@/lib/members/member-identity"
@@ -839,12 +840,10 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
       }
     }
 
-    // Portal invite reminder for all members
-    const memberNames = additionalMembers.map((m, i) =>
-      m.member_type === 'company'
-        ? (m.member_company_name ?? `Company Member ${i + 1}`)
-        : ([m.member_first_name, m.member_last_name].filter(Boolean).join(' ') || `Member ${i + 1}`)
-    ).join(', ')
+    // Portal invite reminder for the members who are meant to get a portal account. A member whose "portal access" tick
+    // was unticked in the form (dev job beb43385) is left out of it and named in a separate note (lib/jobs/portal-invite-reminder.ts).
+    const reminder = buildPortalInviteReminder(additionalMembers)
+    const leftOutNote = reminder.leftOutNames.length > 0 ? ` (left out, portal access unticked in the form: ${reminder.leftOutNames.join(', ')})` : ''
     // Idempotency guard (LT Program runaway-loop fix 2026-06-16): if this
     // handler is ever re-invoked for the same account, do NOT create a second
     // identical "create portal accounts" task. A single open copy is enough.
@@ -858,18 +857,18 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
       .maybeSingle()
     if (existingInviteTask) {
       result.steps.push(step('portal_invite_task', 'skipped', `Open task already exists (${existingInviteTask.id}) — not duplicating`))
+    } else if (reminder.description === null) {
+      // Everyone was unticked: nobody needs a portal account, so there is nothing to remind anyone about.
+      result.steps.push(step('portal_invite_task', 'skipped', `No member is meant to get a portal account${leftOutNote} — no reminder created`))
     } else {
       // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
       await supabaseAdmin.from('tasks').insert({
         task_title: `Create portal accounts for MMLLC members after LLC confirmation`,
-        description: `Create portal accounts for:\n${additionalMembers.map(m => {
-          if (m.member_type === 'company') return `• ${m.member_company_name ?? 'Company'} (rep: ${m.member_rep_email ?? 'no email'})`
-          return `• ${[m.member_first_name, m.member_last_name].filter(Boolean).join(' ')} — ${m.member_email ?? 'no email'}`
-        }).join('\n')}`,
+        description: reminder.description,
         assigned_to: 'Luca', priority: 'Low', category: 'Formation',
         status: 'To Do', account_id,
       })
-      result.steps.push(step('portal_invite_task', 'ok', `Portal invite reminder created for ${additionalMembers.length} member(s): ${memberNames}`))
+      result.steps.push(step('portal_invite_task', 'ok', `Portal invite reminder created for ${reminder.includedNames.length} member(s): ${reminder.includedNames.join(', ')}${leftOutNote}`))
     }
 
     await updateJobProgress(job.id, result)
