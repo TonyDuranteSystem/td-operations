@@ -102,6 +102,8 @@ export interface InboundJob {
   tag: string
   /** the start of the message shown under the name on the lock screen: the text of a WhatsApp message, the subject of an email ("" = none) */
   preview?: string
+  /** where a tap on the alert goes: the exact conversation (a same-site relative link) */
+  url?: string
   /** what the CRM links the conversation to (the name on the lock screen comes from here, never from the message) */
   who: { groupId?: string | null; contactId?: string | null; leadId?: string | null; accountId?: string | null }
 }
@@ -133,6 +135,7 @@ export function emailJobsFor(mailbox: string, rows: readonly EmailAlertFacts[], 
       place: mailbox,
       tag: `email:${mailbox}:${threadId}`,
       preview: newestSubject(list),
+      url: `/inbox?thread=${encodeURIComponent(`gmail:${threadId}`)}&mailbox=${mailbox}`,
       who: { contactId: linked.contact_id ?? null, leadId: linked.lead_id ?? null, accountId: linked.account_id ?? null },
     }
   })
@@ -153,6 +156,8 @@ export function whatsAppJobsFor(items: readonly { groupId: string; message: What
     messageIds: [m.externalId as string],
     tag: `whatsapp:${groupId}`,
     preview: whatsAppPreview(m),
+    // channel=whatsapp too, so the phone app picks the WhatsApp tab (it reads that from the link)
+    url: `/inbox?channel=whatsapp&thread=${encodeURIComponent(`whatsapp:${groupId}`)}`,
     who: { groupId },
   }))
 }

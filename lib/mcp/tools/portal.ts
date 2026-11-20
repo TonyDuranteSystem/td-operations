@@ -1314,7 +1314,7 @@ Supports both:
           await sendPushToStaffExcept(senderId, {
             title: `Team: ${contextName}`,
             body: msgText.slice(0, 100),
-            url: "/portal-chats?view=internal",
+            url: `/portal-chats?view=internal&thread=${threadId}`,
             tag: `internal-thread-${threadId}`,
             alertKind: "client_thread_message",
           })

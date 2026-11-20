@@ -489,8 +489,9 @@ export default function PortalChatsPage() {
     noteId?: string // the What's New note this card was opened from (marked handled on save)
   } | null>(null)
   // Internal team chat
-  const [sidebarView, setSidebarView] = useState<'chats' | 'internal' | 'actions'>('chats')
-  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null)
+  // `?view=internal&thread=<id>` opens one internal team thread straight away (a phone alert, a copied link): its own query loads it by id.
+  const [sidebarView, setSidebarView] = useState<'chats' | 'internal' | 'actions'>(urlParams.get('view') === 'internal' && urlParams.get('thread') ? 'internal' : 'chats')
+  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(urlParams.get('view') === 'internal' ? urlParams.get('thread') : null)
   // Make picking a chat a real Back step. Without this, switching chats changes
   // nothing the browser knows about, so the header Back arrow skips the whole
   // page and lands on the dashboard (Antonio, 2026-07-26). Restoring only sets

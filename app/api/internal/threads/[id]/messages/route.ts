@@ -98,7 +98,7 @@ export async function POST(
       await sendPushToStaffExcept(user.id, {
         title: `${displayName} — ${account?.company_name ?? 'Team'}`,
         body,
-        url: `/portal-chats?view=internal`,
+        url: `/portal-chats?view=internal&thread=${threadId}`,
         tag: `internal-thread-${threadId}`,
         alertKind: 'client_thread_message',
       })

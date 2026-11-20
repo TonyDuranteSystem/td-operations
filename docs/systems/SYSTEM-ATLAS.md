@@ -184,7 +184,7 @@ _Regenerated 2026-11-20. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [account-journey.md](account-journey.md) — Account journey (the card on the company page) _(verified 2026-11-19)_
 - [address-book.md](address-book.md) — Address book — standalone, reads the CRM, saves everyone else _(verified 2026-11-19)_
 - [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-11-18)_
-- [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-11-13)_
+- [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-11-20)_
 - [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-11-18)_
 - [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-11-11)_
 - [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-11-19)_
@@ -220,7 +220,7 @@ _Regenerated 2026-11-20. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [payment-plans.md](payment-plans.md) — Payment plans (a setup fee paid in parts) and the Calendar's "Invoices to raise" _(verified 2026-11-20)_
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_
 - [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-11-19)_
-- [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-11-19)_
+- [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-11-20)_
 - [portal-translation.md](portal-translation.md) — Portal Translation (any-language AI translation) _(verified 2026-09-23)_
 - [portal.md](portal.md) — Client Portal _(verified 2026-11-20)_
 - [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-11-12)_
@@ -241,7 +241,7 @@ _Regenerated 2026-11-20. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [td-books-ledger-plan.md](td-books-ledger-plan.md) — TD Books — 2025 filing, then the ledger, then the agent _(no date recorded)_
 - [td-books.md](td-books.md) — TD Books (My Finances — the owner's company books) _(verified 2026-11-06)_
 - [td-communication.md](td-communication.md) — TD Communication _(verified 2026-11-18)_
-- [team-workspace.md](team-workspace.md) — Team Workspace (internal Slack-replacement chat) _(verified 2026-11-18)_
+- [team-workspace.md](team-workspace.md) — Team Workspace (internal Slack-replacement chat) _(verified 2026-11-20)_
 - [todo-board.md](todo-board.md) — To-Do Board — "TO DO — FROM CHATS" (staff action cards) _(verified 2026-10-01)_
 - [whats-new.md](whats-new.md) — What's New (client-action chat-event feed) _(verified 2026-10-23)_
 - [workflow-engine.md](workflow-engine.md) — Workflow / Catalog Engine _(verified 2026-11-20)_
