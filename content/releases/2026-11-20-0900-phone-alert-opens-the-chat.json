@@ -9,6 +9,10 @@
   "stepsTitle": "Opening a chat from the lock screen",
   "steps": [
     {
+      "name": "Lock the phone and get an alert",
+      "detail": "A WhatsApp message or an email arrives."
+    },
+    {
       "name": "Tap the alert",
       "detail": "The app opens on that conversation.",
       "flag": "new"
