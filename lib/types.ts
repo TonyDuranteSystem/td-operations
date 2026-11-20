@@ -632,6 +632,8 @@ export interface InboxConversation {
   /** Payload-derived: any live message starred. Pin == the Gmail star (syncs
    *  both ways with the Gmail app). Absent on payloads that don't compute it. */
   starred?: boolean
+  /** WhatsApp only: this chat is a WhatsApp GROUP (several people), not one person. */
+  isGroup?: boolean
 }
 
 export interface InboxAttachment {

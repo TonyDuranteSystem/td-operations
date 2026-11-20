@@ -32,7 +32,7 @@ import { isTaxSeasonPaused } from "@/lib/settings"
 import { TIER_ORDER, type PortalTier } from "@/lib/portal/tier-config"
 import { normalizeFormationState, DEFAULT_FORMATION_STATE } from "@/lib/formation/states"
 import { offerSellsTaxReturn } from "@/lib/offers/compute-offer-totals"
-import { taxYearOfOffer, taxReturnServiceName } from "@/lib/offers/tax-year"
+import { taxYearOfOffer, taxReturnServiceName, taxYearAppliesToOffer } from "@/lib/offers/tax-year"
 import { ensureTaxReturnRecord } from "@/lib/tax/ensure-tax-return"
 
 // Auto-execute all steps immediately. Previous supervised mode with threshold
@@ -231,9 +231,12 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
     .single()
 
   const contractType = offer?.contract_type || "formation"
-  // The tax year a short-contract Tax Return line states ("Tax Return 2026"), or null. Only this kind of offer's year is read: on a formation / onboarding
-  // offer a bundled Tax Return keeps paying the previous year (dev job 0a60f416, part B).
-  const offerTaxYear = contractType === "tax_return" ? taxYearOfOffer(offer?.services).year : null
+  // The tax year the offer's Tax Return line states ("Tax Return 2026"), or null (no line, no year, several lines, or an offer whose Tax Return is not created
+  // here: formation / onboarding). Read for every other kind of offer — a closure, ITIN, name change… included — so the year typed in the builder is the
+  // year tracked (dev job 0a60f416 part B, widened by 06a3c8e9). A line with no year keeps paying the previous year, as before. A year in the future is
+  // never tracked (an offer edited by hand — offer_update, a package pick — skips the creation check): it is treated as "no year".
+  const statedTaxYear = taxYearAppliesToOffer(contractType) ? taxYearOfOffer(offer?.services).year : null
+  const offerTaxYear = statedTaxYear !== null && statedTaxYear <= new Date().getFullYear() ? statedTaxYear : null
   // A "formation" contract that clearly sells something else (DF Commerce: a
   // name change; SupraEmerge: a closure) gets NONE of the formation experience
   // — no formation SD, tier, wizard, welcome or label (workspace-only plan S1,

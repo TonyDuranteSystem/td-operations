@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { findOrCreateWhatsAppGroup } from "@/lib/messaging/groups"
+import { parseGroupsBatch } from "@/lib/messaging/wabridge-groups"
 import type { Json } from "@/lib/database.types"
 import {
   isFreshTs,
@@ -10,6 +11,7 @@ import {
   type WabridgeMessage,
 } from "@/lib/messaging/wabridge"
 import { parseHeartbeat } from "@/lib/messaging/wabridge-health"
+import { parseUpdateReport } from "@/lib/messaging/wabridge-update"
 import { emitUiEvent } from "@/lib/ui-events"
 import { isFreshInbound, inboundSignalPayload } from "@/lib/messaging/inbound-sound"
 import { alertNewWhatsApp } from "@/lib/app/inbound-alerts"
@@ -50,6 +52,7 @@ const MAX_NAME_ITEMS = 500
  *  - (GOWA's own webhook)  {event:"message", ...}     live message → saved
  *  - (GOWA's own webhook)  {event:"message.ack", payload:{ids, chat_id, receipt_type:"delivered"|"read"}}   receipt on one of OUR messages → ticks in the Inbox
  *  - {event:"bridge.heartbeat", ts, reachable, connected, logged_in}   health beat from the Mac (ts must be fresh)
+ *  - {event:"bridge.update.status", ts, state, message, current, latest}   the Mac's nightly WhatsApp-program update result (shown in the Inbox WhatsApp banner)
  *  - {event:"bridge.backfill", ts, items:[BackfillItem], live?}       history download batch (no unread, no revive);
  *                                                                     live:true = a recent CATCH-UP of messages the live path missed → treated as live (unread + revive)
  *  - {event:"bridge.names", ts, names:[{digits,name}]}                the phone's saved contact names
@@ -111,6 +114,21 @@ export async function POST(req: NextRequest, { params }: { params: { channelId: 
   }
   const now = new Date()
   const kind = typeof body === "object" && body !== null ? (body as Record<string, unknown>).event : undefined
+
+  // ─── The Mac's nightly update of the WhatsApp program reports what happened ───
+  if (kind === "bridge.update.status") {
+    const up = parseUpdateReport(body, now)
+    if (!up) return NextResponse.json({ error: "bad update report" }, { status: 400 })
+    if (up.ok === false) return NextResponse.json({ error: up.reason }, { status: 400 })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the two new columns are not in the generated types yet
+    const { error: upError } = await (supabaseAdmin as any)
+      .from("wa_bridge_state")
+      .update({ update_status: up.report, update_status_at: now.toISOString() })
+      .eq("channel_id", channel.id)
+    // Deployed before its database change (42703 = column missing): drop the report quietly, the banner just stays quiet.
+    if (upError && upError.code !== "42703") return NextResponse.json({ error: upError.message }, { status: 500 })
+    return NextResponse.json({ ok: true, update: true })
+  }
 
   // ─── Health beat from the Mac (GOWA itself emits no connect/disconnect event) ───
   if (kind === "bridge.heartbeat") {
@@ -337,6 +355,23 @@ export async function POST(req: NextRequest, { params }: { params: { channelId: 
     return NextResponse.json(finished)
   }
 
+  // ─── The phone's WhatsApp GROUPS (id + name), listed by the Mac every minute ───
+  // A group a client creates (or adds us to) appears in the Inbox within a minute, even before anyone writes in it; a renamed group
+  // gets its new name. Saved only: nothing is ever sent to WhatsApp from here.
+  if (kind === "bridge.groups") {
+    const parsedGroups = parseGroupsBatch(body, now)
+    if ("error" in parsedGroups) return NextResponse.json({ error: parsedGroups.error }, { status: 400 })
+    // the new database function is not in the generated types until the next regeneration, so this one call is untyped
+    const untyped = supabaseAdmin as unknown as { rpc: (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: { message: string } | null }> }
+    const { data: applied, error: groupsError } = await untyped.rpc("wabridge_apply_groups", {
+      p_channel_id: channel.id,
+      p_groups: parsedGroups.groups,
+    })
+    if (groupsError) return NextResponse.json({ error: groupsError.message }, { status: 500 })
+    if (typeof applied === "number" && applied > 0) await emitUiEvent("whatsapp")
+    return NextResponse.json({ ok: true, changed: applied ?? 0 })
+  }
+
   // ─── The phone's saved contact names → chat names ───
   if (kind === "bridge.names") {
     const b = body as { ts?: unknown; names?: unknown }
@@ -469,7 +504,8 @@ async function ingest(
     const groupResult = await findOrCreateWhatsAppGroup({
       channelId,
       remoteIdentifier: m.remoteDigits,
-      groupName: m.direction === "inbound" ? m.senderName : null,
+      // a GROUP's name comes from the phone's own group list (bridge.groups), never from whoever happened to write first
+      groupName: m.isGroup ? null : m.direction === "inbound" ? m.senderName : null,
     })
     if ("error" in groupResult) return "error"
     groupId = groupResult.group.id
@@ -478,7 +514,7 @@ async function ingest(
     // A LIVE message for a chat that is not yet linked to a lead/contact/company: try to link it on the spot (exact number,
     // one person, names agree — rules in wabridge_link_chat). Never blocks or fails the save: the 1-minute sweep is the safety net.
     const g = groupResult.group
-    if (!backfill && !g.lead_id && !g.contact_id && !g.account_id) {
+    if (!backfill && !m.isGroup && !g.lead_id && !g.contact_id && !g.account_id) {
       try {
         const { error: linkError } = await supabaseAdmin.rpc("wabridge_link_chat", { p_group_id: groupId })
         if (linkError) console.warn("[wa-bridge] auto-link failed (the 1-minute sweep will retry):", linkError.message)
@@ -493,7 +529,7 @@ async function ingest(
     p_channel_id: channelId,
     p_external_id: m.externalId,
     p_direction: m.direction,
-    p_sender_phone: m.direction === "inbound" ? `+${m.remoteDigits}` : null,
+    p_sender_phone: m.direction !== "inbound" ? null : m.isGroup ? (m.senderDigits ? `+${m.senderDigits}` : null) : `+${m.remoteDigits}`,
     p_sender_name: m.senderName,
     p_content_type: m.contentType,
     p_content_text: m.contentText,

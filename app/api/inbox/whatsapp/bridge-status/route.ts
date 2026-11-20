@@ -7,6 +7,7 @@ import { classifyBridge, describeBridgeProblem, type BridgeProblem } from "@/lib
 import { visibleLinkCode } from "@/lib/messaging/wabridge-link"
 import { recoverView, codeRequestView } from "@/lib/messaging/wabridge-commands"
 import { normalizeSendMode } from "@/lib/messaging/wabridge-outbox"
+import { updateNotice } from "@/lib/messaging/wabridge-update"
 
 export const dynamic = "force-dynamic"
 
@@ -79,9 +80,13 @@ export async function GET() {
     const codeReq = codeRequestView(stateRow, now)
     const recover = recoverView(stateRow, now)
 
+    // The Mac's nightly program-update report: any staff sees it (it holds no secret), worst channel's row first.
+    const update = updateNotice((worst.state ?? states?.[0] ?? null) as unknown as { update_status?: unknown; update_status_at?: string | null } | null, now)
+
     return NextResponse.json(
       {
         send,
+        update,
         health: worst.health,
         isOwner,
         reason: text?.reason ?? null,

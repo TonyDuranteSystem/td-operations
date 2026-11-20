@@ -122,7 +122,7 @@ describe("parseGowaEvent — messages", () => {
 
 describe("parseGowaEvent — things that must NOT become a thread", () => {
   it("ignores groups, status broadcasts, newsletters and unresolved @lid chats", () => {
-    expect(ignored(msg({ chat_id: "120363000000000000@g.us" }))).toMatch(/not a one-to-one/)
+    // groups are SAVED since 2026-11-19 — see tests/unit/wabridge-groups.test.ts
     expect(ignored(msg({ chat_id: "status@broadcast" }))).toMatch(/not a one-to-one/)
     expect(ignored(msg({ chat_id: "120363000000@newsletter" }))).toMatch(/not a one-to-one/)
     expect(ignored(msg({ chat_id: "251556368777322@lid" }))).toMatch(/not a one-to-one/)
@@ -158,7 +158,7 @@ describe("parseGowaEvent — @lid drops are flagged so they can be counted", () 
     expect(r).toMatchObject({ action: "ignore", code: "lid" })
   })
   it("does not flag groups or status as lid", () => {
-    expect((parseGowaEvent(msg({ chat_id: "120363000000@g.us" }), NOW) as { code?: string }).code).toBeUndefined()
+    expect((parseGowaEvent(msg({ chat_id: "status@broadcast" }), NOW) as { code?: string }).code).toBeUndefined()
     expect((parseGowaEvent(msg({ chat_id: "status@broadcast" }), NOW) as { code?: string }).code).toBeUndefined()
   })
 })
