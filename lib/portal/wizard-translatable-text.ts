@@ -99,6 +99,13 @@ function isWizardStep(value: unknown): value is WizardStep {
  * phrase never gets translated for a language outside en/it.
  */
 const WIZARD_UI_TEXT_EN: string[] = [
+  // wizard-client.tsx — Relay application, "Other Owners & Representatives" step (dev job 2751fb26)
+  'Please confirm the owners and representatives above are correct',
+  'You said the company has no other owners, so there is nothing to add here. If that is not right, go back one step and change your answer.',
+  'Our records list {n} other owner(s) for your company. If that is right, go back and change your answer to Yes so you can check them.',
+  'These are the other owners we have on file for your company. Please read every card, correct anything that is wrong, add any owner that is missing, and confirm at the bottom.',
+  'With no other owners your ownership must be 100%. If there are other owners, change your answer above.',
+  'Your share plus the owners below: {pctSum}% — must equal 100%.',
   // wizard-client.tsx — PrepareCsvStep
   '⚠️ Read this carefully before you start',
   'As part of your tax return, WE prepare your Profit & Loss (P&L) and Balance Sheet for you — the complete financial picture of your company.',

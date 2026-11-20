@@ -796,8 +796,55 @@ export const BANKING_PAYSET_FIELDS: Record<string, FieldConfig[]> = {
 export const BANKING_RELAY_STEPS: WizardStep[] = [
   { id: 'business', title: 'Business Information', titleIt: 'Informazioni Aziendali', description: 'Your LLC details', descriptionIt: 'Dettagli della tua LLC' },
   { id: 'owner', title: 'Owner Information & Documents', titleIt: 'Informazioni Titolare e Documenti', description: 'Personal details and documents', descriptionIt: 'Dati personali e documenti' },
-  { id: 'partner', title: 'Partner Information', titleIt: 'Informazioni Socio', description: 'If your LLC has additional members', descriptionIt: 'Se la tua LLC ha altri membri' },
+  // Every OTHER owner — a person or a company (with its representative). Rendered by the wizard's members
+  // machinery (step id 'members', keys member_{i}_<field>), prefilled from the CRM owners list so the client
+  // checks and confirms. Dev job 2751fb26; the rules live in lib/portal/relay-owners.ts.
+  { id: 'members', title: 'Other Owners & Representatives', titleIt: 'Altri Soci e Rappresentanti', description: 'Check the other owners we have on file — people or companies', descriptionIt: 'Controlla gli altri soci che abbiamo in archivio — persone o società' },
 ]
+
+/** One card per other owner of the LLC. Person and company fields mirror the formation members step; no passport/date of birth (Relay's pre-application does not need them here). */
+export const RELAY_MEMBER_FIELDS: FieldConfig[] = [
+  { name: 'member_type', label: 'Is this owner a person or a company?', labelIt: 'Questo socio è una persona o una società?', type: 'select', required: true, options: [
+    { value: 'individual', label: 'A person', labelIt: 'Una persona' },
+    { value: 'company', label: 'A company / entity', labelIt: 'Una società / entità' },
+  ] },
+  // ── Person ──
+  { name: 'member_first_name', label: 'First Name', labelIt: 'Nome', type: 'text', required: true, conditional: { field: 'member_type', value: 'individual' } },
+  { name: 'member_last_name', label: 'Last Name', labelIt: 'Cognome', type: 'text', required: true, conditional: { field: 'member_type', value: 'individual' } },
+  { name: 'member_email', label: 'Email', type: 'email', required: true, conditional: { field: 'member_type', value: 'individual' } },
+  { name: 'member_phone', label: 'Phone', labelIt: 'Telefono', type: 'tel', required: true, conditional: { field: 'member_type', value: 'individual' } },
+  { name: 'member_street', label: 'Street Address', labelIt: 'Indirizzo', type: 'text', required: true, conditional: { field: 'member_type', value: 'individual' } },
+  { name: 'member_city', label: 'City', labelIt: 'Città', type: 'text', required: true, conditional: { field: 'member_type', value: 'individual' } },
+  { name: 'member_state_province', label: 'State/Province', labelIt: 'Stato/Provincia', type: 'text', required: true, conditional: { field: 'member_type', value: 'individual' } },
+  { name: 'member_zip', label: 'ZIP/Postal Code', labelIt: 'CAP', type: 'text', required: true, conditional: { field: 'member_type', value: 'individual' } },
+  { name: 'member_country', label: 'Country', labelIt: 'Paese', type: 'country', required: true, conditional: { field: 'member_type', value: 'individual' } },
+  // ── Company ──
+  { name: 'member_company_name', label: 'Company Legal Name', labelIt: 'Ragione Sociale', type: 'text', required: true, conditional: { field: 'member_type', value: 'company' } },
+  { name: 'member_company_ein', label: 'Company EIN (if US)', labelIt: 'EIN Società (se USA)', type: 'text', required: false, format: 'ein', conditional: { field: 'member_type', value: 'company' } },
+  { name: 'member_company_street', label: 'Company Street Address', labelIt: 'Indirizzo Società', type: 'text', required: false, conditional: { field: 'member_type', value: 'company' } },
+  { name: 'member_company_city', label: 'Company City', labelIt: 'Città Società', type: 'text', required: false, conditional: { field: 'member_type', value: 'company' } },
+  { name: 'member_company_state', label: 'Company State/Province', labelIt: 'Stato Società', type: 'text', required: false, conditional: { field: 'member_type', value: 'company' } },
+  { name: 'member_company_zip', label: 'Company ZIP Code', labelIt: 'CAP Società', type: 'text', required: false, conditional: { field: 'member_type', value: 'company' } },
+  { name: 'member_company_country', label: 'Company Country', labelIt: 'Paese Società', type: 'country', required: true, conditional: { field: 'member_type', value: 'company' } },
+  // The representative — the person who acts for the company. The bank may contact them.
+  { name: 'member_rep_name', label: 'Representative Full Name', labelIt: 'Nome Rappresentante', type: 'text', required: true, conditional: { field: 'member_type', value: 'company' }, hint: 'The person who acts on behalf of this company.', hintIt: 'La persona che agisce per conto di questa società.' },
+  { name: 'member_rep_email', label: 'Representative Email', labelIt: 'Email Rappresentante', type: 'email', required: true, conditional: { field: 'member_type', value: 'company' } },
+  { name: 'member_rep_phone', label: 'Representative Phone', labelIt: 'Telefono Rappresentante', type: 'tel', required: false, conditional: { field: 'member_type', value: 'company' } },
+  { name: 'member_rep_address_street', label: 'Representative Street Address', labelIt: 'Indirizzo Rappresentante', type: 'text', required: false, conditional: { field: 'member_type', value: 'company' } },
+  { name: 'member_rep_address_city', label: 'Representative City', labelIt: 'Città Rappresentante', type: 'text', required: false, conditional: { field: 'member_type', value: 'company' } },
+  { name: 'member_rep_address_state', label: 'Representative State/Province', labelIt: 'Stato Rappresentante', type: 'text', required: false, conditional: { field: 'member_type', value: 'company' } },
+  { name: 'member_rep_address_zip', label: 'Representative ZIP', labelIt: 'CAP Rappresentante', type: 'text', required: false, conditional: { field: 'member_type', value: 'company' } },
+  { name: 'member_rep_address_country', label: 'Representative Country', labelIt: 'Paese Rappresentante', type: 'country', required: false, conditional: { field: 'member_type', value: 'company' } },
+  // ── Both ──
+  { name: 'member_ownership_pct', label: 'Ownership %', labelIt: 'Quota %', type: 'number', required: true, min: 0 },
+]
+
+/** The client's "check and confirm" tick under the owner cards (the cards are prefilled from our records). */
+export const RELAY_MEMBERS_CONFIRM_FIELD: FieldConfig = {
+  name: 'members_confirmed', label: 'Confirmation', labelIt: 'Conferma', type: 'checkbox', required: true,
+  hint: 'I have checked the owners and representatives above and they are correct.',
+  hintIt: 'Ho controllato i soci e i rappresentanti qui sopra e sono corretti.',
+}
 
 export const BANKING_RELAY_FIELDS: Record<string, FieldConfig[]> = {
   business: [
@@ -818,8 +865,8 @@ export const BANKING_RELAY_FIELDS: Record<string, FieldConfig[]> = {
     { name: 'personal_zip', label: 'ZIP/Postal Code', labelIt: 'CAP', type: 'text', required: true },
     { name: 'personal_phone', label: 'Personal Phone', labelIt: 'Telefono Personale', type: 'tel', required: true },
     { name: 'personal_email', label: 'Personal Email', labelIt: 'Email Personale', type: 'email', required: true },
-    { name: 'equity_pct', label: 'Ownership %', labelIt: 'Quota Societaria %', type: 'number', required: true },
-    { name: 'has_partner', label: 'Do you have a business partner?', labelIt: 'Hai un socio?', type: 'select', required: true, options: [
+    { name: 'equity_pct', label: 'Ownership %', labelIt: 'Quota Societaria %', type: 'number', required: true, min: 0 },
+    { name: 'has_partner', label: 'Does the company have other owners (people or companies)?', labelIt: 'La società ha altri soci (persone o società)?', type: 'select', required: true, hint: 'If yes, the next step lists them so you can check and confirm.', hintIt: 'Se sì, il passo successivo li elenca così puoi controllarli e confermarli.', options: [
       { value: 'No', label: 'No' },
       { value: 'Yes', label: 'Yes', labelIt: 'Sì' },
     ]},
@@ -827,17 +874,8 @@ export const BANKING_RELAY_FIELDS: Record<string, FieldConfig[]> = {
     { name: 'proof_of_address', label: 'Proof of Address', labelIt: 'Prova di Residenza', type: 'file', required: true },
     { name: 'disclaimer_accepted', label: 'Confirmation', labelIt: 'Conferma', type: 'checkbox', required: true, hint: 'I confirm that all information provided is accurate and complete.', hintIt: 'Confermo che tutte le informazioni fornite sono accurate e complete.' },
   ],
-  partner: [
-    { name: 'partner_first_name', label: 'Partner First Name', labelIt: 'Nome Socio', type: 'text', required: true, conditional: { field: 'has_partner', value: 'Yes' } },
-    { name: 'partner_last_name', label: 'Partner Last Name', labelIt: 'Cognome Socio', type: 'text', required: true, conditional: { field: 'has_partner', value: 'Yes' } },
-    { name: 'partner_street', label: 'Partner Address', labelIt: 'Indirizzo Socio', type: 'text', required: true, conditional: { field: 'has_partner', value: 'Yes' } },
-    { name: 'partner_city', label: 'Partner City', labelIt: 'Città Socio', type: 'text', required: true, conditional: { field: 'has_partner', value: 'Yes' } },
-    { name: 'partner_state', label: 'Partner State', labelIt: 'Stato Socio', type: 'text', required: true, conditional: { field: 'has_partner', value: 'Yes' } },
-    { name: 'partner_zip', label: 'Partner ZIP', labelIt: 'CAP Socio', type: 'text', required: true, conditional: { field: 'has_partner', value: 'Yes' } },
-    { name: 'partner_phone', label: 'Partner Phone', labelIt: 'Telefono Socio', type: 'tel', required: true, conditional: { field: 'has_partner', value: 'Yes' } },
-    { name: 'partner_email', label: 'Partner Email', labelIt: 'Email Socio', type: 'email', required: true, conditional: { field: 'has_partner', value: 'Yes' } },
-    { name: 'partner_equity_pct', label: 'Partner Ownership %', labelIt: 'Quota Socio %', type: 'number', required: true, conditional: { field: 'has_partner', value: 'Yes' } },
-  ],
+  // Every other owner, one card each — see RELAY_MEMBER_FIELDS and lib/portal/relay-owners.ts.
+  members: RELAY_MEMBER_FIELDS,
 }
 
 // ─── CLOSURE (LLC Dissolution) ────────────────────────────

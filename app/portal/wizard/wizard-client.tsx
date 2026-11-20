@@ -6,7 +6,8 @@ import { WizardShell, type WizardStep } from '@/components/portal/wizard/wizard-
 import { WizardField, type FieldConfig } from '@/components/portal/wizard/wizard-field'
 import { ReviewNote, FLAGGED_FIELD_CLASS } from '@/components/portal/wizard/review-note'
 import { resolveClientLabel } from '@/lib/tax/review-labels'
-import { getWizardConfig, wizardCollectsOwnerMembers, wizardRequiresSs4Signer, OWNER_ITIN_FIELD, MEMBER_ITIN_FIELD, MEMBER_PORTAL_ACCESS_FIELD, TAX_MEMBER_FIELDS } from '@/components/portal/wizard/wizard-configs'
+import { getWizardConfig, wizardCollectsOwnerMembers, wizardRequiresSs4Signer, OWNER_ITIN_FIELD, MEMBER_ITIN_FIELD, MEMBER_PORTAL_ACCESS_FIELD, RELAY_MEMBERS_CONFIRM_FIELD, TAX_MEMBER_FIELDS } from '@/components/portal/wizard/wizard-configs'
+import { finalizeRelayAnswers, hasOtherOwners, ownershipTotalIsValid, relayOwnershipTotal, soleOwnerShareIsValid, withoutCardPrefillWhenDraftHasCards } from '@/lib/portal/relay-owners'
 import { useLocale } from '@/lib/portal/use-locale'
 import { LOGIN_EMAIL_FIELD, mustReadAckKey } from '@/lib/portal/login-email-field'
 import { ChangeLoginEmailDialog } from '@/components/portal/change-login-email-dialog'
@@ -406,7 +407,9 @@ export function WizardClient({
   // (legacy "5000") becomes a number on load so the step gate and the server
   // agree; an unanswered "80.000" stays a string and re-asks its question.
   // A locked answer (the portal login email) always wins over a saved draft: an old draft may hold an email typed before the box was locked.
-  const initialData = normalizeMoneyData(steps, fields, { ...prefillData, ...filteredSaved, ...(lockedValues ?? {}) }, { clearHiddenPending: false })
+  // Relay: once a draft holds owner cards it IS the list — the CRM prefill only fills a form with no cards yet.
+  const effectivePrefill = wizardType === 'banking_relay' ? withoutCardPrefillWhenDraftHasCards(prefillData, filteredSaved) : prefillData
+  const initialData = normalizeMoneyData(steps, fields, { ...effectivePrefill, ...filteredSaved, ...(lockedValues ?? {}) }, { clearHiddenPending: false })
 
   const isResubmitMode = initialSubmitStatus === 'submitted' && !isLocked
 
@@ -424,6 +427,9 @@ export function WizardClient({
   // belong only to the EIN-application wizards, not to tax. See
   // wizardRequiresSs4Signer for why tax was carrying it.
   const requiresSs4Signer = isMMLLC && wizardRequiresSs4Signer(wizardType)
+  // The Relay bank application's "other owners" step (dev job 2751fb26): every other owner is a card, a person or a
+  // company with its representative, prefilled from the CRM owners list for the client to check and confirm.
+  const isRelay = wizardType === 'banking_relay'
 
   const [currentStep, setCurrentStep] = useState(Math.min(savedStep, steps.length - 1))
   const [formData, setFormData] = useState<Record<string, string | string[] | boolean | number>>(initialData)
@@ -505,7 +511,9 @@ export function WizardClient({
   const handleFieldChange = useCallback((name: string, value: string | string[] | boolean | number) => {
     // A locked answer (the portal login email) cannot be edited, whatever calls this.
     if (lockedNow && name in lockedNow) return
-    setFormData(prev => ({ ...prev, [name]: value }))
+    // Relay: any edit of the owner cards (or adding one) withdraws the "I have checked" tick — it must be given again.
+    const withdrawsConfirm = isRelay && name.startsWith('member_')
+    setFormData(prev => withdrawsConfirm && prev['members_confirmed'] === true ? { ...prev, [name]: value, members_confirmed: false } : { ...prev, [name]: value })
     dirtyRef.current = true
     // Clear any server-side validation error for this field when the user edits it
     setFieldErrors(prev => prev.length > 0 ? prev.filter(e => e.field !== name) : prev)
@@ -514,7 +522,7 @@ export function WizardClient({
       const owner = name.slice(0, -'_read'.length)
       setFieldErrors(prev => prev.length > 0 ? prev.filter(e => e.field !== owner) : prev)
     }
-  }, [lockedNow])
+  }, [lockedNow, isRelay])
 
   // File upload handler — uploads the file DIRECTLY to Supabase Storage with a
   // RESUMABLE (TUS) upload: 6MB chunks, auto-retry on network blips, progress
@@ -697,6 +705,8 @@ export function WizardClient({
     }
 
     if (stepId === 'members') {
+      // Relay: no other owners = nothing to check on this step.
+      if (isRelay && !hasOtherOwners(formData)) return errs
       for (let idx = 0; idx < memberCount; idx++) {
         const rawType = formData[`member_${idx}_member_type`]
         const resolvedType = (rawType === undefined || rawType === null || rawType === '') ? 'individual' : String(rawType)
@@ -711,6 +721,23 @@ export function WizardClient({
           if (field.required && isEmptyValue(formData[key])) errs[key] = reqMsg
           else if (belowFieldMin(field, formData[key])) errs[key] = minMsg
           else if (malformedEin(field, formData[key])) errs[key] = einMsg
+        }
+      }
+      if (isRelay) {
+        // The person filling the form (owner step) plus every card must add up to 100%, and the client must tick
+        // that the owners shown are correct — the cards are prefilled from our records, so this is the "check and confirm".
+        const relayTotal = relayOwnershipTotal(formData, memberCount)
+        if (!ownershipTotalIsValid(relayTotal)) {
+          errs['__members_ownership'] = interpolateString(
+            pickText('Ownership shares must total 100% (currently {pctSum}%)', 'Le quote dei soci devono sommare al 100% (ora: {pctSum}%)')!,
+            { pctSum: relayTotal },
+          )
+        }
+        if (formData['members_confirmed'] !== true) {
+          errs['members_confirmed'] = pickText(
+            'Please confirm the owners and representatives above are correct',
+            'Conferma che i soci e i rappresentanti qui sopra sono corretti',
+          )!
         }
       }
       if (wizardType === 'tax' && isMMLLC) {
@@ -776,8 +803,15 @@ export function WizardClient({
       if (p.stepIndex !== stepIndex || errs[p.key]) continue
       errs[p.key] = moneyMsg(p, formData[p.key])
     }
+    // Relay: "no other owners" means this person holds the whole company, so their share must be 100%.
+    if (isRelay && stepId === 'owner' && !errs['equity_pct'] && !soleOwnerShareIsValid(formData)) {
+      errs['equity_pct'] = pickText(
+        'With no other owners your ownership must be 100%. If there are other owners, change your answer above.',
+        'Senza altri soci la tua quota deve essere 100%. Se ci sono altri soci, cambia la risposta qui sopra.',
+      )!
+    }
     return errs
-  }, [steps, fields, formData, memberCount, repeaterCounts, wizardType, isMMLLC, reqMsg, minMsg, einMsg, institutions, pickText, moneyMsg, mustReadActive, readMsg])
+  }, [steps, fields, formData, memberCount, repeaterCounts, wizardType, isMMLLC, isRelay, reqMsg, minMsg, einMsg, institutions, pickText, moneyMsg, mustReadActive, readMsg])
 
   const getStepErrors = useCallback(() => computeStepErrors(currentStep), [computeStepErrors, currentStep])
 
@@ -787,6 +821,7 @@ export function WizardClient({
   // error list + the highlighted field read plainly (not `member_0_member_zip`).
   const labelForKey = useCallback((key: string): string => {
     if (key === '__members_ownership') return pickText('Member ownership', 'Quote dei soci')!
+    if (key === 'members_confirmed') return pickText('Confirmation', 'Conferma')!
     // Search the current step first, then every other step — a submit-time
     // error (money check / server 400) can name a field on another step, and
     // must still read as its plain label, never the raw key.
@@ -797,7 +832,8 @@ export function WizardClient({
     // member_{idx}_{name}
     const m = key.match(/^member_\d+_(.+)$/)
     if (m) {
-      const f = TAX_MEMBER_FIELDS.find(ff => ff.name === m[1])
+      // Relay's owner cards carry their own labels; every other wizard keeps reading the tax member labels.
+      const f = (isRelay ? (fields.members ?? TAX_MEMBER_FIELDS) : TAX_MEMBER_FIELDS).find(ff => ff.name === m[1])
       if (f) return pick(f)
     }
     // {repeater}_{idx}_{sub}
@@ -813,7 +849,7 @@ export function WizardClient({
     const top = stepFields.find(f => f.name === key)
     if (top) return pick(top)
     return key
-  }, [currentStep, steps, fields, pickText])
+  }, [currentStep, steps, fields, pickText, isRelay])
 
   // After a jump to another step, scroll to the offending field once that
   // step has rendered (querying before the render found nothing and fell back
@@ -947,7 +983,9 @@ export function WizardClient({
     // strings to numbers and clear pending text left in fields the client has
     // since hidden — into a LOCAL copy, which is what gets posted (a state
     // update would not reach this closure's fetch).
-    const submitData = normalizeMoneyData(steps, fields, formData, { clearHiddenPending: true })
+    const normalizedData = normalizeMoneyData(steps, fields, formData, { clearHiddenPending: true })
+    // Relay: "no other owners" means no owner cards go to staff, even if the client first said yes.
+    const submitData = isRelay ? finalizeRelayAnswers(normalizedData, memberCount) : normalizedData
     const moneyProblems = findMoneyProblems(steps, fields, submitData)
     if (moneyProblems.length > 0) {
       const target = moneyProblems[0].stepIndex
@@ -1148,7 +1186,7 @@ export function WizardClient({
         "Invio non riuscito dopo alcuni tentativi. Aggiorna la pagina: se risulta già inviato, è andato a buon fine.",
       )!,
     )
-  }, [wizardType, effectiveEntityType, formData, accountId, contactId, leadId, offerId, currentProgressId, raiseStepErrors, isResubmitMode, itinCount, memberCount, isMMLLC, requiresSs4Signer, pickText, closureServiceDeliveryId, steps, fields, moneyMsg, currentStep, locale, labelForKey])
+  }, [wizardType, effectiveEntityType, formData, accountId, contactId, leadId, offerId, currentProgressId, raiseStepErrors, isResubmitMode, itinCount, memberCount, isMMLLC, isRelay, requiresSs4Signer, pickText, closureServiceDeliveryId, steps, fields, moneyMsg, currentStep, locale, labelForKey])
 
   // Auto-save on step change
   const handleStepChange = useCallback((step: number) => {
@@ -1552,9 +1590,35 @@ export function WizardClient({
           acknowledged={formData['prepare_acknowledged'] === true}
           onAcknowledge={v => handleFieldChange('prepare_acknowledged', v)}
         />
+      ) : isMembersStep && isRelay && !hasOtherOwners(formData) ? (
+        <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-700">
+          {pickText(
+            'You said the company has no other owners, so there is nothing to add here. If that is not right, go back one step and change your answer.',
+            'Hai indicato che la società non ha altri soci, quindi qui non c\'è nulla da aggiungere. Se non è corretto, torna al passo precedente e cambia la risposta.',
+          )}
+          {Number(prefillData.member_count) > 0 && (
+            <p className="mt-2 font-medium text-amber-800">
+              {interpolateString(
+                pickText(
+                  'Our records list {n} other owner(s) for your company. If that is right, go back and change your answer to Yes so you can check them.',
+                  'Nei nostri archivi risultano {n} altri soci per la tua società. Se è così, torna indietro e cambia la risposta in Sì per controllarli.',
+                )!,
+                { n: Number(prefillData.member_count) },
+              )}
+            </p>
+          )}
+        </div>
       ) : isMembersStep ? (
         /* Members repeater — add/remove members */
         <div className="space-y-6">
+          {isRelay && (
+            <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+              {pickText(
+                'These are the other owners we have on file for your company. Please read every card, correct anything that is wrong, add any owner that is missing, and confirm at the bottom.',
+                'Questi sono gli altri soci che abbiamo in archivio per la tua società. Leggi ogni scheda, correggi ciò che non è giusto, aggiungi i soci mancanti e conferma in fondo.',
+              )}
+            </div>
+          )}
           {memberTickOn && requiresSs4Signer && (
             <Ss4EinLetterNotice
               title={pickText('The person who signs the SS-4 is the person who appears on the EIN letter.', 'La persona che firma il modulo SS-4 è la persona che compare sulla lettera EIN.')!}
@@ -1591,6 +1655,7 @@ export function WizardClient({
                         // so a stale member_{i}_is_signer key isn't submitted.
                         delete next[`member_${newCount}_is_signer`]
                         next.member_count = newCount
+                        if (isRelay) next.members_confirmed = false
                         return next
                       })
                       // If the removed member was the signer, clear the selection
@@ -1667,11 +1732,14 @@ export function WizardClient({
 
           {/* Live ownership total — tax MMLLC requires every member (including
               the person filling the form) to total exactly 100%. */}
-          {wizardType === 'tax' && (() => {
-            let pctSum = 0
-            for (let i = 0; i < memberCount; i++) {
-              const v = Number(formData[`member_${i}_member_ownership_pct`])
-              if (!Number.isNaN(v)) pctSum += v
+          {(wizardType === 'tax' || isRelay) && (() => {
+            // Relay counts the person filling the form (owner step) plus every card; tax counts the cards (they ARE everyone).
+            let pctSum = isRelay ? relayOwnershipTotal(formData, memberCount) : 0
+            if (!isRelay) {
+              for (let i = 0; i < memberCount; i++) {
+                const v = Number(formData[`member_${i}_member_ownership_pct`])
+                if (!Number.isNaN(v)) pctSum += v
+              }
             }
             const ok = Math.abs(pctSum - 100) <= 0.5
             return (
@@ -1679,7 +1747,12 @@ export function WizardClient({
                 {ok
                   ? interpolateString(pickText('✓ Total ownership: {pctSum}%', '✓ Quote totali: {pctSum}%')!, { pctSum })
                   : interpolateString(
-                      pickText(
+                      isRelay
+                        ? pickText(
+                            'Your share plus the owners below: {pctSum}% — must equal 100%.',
+                            'La tua quota più i soci qui sotto: {pctSum}% — deve fare 100%.',
+                          )!
+                        : pickText(
                         'Total ownership: {pctSum}% — must equal 100%. Include every member, including yourself.',
                         'Quote totali: {pctSum}% — devono fare 100%. Includi tutti i soci, te compreso.',
                       )!,
@@ -1688,6 +1761,19 @@ export function WizardClient({
               </div>
             )
           })()}
+
+          {/* Relay: the client ticks that the prefilled owners and representatives are correct. */}
+          {isRelay && (
+            <div data-field-key="members_confirmed">
+              <WizardField
+                field={RELAY_MEMBERS_CONFIRM_FIELD}
+                value={formData['members_confirmed'] === true}
+                onChange={(name, value) => handleFieldChange(name, value)}
+                locale={locale}
+                error={errorFor('members_confirmed')}
+              />
+            </div>
+          )}
         </div>
       ) : (
         <>

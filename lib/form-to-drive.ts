@@ -14,6 +14,7 @@
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib"
 import { TAX_FIELDS, TAX_MMLLC_FIELDS, TAX_CORP_FIELDS } from "@/components/portal/wizard/wizard-configs"
 import { formatMoneyWithSymbol } from "@/lib/money-input"
+import { prepareRelayPayloadForPdf } from "@/lib/portal/relay-owners"
 
 // ─── Form Type Config ───
 
@@ -28,11 +29,15 @@ export interface FormDriveConfig {
   filePrefix: string
   /** Sections to organize the data in the summary PDF */
   sections: FormSection[]
+  /** Reshapes the answers just before the summary PDF is drawn (e.g. folds member_N_* into a list). Absent = answers as stored. */
+  prepare?: (data: Record<string, unknown>) => Record<string, unknown>
 }
 
 interface FormSection {
   title: string
   fields: { key: string; label: string }[]
+  /** Leave the whole section (title included) out when none of its fields has an answer. */
+  hideWhenEmpty?: boolean
 }
 
 // ─── Per-Form-Type Configurations ───
@@ -455,7 +460,9 @@ export const FORM_CONFIGS: Record<string, FormDriveConfig> = {
         ],
       },
       {
+        // Applications filed before dev job 2751fb26 carry one individual partner here; newer ones use "Other Owners" below.
         title: "Partner Information",
+        hideWhenEmpty: true,
         fields: [
           { key: "partner_first_name", label: "Partner First Name" },
           { key: "partner_last_name", label: "Partner Last Name" },
@@ -468,7 +475,14 @@ export const FORM_CONFIGS: Record<string, FormDriveConfig> = {
           { key: "partner_equity_pct", label: "Partner Ownership %" },
         ],
       },
+      {
+        title: "Other Owners (people and companies)",
+        hideWhenEmpty: true,
+        fields: [{ key: "members_list", label: "Other Owners" }],
+      },
     ],
+    // member_N_* answers → one block per owner (person, or company with its representative)
+    prepare: prepareRelayPayloadForPdf,
   },
 }
 
@@ -561,9 +575,10 @@ export function wrapByWidth(
 
 export async function generateFormSummaryPDF(
   config: FormDriveConfig,
-  data: Record<string, unknown>,
+  rawData: Record<string, unknown>,
   meta: { token: string; submittedAt: string; companyName?: string; uploadCount: number; deterministic?: boolean }
 ): Promise<Uint8Array> {
+  const data = config.prepare ? config.prepare(rawData) : rawData
   // deterministic: no creation / modification time or producer stamped in the file, so the SAME
   // answers always give the SAME bytes (the CRM Store then records "unchanged", not a new version).
   const pdf = await PDFDocument.create(meta.deterministic ? { updateMetadata: false } : {})
@@ -636,6 +651,10 @@ export async function generateFormSummaryPDF(
 
   // Sections
   for (const section of config.sections) {
+    if (section.hideWhenEmpty && !section.fields.some((f) => {
+      const v = data[f.key]
+      return v !== undefined && v !== null && v !== ""
+    })) continue
     ensureSpace(40)
     y -= 4
     page.drawText(section.title, { x: 50, y, size: 12, font: fontBold, color: blue })
@@ -666,6 +685,18 @@ export async function generateFormSummaryPDF(
           member_itin_ssn: "ITIN / SSN",
           member_tax_residency: "Tax Residency",
           member_address: "Address",
+          // Relay "Other Owners" blocks (keys built by prepareRelayPayloadForPdf; the owner_ prefix is unique to them)
+          owner_kind: "Person or Company",
+          owner_name: "Name / Legal Name",
+          owner_ownership: "Ownership %",
+          owner_ein: "EIN",
+          owner_email: "Email",
+          owner_phone: "Phone",
+          owner_address: "Address",
+          owner_rep_name: "Representative",
+          owner_rep_email: "Representative Email",
+          owner_rep_phone: "Representative Phone",
+          owner_rep_address: "Representative Address",
           rpt_company_name: "Company Name",
           rpt_address: "Address",
           rpt_country: "Country",
