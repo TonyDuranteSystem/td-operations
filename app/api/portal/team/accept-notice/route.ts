@@ -31,6 +31,7 @@ export async function POST(request: NextRequest) {
     { authUserId: user.id, lang: getLocale(user) === 'it' ? 'it' : 'en', shownVersion: body?.version, ip },
     acceptNoticeDeps(),
   )
-  if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
+  // `=== false` (not `!result.ok`): this project's TypeScript settings only narrow the result type on an explicit comparison.
+  if (result.ok === false) return NextResponse.json({ error: result.error }, { status: result.status })
   return NextResponse.json({ success: true, alreadyAccepted: result.alreadyAccepted })
 }
