@@ -25,8 +25,10 @@ export type ReactionOp = "set" | "remove"
 
 export interface ReactionItem {
   ext_id: string
-  /** digits of the other party of the 1:1 chat */
+  /** digits of the other party of a 1:1 chat — or, for a WhatsApp GROUP, the digits of the group's own id (long) */
   chat: string
+  /** group chats only, side "client" only: digits of the member who reacted (each member has their own reaction) */
+  reactor?: string
   side: ReactionSide
   op: ReactionOp
   /** present (non-empty) for op "set" */
@@ -84,10 +86,15 @@ function normalizeItem(raw: unknown): ReactionItem | null {
   const side = raw.side
   const op = raw.op
   if (typeof ext !== "string" || !/^[A-Za-z0-9]{4,64}$/.test(ext)) return null
-  if (typeof chat !== "string" || !/^[0-9]{6,15}$/.test(chat)) return null
+  if (typeof chat !== "string" || !/^[0-9]{6,30}$/.test(chat)) return null
   if (side !== "client" && side !== "line") return null
   if (op !== "set" && op !== "remove") return null
   const item: ReactionItem = { ext_id: ext, chat, side, op }
+  if (raw.reactor !== undefined && raw.reactor !== null) {
+    // only a group member's own reaction names a reactor
+    if (side !== "client" || typeof raw.reactor !== "string" || !/^[0-9]{5,30}$/.test(raw.reactor)) return null
+    item.reactor = raw.reactor
+  }
   if (op === "set") {
     if (!isValidObservedEmoji(raw.emoji)) return null
     item.emoji = raw.emoji
