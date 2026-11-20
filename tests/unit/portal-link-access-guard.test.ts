@@ -33,12 +33,28 @@ const SCAN: string[] = [
   "lib/portal-app",
 ]
 
-// Files that read every link on purpose, with the reason. The staff "create a portal login" route is changed in delivery C
-// (it will refuse a member who has no portal access); it cannot carry the reason line yet because the file already has
-// older lint warnings that block any edit to it.
-const ALLOWED_FILES: Record<string, string> = {
-  "app/api/portal/admin/create-user/route.ts": "staff login creation; refuses a no-access member in delivery C",
-}
+// Senders and creators OUTSIDE the portal folders that choose WHO we write to, or who gets a login (dev job beb43385, delivery C).
+// A person with the mark is never picked as the recipient. These files are read by the same rule as the portal code.
+const FAN_OUT_FILES: string[] = [
+  "lib/jobs/handlers/welcome-package-setup.ts",
+  "lib/mcp/tools/welcome-package.ts",
+  "app/api/cron/annual-renewal-msa/route.ts",
+  "lib/operations/service-start-notice.ts",
+  "lib/tasks/workflow-handlers/chain-send-client-message.ts",
+  "lib/tasks/workflow-handlers/task-waiting-with-optional-message.ts",
+  "app/api/cron/itin-processing-check/route.ts",
+  "lib/operations/referral-notify.ts",
+  "lib/operations/signature.ts",
+  "lib/offers/process-agreement-signed.ts",
+  "app/api/portal/admin/create-user/route.ts",
+  "lib/mcp/tools/portal.ts",
+  "lib/members/portal-access-refusal.ts",
+  "lib/members/staff-portal-access.ts",
+]
+
+// Files that read every link on purpose, with the reason. (None now: the staff "create a portal login" route was the
+// last one; delivery C made it refuse a member who has no portal access.)
+const ALLOWED_FILES: Record<string, string> = {}
 
 const FROM = /\.from\((['"])account_contacts\1\)/
 const WRITE = /\.(insert|upsert|update|delete)\(/
@@ -62,6 +78,10 @@ describe("portal link access guard", () => {
     const files: string[] = []
     for (const s of SCAN) walk(s, files)
     expect(files.length).toBeGreaterThan(50) // the scan really found the portal code
+    for (const f of FAN_OUT_FILES) {
+      expect(fs.existsSync(path.join(ROOT, f)), `${f} is on the fan-out list but does not exist`).toBe(true)
+      if (!files.includes(f)) files.push(f)
+    }
 
     const offenders: string[] = []
     let reads = 0

@@ -96,6 +96,7 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
   const { data: contactLinks } = await supabaseAdmin
     .from("account_contacts")
     .select("contact_id")
+    .is("access_revoked_at", null) // a person with the no-portal-access mark is not picked as the one we write to (dev job beb43385)
     .eq("account_id", p.account_id)
     .limit(1)
 
@@ -329,6 +330,7 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
         // permanently below total_signers — the agreement stuck in progress.
         if (isMMLC && oaSigners.length > 0) {
           const { data: allContacts } = await supabaseAdmin
+            // portal-access-ok: roster — every owner signs the Operating Agreement, with or without portal access
             .from("account_contacts")
             .select("contact_id, contacts(id, full_name, email)")
             .eq("account_id", p.account_id)
