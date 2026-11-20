@@ -2813,7 +2813,7 @@ async function sendTeamMessageTool(p: any): Promise<string> {
     const { sendPushToStaffExcept } = await import('@/lib/team/notify')
     await sendPushToStaffExcept(senderId, {
       title: `Team: ${contextName}`, body: message.slice(0, 100),
-      url: '/portal-chats?view=internal', tag: `internal-thread-${threadId}`,
+      url: `/portal-chats?view=internal&thread=${threadId}`, tag: `internal-thread-${threadId}`,
       alertKind: 'client_thread_message',
     })
   } catch { /* non-critical */ }
