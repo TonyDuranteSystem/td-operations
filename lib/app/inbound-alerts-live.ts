@@ -74,9 +74,9 @@ export async function runInboundJob(job: InboundJob, deps: InboundDeps): Promise
     source: "staff",
     userIds,
     kind: job.kind,
-    // the lock screen never shows these two for these kinds; the wording rule builds the text from the kind, the name and the mailbox only
+    // the lock screen shows the name and the start of the message (a WhatsApp text, an email subject); the wording rule cleans and cuts it
     title: "",
-    body: "",
+    body: job.preview ?? "",
     name,
     dm: false,
     place: job.place ?? null,

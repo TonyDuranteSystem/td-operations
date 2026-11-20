@@ -35,6 +35,8 @@ export interface EmailAlertFacts {
   account_id?: string | null
   contact_id?: string | null
   lead_id?: string | null
+  /** the subject line, for the lock-screen preview (never the body) */
+  subject?: string | null
 }
 
 /** PURE. May this saved message alert at all? (It still has to be claimed once and fit under the flood cap.) */
@@ -60,6 +62,24 @@ export interface WhatsAppAlertFacts {
   createdAt: string
   /** true only when the provider sent a real, sane time stamp (the parser defaults a missing or silly one to "now", which must never count as fresh) */
   tsReal?: boolean
+  /** what kind of message it is, and its text (only for the lock-screen preview; anything but text shows fixed words) */
+  contentType?: string | null
+  contentText?: string | null
+}
+
+/** PURE. The lock-screen words for one WhatsApp message: its text, or fixed words for a photo, a voice note, a file... */
+export function whatsAppPreview(m: { contentType?: string | null; contentText?: string | null }): string {
+  switch (m.contentType) {
+    case "text": return typeof m.contentText === "string" ? m.contentText : ""
+    case "image": return "Sent a photo"
+    case "voice": return "Sent a voice message"
+    case "video": return "Sent a video"
+    case "document": return "Sent a file"
+    case "location": return "Shared a location"
+    case "contact": return "Shared a contact"
+    case "sticker": return "Sent a sticker"
+    default: return ""
+  }
 }
 
 /** PURE. May this just-inserted WhatsApp message alert at all? */
@@ -80,8 +100,17 @@ export interface InboundJob {
   place?: string
   /** collapses a burst on the lock screen into one line per conversation */
   tag: string
+  /** the start of the message shown under the name on the lock screen: the text of a WhatsApp message, the subject of an email ("" = none) */
+  preview?: string
   /** what the CRM links the conversation to (the name on the lock screen comes from here, never from the message) */
   who: { groupId?: string | null; contactId?: string | null; leadId?: string | null; accountId?: string | null }
+}
+
+/** PURE. The subject of the newest message of a thread ("" when it has none). */
+function newestSubject(list: readonly EmailAlertFacts[]): string {
+  let best: EmailAlertFacts | null = null
+  for (const r of list) if (!best || Date.parse(r.internal_date ?? "") >= Date.parse(best.internal_date ?? "")) best = r
+  return typeof best?.subject === "string" ? best.subject : ""
 }
 
 /** PURE. The jobs a saved Gmail thread produces: at most one (a thread's new messages become ONE alert). */
@@ -103,6 +132,7 @@ export function emailJobsFor(mailbox: string, rows: readonly EmailAlertFacts[], 
       messageIds: list.map(r => r.message_id as string),
       place: mailbox,
       tag: `email:${mailbox}:${threadId}`,
+      preview: newestSubject(list),
       who: { contactId: linked.contact_id ?? null, leadId: linked.lead_id ?? null, accountId: linked.account_id ?? null },
     }
   })
@@ -122,6 +152,7 @@ export function whatsAppJobsFor(items: readonly { groupId: string; message: What
     source: `whatsapp:${groupId}`,
     messageIds: [m.externalId as string],
     tag: `whatsapp:${groupId}`,
+    preview: whatsAppPreview(m),
     who: { groupId },
   }))
 }
