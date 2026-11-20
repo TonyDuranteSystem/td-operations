@@ -206,6 +206,8 @@ export function Sidebar({
   // Inbox = email only; WhatsApp has its own number (Telegram is not counted anywhere: the Inbox has no Telegram list to open).
   const [liveInbox, setLiveInbox] = useState(badgeCounts?.inbox ?? 0)
   const [liveWhatsapp, setLiveWhatsapp] = useState(badgeCounts?.whatsapp ?? 0)
+  // WhatsApp health pointer: a coloured dot beside the menu item with ONE sentence on hover (Antonio 2026-11-20); null = all well.
+  const [waAttention, setWaAttention] = useState<{ level: 'problem' | 'warning'; text: string } | null>(null)
   const [liveOverdue, setLiveOverdue] = useState(badgeCounts?.overdueInvoices ?? 0)
   const [liveReconReview, setLiveReconReview] = useState(badgeCounts?.reconciliationReview ?? 0)
   const [liveComm] = useState(badgeCounts?.commUnread ?? 0)
@@ -307,6 +309,21 @@ export function Sidebar({
     }
     window.addEventListener('td:invoices-to-raise-changed', refresh)
     return () => window.removeEventListener('td:invoices-to-raise-changed', refresh)
+  }, [])
+
+  // WhatsApp health pointer (the same status the WhatsApp page's banner reads). A failed read just shows nothing.
+  useEffect(() => {
+    let cancelled = false
+    const read = () => {
+      fetch('/api/inbox/whatsapp/bridge-status', { cache: 'no-store' })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => { if (!cancelled) setWaAttention(d && d.attention ? d.attention : null) })
+        .catch(() => {})
+    }
+    const first = setTimeout(read, 3000)
+    const timer = setInterval(read, 60_000)
+    window.addEventListener('wa-attention-refresh', read)
+    return () => { cancelled = true; clearTimeout(first); clearInterval(timer); window.removeEventListener('wa-attention-refresh', read) }
   }, [])
 
   // Fetch the global "What's New" unhandled total for the Portal Chats badge.
@@ -468,7 +485,7 @@ export function Sidebar({
   // Every page with its live red numbers applied.
   const liveItems: NavItem[] = defaultNavigation.map(item => {
     if (item.id === 'inbox' && liveInbox > 0) return { ...item, badge: liveInbox }
-    if (item.id === 'whatsapp' && liveWhatsapp > 0) return { ...item, badge: liveWhatsapp }
+    if (item.id === 'whatsapp') return { ...item, ...(liveWhatsapp > 0 ? { badge: liveWhatsapp } : {}), ...(waAttention ? { attention: waAttention } : {}) }
     // Tasks badge removed — daily work tracked via message action tags instead
     if (item.id === 'portal-chats') return { ...item, badge: livePortalChats > 0 ? livePortalChats : undefined, purpleBadge: liveWhatsNew }
     // Team Chat shows a plain DOT (not a count) — signal only, for a new DM / @mention.
