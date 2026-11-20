@@ -128,6 +128,7 @@ export async function GET(req: NextRequest) {
       const { data: contactLink } = await supabaseAdmin
         .from("account_contacts")
         .select("contact_id, contacts(id, full_name, email)")
+        .is("access_revoked_at", null) // a person with the no-portal-access mark is not picked as the one we write to (dev job beb43385)
         .eq("account_id", acct.id)
         .limit(1)
         .maybeSingle()

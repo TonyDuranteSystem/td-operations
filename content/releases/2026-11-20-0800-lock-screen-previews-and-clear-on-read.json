@@ -1,0 +1,22 @@
+{
+  "title": "TD Social: see the start of the message on the lock screen, and alerts go away once you read them",
+  "tag": "behind-the-scenes",
+  "text": "Every chat alert on the TD Social phone app (TD Talk, client chats, WhatsApp, email and the Marketing chats) now shows who wrote and the first part of the message. For email it shows the subject only. A photo, a voice note or a file shows plain words instead of its name. When you have read the chat, its alerts leave the lock screen the next time the app refreshes. This needs the new app build for the clean-up part; the previews work already.",
+  "points": [
+    "Preview for TD Talk, client chats, WhatsApp, email (subject) and Marketing",
+    "Files and photos never show their file name",
+    "Read alerts leave the lock screen; tapping one clears the rest of that chat"
+  ],
+  "stepsTitle": "Hiding previews until you unlock",
+  "steps": [
+    {
+      "name": "Settings, Notifications, TD Social",
+      "detail": "Open iPhone Settings, then choose Show Previews."
+    },
+    {
+      "name": "Pick When Unlocked",
+      "detail": "The text then shows only after Face ID.",
+      "flag": "new"
+    }
+  ]
+}

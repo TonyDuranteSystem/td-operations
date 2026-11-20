@@ -84,6 +84,7 @@ export async function createSignatureRequest(
     const { data: links } = await supabaseAdmin
       .from("account_contacts")
       .select("contact_id")
+      .is("access_revoked_at", null) // a person with the no-portal-access mark is not picked as the one we write to (dev job beb43385)
       .eq("account_id", account_id)
       .limit(1)
     if (!links?.length) throw new Error("No contacts linked to this account")
