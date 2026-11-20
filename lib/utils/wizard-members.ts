@@ -34,6 +34,10 @@ export type NormalizedIndividualMember = {
    * across owner+members carries true. Drives `members.is_signer` at
    * materialization, which the SS-4 signer guard (decideSs4Signer) reads. */
   is_signer: boolean | null
+  /** The "portal access" tick on this member (formation/onboarding wizard, only when the switch is on):
+   * true = ticked, false = unticked, null = no answer (an older form or the switch was off). Drives the
+   * "no portal access" mark on this member's link to the company at saving time. dev job beb43385. */
+  member_portal_access: boolean | null
 }
 
 export type NormalizedCompanyMember = {
@@ -57,6 +61,10 @@ export type NormalizedCompanyMember = {
   /** Whether this company member is the SS-4 Responsible Party (the signer).
    * Resolved to its representative at SS-4 generation. See is_signer above. */
   is_signer: boolean | null
+  /** The "portal access" tick on this member (its representative) (formation/onboarding wizard, only when the switch is on):
+   * true = ticked, false = unticked, null = no answer (an older form or the switch was off). Drives the
+   * "no portal access" mark on this member (its representative)'s link to the company at saving time. dev job beb43385. */
+  member_portal_access: boolean | null
 }
 
 export type NormalizedMember = NormalizedIndividualMember | NormalizedCompanyMember
@@ -104,6 +112,7 @@ function normalizeFromObject(raw: Record<string, unknown>): NormalizedMember {
       member_rep_address_zip: str(raw.member_rep_address_zip),
       member_rep_address_country: str(raw.member_rep_address_country),
       is_signer: bool(raw.is_signer),
+      member_portal_access: bool(raw.member_portal_access),
     }
   }
 
@@ -122,6 +131,7 @@ function normalizeFromObject(raw: Record<string, unknown>): NormalizedMember {
     member_country: str(raw.member_country),
     member_needs_itin: bool(raw.member_needs_itin),
     is_signer: bool(raw.is_signer),
+    member_portal_access: bool(raw.member_portal_access),
   }
 }
 

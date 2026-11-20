@@ -214,7 +214,7 @@ _Regenerated 2026-11-20. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-11-20)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-11-11)_
 - [offers.md](offers.md) — Offers & Contracts _(verified 2026-11-20)_
-- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-11-18)_
+- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-11-19)_
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-22)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-11-19)_
 - [payment-plans.md](payment-plans.md) — Payment plans (a setup fee paid in parts) and the Calendar's "Invoices to raise" _(verified 2026-11-20)_

@@ -77,9 +77,9 @@ export async function autoCreatePortalUser(params: AutoCreateParams): Promise<Au
 
     if (!targetContactId && accountId) {
       const { data: links } = await supabaseAdmin
-        // portal-access-ok: login creation path; skips a no-access member in delivery B
         .from('account_contacts')
         .select('contact_id')
+        .is('access_revoked_at', null) // a member with the no-access mark never gets a login picked for them
         .eq('account_id', accountId)
         .limit(1)
 
