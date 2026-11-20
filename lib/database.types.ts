@@ -15697,6 +15697,45 @@ export type Database = {
           },
         ]
       }
+      portal_team_events: {
+        Row: {
+          account_id: string
+          actor_contact_id: string | null
+          actor_kind: string
+          actor_staff_email: string | null
+          created_at: string
+          detail: Json
+          event: string
+          id: string
+          ip: string | null
+          team_member_id: string
+        }
+        Insert: {
+          account_id: string
+          actor_contact_id?: string | null
+          actor_kind: string
+          actor_staff_email?: string | null
+          created_at?: string
+          detail?: Json
+          event: string
+          id?: string
+          ip?: string | null
+          team_member_id: string
+        }
+        Update: {
+          account_id?: string
+          actor_contact_id?: string | null
+          actor_kind?: string
+          actor_staff_email?: string | null
+          created_at?: string
+          detail?: Json
+          event?: string
+          id?: string
+          ip?: string | null
+          team_member_id?: string
+        }
+        Relationships: []
+      }
       portal_team_members: {
         Row: {
           account_id: string
@@ -15709,7 +15748,13 @@ export type Database = {
           display_name: string
           email: string | null
           id: string
+          notice_accepted_at: string | null
+          notice_accepted_ip: string | null
+          notice_version: string | null
           status: string
+          switched_off_at: string | null
+          switched_off_by: string | null
+          switched_off_reason: string | null
           updated_at: string
           username: string
         }
@@ -15724,7 +15769,13 @@ export type Database = {
           display_name: string
           email?: string | null
           id?: string
+          notice_accepted_at?: string | null
+          notice_accepted_ip?: string | null
+          notice_version?: string | null
           status?: string
+          switched_off_at?: string | null
+          switched_off_by?: string | null
+          switched_off_reason?: string | null
           updated_at?: string
           username: string
         }
@@ -15739,7 +15790,13 @@ export type Database = {
           display_name?: string
           email?: string | null
           id?: string
+          notice_accepted_at?: string | null
+          notice_accepted_ip?: string | null
+          notice_version?: string | null
           status?: string
+          switched_off_at?: string | null
+          switched_off_by?: string | null
+          switched_off_reason?: string | null
           updated_at?: string
           username?: string
         }
