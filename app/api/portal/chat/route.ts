@@ -17,6 +17,7 @@ import { fetchClientUnreadRows, topicKey } from '@/lib/portal/client-chat-unread
 import { accountScopeWithHistory, filterByHistoryCutoff, historyKeepClauses } from '@/lib/documents/history-cutoff'
 import { getHistoryCutoffs, getHistoryView, getOpenedItemIds } from '@/lib/portal/history-cutoff'
 import { resolvePersonalNullInclusion } from '@/lib/portal/chat-scope-server'
+import { callerContactIdAllowed } from '@/lib/portal/chat-contact-param'
 import { decideAdminSendScope, isContactLinkedToAccount, resolveAdminReplyContact } from '@/lib/portal/admin-send-scope'
 import { contactThreadOrFilter, multiMemberAccountIds } from '@/lib/portal/thread-scope'
 import { resolveAccountMembersForChat } from '@/lib/portal/addressed-to'
@@ -65,6 +66,13 @@ export async function GET(request: NextRequest) {
   const isClientUser = user.app_metadata?.role === 'client'
   const authContactId = getClientContactId(user)
   let clientAccountIds: string[] = []
+
+  // A contact id named in the request must be the caller's OWN (a team login names none). Without this, a client — or a team login with
+  // the Chat tick — that named its own company plus ANOTHER person's contact id got that person's whole history: every company and the
+  // private thread. The rule is shared with the send below and the sibling routes (lib/portal/chat-contact-param.ts).
+  if (!callerContactIdAllowed({ isClientUser, authContactId, callerContactId: contactIdParam })) {
+    return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+  }
 
   if (isClientUser && !authContactId) {
     // Teammate (Portal Team Access): may ONLY read their own account's thread,
@@ -399,6 +407,11 @@ export async function POST(request: NextRequest) {
     resolvedContactId = null
     teammateSenderName = access.displayName || null
   } else {
+    // A client may send only under their OWN contact id. Before this, naming another person's id (plus the client's own company) stored
+    // the message as that person's — the same hole as the read above (lib/portal/chat-contact-param.ts). Staff may answer as any contact.
+    if (!callerContactIdAllowed({ isClientUser, authContactId, callerContactId: bodyContactId })) {
+      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+    }
     resolvedContactId = bodyContactId || authContactId
     if (!resolvedContactId && account_id && !isClientUser) {
       // Admin send with only account_id → tag the member actually being
