@@ -81,6 +81,7 @@ export async function runInboundJob(job: InboundJob, deps: InboundDeps): Promise
     dm: false,
     place: job.place ?? null,
     tag: job.tag,
+    url: job.url,
   })
   return "sent"
 }

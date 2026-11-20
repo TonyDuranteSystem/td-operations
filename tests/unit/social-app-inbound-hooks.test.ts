@@ -79,7 +79,7 @@ describe("the bridge route: a single live message", () => {
     expect((await call(live())).status).toBe(200)
     expect(runInboundJobsLive).toHaveBeenCalledTimes(1)
     expect(runInboundJobsLive.mock.calls[0][0]).toEqual([
-      { kind: "whatsapp_message", source: "whatsapp:g-393331234567", messageIds: ["M1"], tag: "whatsapp:g-393331234567", preview: "Ciao", who: { groupId: "g-393331234567" } },
+      { kind: "whatsapp_message", source: "whatsapp:g-393331234567", messageIds: ["M1"], tag: "whatsapp:g-393331234567", preview: "Ciao", url: "/inbox?channel=whatsapp&thread=whatsapp%3Ag-393331234567", who: { groupId: "g-393331234567" } },
     ])
   })
 
@@ -176,7 +176,7 @@ describe("the mail save (indexThread)", () => {
     expect(upsert).toHaveBeenCalledTimes(1)
     expect(runInboundJobsLive).toHaveBeenCalledTimes(1)
     expect(runInboundJobsLive.mock.calls[0][0]).toEqual([
-      { kind: "email_message", source: "email:support", messageIds: ["g1"], place: "support", tag: "email:support:t1", preview: "Wire 48,210", who: { contactId: "c1", leadId: null, accountId: "a1" } },
+      { kind: "email_message", source: "email:support", messageIds: ["g1"], place: "support", tag: "email:support:t1", preview: "Wire 48,210", url: "/inbox?thread=gmail%3At1&mailbox=support", who: { contactId: "c1", leadId: null, accountId: "a1" } },
     ])
     // the lock screen gets the subject line only — never the mail body (the snippet)
     expect(JSON.stringify(runInboundJobsLive.mock.calls[0][0])).not.toContain("hello")

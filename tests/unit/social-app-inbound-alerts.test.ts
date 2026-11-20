@@ -75,7 +75,7 @@ describe("the jobs a saved thread makes", () => {
     ], NOW_MS)
     expect(jobs).toHaveLength(2)
     expect(jobs[0]).toEqual({
-      kind: "email_message", source: "email:support", messageIds: ["a", "b"], place: "support", tag: "email:support:t1", preview: "Newest subject",
+      kind: "email_message", source: "email:support", messageIds: ["a", "b"], place: "support", tag: "email:support:t1", preview: "Newest subject", url: "/inbox?thread=gmail%3At1&mailbox=support",
       who: { contactId: "c9", leadId: null, accountId: null },
     })
     expect(jobs[1].messageIds).toEqual(["c"])
@@ -206,5 +206,16 @@ describe("the lock-screen words for a WhatsApp message", () => {
     expect(whatsAppPreview({ contentType: "document", contentText: "Rossi_Passport.pdf" })).toBe("Sent a file")
     expect(whatsAppPreview({ contentType: "other", contentText: "secret" })).toBe("")
     expect(whatsAppPreview({})).toBe("")
+  })
+})
+
+describe("a tap on a WhatsApp or email alert opens that exact conversation", () => {
+  it("the link is a safe same-site path the app accepts, and names the channel / mailbox", async () => {
+    const { safeRelativeUrl } = await import("@/lib/app/apns")
+    const wa = whatsAppJobsFor([{ groupId: "g-1", message: { externalId: "M1", direction: "inbound", createdAt: new Date().toISOString(), tsReal: true } }], new Date())
+    expect(wa[0].url).toBe("/inbox?channel=whatsapp&thread=whatsapp%3Ag-1")
+    const em = emailJobsFor("antonio", [email({ message_id: "a", thread_id: "abc123" })], NOW_MS)
+    expect(em[0].url).toBe("/inbox?thread=gmail%3Aabc123&mailbox=antonio")
+    for (const j of [...wa, ...em]) expect(safeRelativeUrl(j.url)).toBe(j.url)
   })
 })

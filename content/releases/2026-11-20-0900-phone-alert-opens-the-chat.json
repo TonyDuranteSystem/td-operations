@@ -1,0 +1,17 @@
+{
+  "title": "TD Social: tapping a WhatsApp or email alert opens that exact chat",
+  "tag": "behind-the-scenes",
+  "text": "A tap on a WhatsApp or email alert from the lock screen used to open only the WhatsApp or Inbox tab. It now opens the conversation the alert is about. This works with the app you already have.",
+  "points": [
+    "WhatsApp alert opens that chat",
+    "Email alert opens that email, in the right mailbox"
+  ],
+  "stepsTitle": "Opening a chat from the lock screen",
+  "steps": [
+    {
+      "name": "Tap the alert",
+      "detail": "The app opens on that conversation.",
+      "flag": "new"
+    }
+  ]
+}
