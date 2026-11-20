@@ -51,6 +51,14 @@ describe("voiceCheckView", () => {
     expect(f).toMatchObject({ level: "warning", actions: ["resend"] })
     expect(f?.text).toContain("paused")
   })
+  it("switched on but nothing sent this week: a quiet row offers 'Send a test now'; off, or already sent this week: nothing", () => {
+    expect(voiceCheckView(null, MON, true)).toMatchObject({ level: "info", actions: ["resend"] })
+    expect(voiceCheckView(sent({ week: "2026-W46", status: "played" }), MON, true)).toMatchObject({ level: "info" })
+    expect(voiceCheckView(null, MON, false)).toBeNull()
+    expect(voiceCheckView(sent({ status: "played" }), MON, true)).toBeNull() // this week's test was answered
+    expect(voiceCheckView(sent(), at(5), true)?.level).toBe("ask")
+    expect(voiceCheckView(sent({ week: "2026-W46", status: "not_played" }), MON, true)?.level).toBe("problem") // an old No still shows
+  })
   it("no record, or a bad time, says nothing", () => {
     expect(voiceCheckView(null, MON)).toBeNull()
     expect(voiceCheckView(sent({ sent_at: "nope" }), MON)).toBeNull()
@@ -82,6 +90,7 @@ describe("attentionSummary (the red dot)", () => {
   it("a bad update or a failed voice test is red; softer ones are amber; the worst wins", () => {
     expect(attentionSummary({ ...ok, update: { level: "problem", title: "Update broke", text: "" } })).toEqual({ level: "problem", text: "Update broke" })
     expect(attentionSummary({ ...ok, voiceCheck: { level: "problem", title: "Voice notes may not be playing" } })?.level).toBe("problem")
+    expect(attentionSummary({ ...ok, voiceCheck: { level: "info", title: "Weekly voice-note test is on" } })).toBeNull() // the quiet row is not an alarm
     expect(attentionSummary({ ...ok, voiceCheck: { level: "ask", title: "Weekly voice-note test" } })).toEqual({ level: "warning", text: "Weekly voice-note test" })
     expect(attentionSummary({ ...ok, update: { level: "warning", title: "Update stopped", text: "" }, voiceCheck: { level: "ask", title: "v" } })?.text).toBe("Update stopped")
   })
