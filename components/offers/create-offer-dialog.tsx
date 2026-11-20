@@ -9,7 +9,7 @@ import { FORMATION_STATE_CODES, FORMATION_STATE_NAMES, type FormationStateCode }
 import { parsePriceQuirk } from '@/lib/offers/compute-offer-totals'
 import { parseAuthoredAmount, authoredAmountValue } from '@/lib/offers/parse-authored-amount'
 import { deriveContractType, isUntypedFormationFallback } from '@/lib/offers/derive-contract-type'
-import { lineNameWithYear, taxYearProblem } from '@/lib/offers/tax-year'
+import { lineNameWithYear, taxYearAppliesToOffer, taxYearProblem } from '@/lib/offers/tax-year'
 import { buildAnnualCostRows } from '@/lib/offers/annual-maintenance-wording'
 import { formatOptionLabel } from '@/lib/offers/package-option-label'
 import { canGroundFormationState, canGroundEntityType } from '@/lib/offers/narrative-business-rules'
@@ -1002,9 +1002,9 @@ export function CreateOfferDialog({
       if (exists) return prev.filter(s => s.id !== id)
       const svc = catalog.find(c => c.id === id)
       const defaultPrice = svc?.default_price != null ? String(svc.default_price) : ''
-      // A Tax Return line starts on last year (what activation always assumed) — now visible, and staff can change it.
-      const taxYear = svc?.pipeline === 'Tax Return' ? new Date().getFullYear() - 1 : undefined
-      return [...prev, { id, price: defaultPrice, quantity: 1, service_context: getDefaultContext(svc), ...(taxYear ? { tax_year: taxYear } : {}) }]
+      // The Tax Return line's year is left unset here: a tax-return offer shows last year in the box (what activation always assumed), any other offer
+      // leaves it empty (no year written) until staff type one — see effectiveTaxYear below.
+      return [...prev, { id, price: defaultPrice, quantity: 1, service_context: getDefaultContext(svc) }]
     })
   }
 
@@ -1024,10 +1024,18 @@ export function CreateOfferDialog({
     setSelected(prev => prev.map(s => s.id === id ? { ...s, tax_year: year } : s))
   }
 
-  // The tax-year box shows only on a Tax Return line of a short-contract tax return offer — the one kind whose year the activation reads.
+  // The year a Tax Return line will state. Staff's own choice wins (0 / cleared = none). With none: a tax-return offer shows last year (what activation always
+  // assumed), any other offer states no year until staff type one — nothing is written to the line, as before. A FORMATION or ONBOARDING offer never states one:
+  // their Tax Return is created later by the company's own setup, which picks its year (taxYearAppliesToOffer).
+  const effectiveTaxYear = (taxYear: number | undefined): number | undefined => {
+    if (!taxYearAppliesToOffer(derivedContractType)) return undefined
+    return taxYear || (derivedContractType === 'tax_return' ? new Date().getFullYear() - 1 : undefined)
+  }
+
+  // The tax-year box shows on the Tax Return line of every offer whose activation reads that year (not a formation / onboarding offer).
   const taxYearRowProps = (svc: CatalogService) =>
-    svc.pipeline === 'Tax Return' && derivedContractType === 'tax_return'
-      ? { taxYear: selected.find(s => s.id === svc.id)?.tax_year ?? null, onTaxYearChange: (y: number) => updateTaxYear(svc.id, y) }
+    svc.pipeline === 'Tax Return' && taxYearAppliesToOffer(derivedContractType)
+      ? { taxYear: effectiveTaxYear(selected.find(s => s.id === svc.id)?.tax_year) ?? null, onTaxYearChange: (y: number) => updateTaxYear(svc.id, y) }
       : {}
 
   const updateServiceContext = (id: string, ctx: 'individual' | 'business' | 'ask') => {
@@ -1112,12 +1120,11 @@ export function CreateOfferDialog({
     }
 
     // A Tax Return line states a year the company could really have a return for (dev job 0a60f416). The server checks it again against the company.
-    if (derivedContractType === 'tax_return') {
-      for (const s of selected) {
-        if (catalog.find(c => c.id === s.id)?.pipeline !== 'Tax Return' || !s.tax_year) continue
-        const problem = taxYearProblem(s.tax_year, { currentYear: new Date().getFullYear() })
-        if (problem) { toast.error(`Tax Return line: ${problem}`); return }
-      }
+    for (const s of selected) {
+      const year = effectiveTaxYear(s.tax_year)
+      if (catalog.find(c => c.id === s.id)?.pipeline !== 'Tax Return' || !year) continue
+      const problem = taxYearProblem(year, { currentYear: new Date().getFullYear() })
+      if (problem) { toast.error(`Tax Return line: ${problem}`); return }
     }
 
     startTransition(async () => {
@@ -1131,7 +1138,7 @@ export function CreateOfferDialog({
             const unitPrice = s.price.replace(/[^0-9.]/g, '') || '0'
             const qty = s.quantity ?? 1
             const totalPrice = (parseFloat(unitPrice) * qty).toLocaleString('en-US')
-            const lineYear = derivedContractType === 'tax_return' && svc_cat?.pipeline === 'Tax Return' ? s.tax_year : undefined
+            const lineYear = svc_cat?.pipeline === 'Tax Return' ? effectiveTaxYear(s.tax_year) : undefined
             const svc: Record<string, unknown> = {
               name: lineYear ? lineNameWithYear(svc_cat?.name || s.id, lineYear) : (svc_cat?.name || s.id),
               price: `${currencySymbol}${qty > 1 ? totalPrice : unitPrice}`,
@@ -2884,7 +2891,7 @@ function ServiceRow({
               <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
           </select>
-          {/* Tax year — only on the Tax Return line of a tax return offer (dev job 0a60f416) */}
+          {/* Tax year — on the Tax Return line of any offer (dev jobs 0a60f416, 06a3c8e9) */}
           {taxYear !== undefined && onTaxYearChange && (
             <label className="flex items-center gap-1 text-xs text-zinc-600">
               Tax year

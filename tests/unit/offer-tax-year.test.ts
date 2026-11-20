@@ -3,7 +3,7 @@
  * delivery "Tax Return 2026 - <company>", which the repo's own reader (taxYearFromServiceName) already understands.
  */
 import { describe, it, expect } from 'vitest'
-import { lineNameWithYear, taxReturnServiceName, taxYearFromLineName, taxYearOfOffer, taxYearProblem } from '@/lib/offers/tax-year'
+import { lineNameWithYear, taxReturnServiceName, taxYearAppliesToOffer, taxYearFromLineName, taxYearOfOffer, taxYearProblem } from '@/lib/offers/tax-year'
 import { taxYearFromServiceName } from '@/lib/flows/resolve-flows'
 
 describe('taxYearFromLineName', () => {
@@ -78,5 +78,27 @@ describe('taxYearProblem', () => {
     expect(taxYearProblem(2025, { ...ctx, formationYear: 2026 })).toMatch(/formed in 2026/)
     expect(taxYearProblem(2026, { ...ctx, formationYear: 2026 })).toBeNull()
     expect(taxYearProblem(2020, { ...ctx, formationYear: null })).toBeNull()
+  })
+})
+
+describe('taxYearAppliesToOffer — which offers read the year typed on a Tax Return line (job 06a3c8e9)', () => {
+  it('every offer whose Tax Return is created at payment', () => {
+    for (const t of ['tax_return', 'closure', 'itin', 'company_change_name', 'ein_change_name', 'shipping', 'public_notary', 'consulting_call', 'custom_notary_pack', undefined, null]) {
+      expect(taxYearAppliesToOffer(t as string | null | undefined)).toBe(true)
+    }
+  })
+  it('never a formation or onboarding offer: their Tax Return is created later by the company\'s own setup, which picks its year', () => {
+    expect(taxYearAppliesToOffer('formation')).toBe(false)
+    expect(taxYearAppliesToOffer('onboarding')).toBe(false)
+  })
+})
+
+describe('taxYearOfOffer — a bad list never breaks an activation', () => {
+  it('null / non-object entries are skipped', () => {
+    expect(taxYearOfOffer([null, undefined, 'x', 3, { name: 'Tax Return 2026', contract_type: 'tax_return' }])).toEqual({ year: 2026, lineCount: 1 })
+    expect(taxYearOfOffer([null])).toEqual({ year: null, lineCount: 0 })
+  })
+  it('not a list at all', () => {
+    for (const v of [null, undefined, 'text', 5, {}]) expect(taxYearOfOffer(v)).toEqual({ year: null, lineCount: 0 })
   })
 })
