@@ -20,6 +20,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { randomUUID } from 'crypto'
 import { createClient } from '@/lib/supabase/server'
 import { isClient } from '@/lib/auth'
+import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
+import { teammateMayUseWizard } from '@/lib/portal/wizard-submit-access'
 import { wizardFileTypeProblem } from '@/lib/portal/wizard-file-rules'
 import { WIZARD_UPLOAD_MAX_FILE_SIZE_BYTES, wizardUploadTooLargeMessage } from '@/lib/portal/wizard-uploads'
 
@@ -38,7 +40,18 @@ export async function POST(req: NextRequest) {
     const fileName = body.file_name as string
     const fileSize = typeof body.file_size === 'number' ? body.file_size : undefined
     const wizardType = body.wizard_type as string
-    const identifier = (body.identifier as string) || user.email || user.id
+    let identifier = (body.identifier as string) || user.email || user.id
+
+    // A team login uploads only for a wizard its tick covers, and ONLY into its own company's folder:
+    // the path below is built from the company id the browser names, so without this a team login could
+    // write into (and, on this route, overwrite) any other company's files.
+    const identity = await resolvePortalIdentity(user)
+    if (identity.kind === 'teammate') {
+      if (!teammateMayUseWizard(identity.capabilities, wizardType)) {
+        return NextResponse.json({ error: 'Your team login cannot upload for this form. Ask the company owner.' }, { status: 403 })
+      }
+      identifier = identity.accountId
+    }
 
     if (!fieldName || !fileName) {
       return NextResponse.json({ error: 'field_name and file_name are required' }, { status: 400 })

@@ -16,6 +16,14 @@ export async function POST(request: NextRequest) {
 
   const updates: Record<string, unknown> = { ...user.user_metadata }
 
+  // A team login's password is a temporary one the owner handed over; the ONLY way off the "set your own
+  // password" step is to actually set one (the change-password routes clear the flag themselves). Clearing it
+  // here would let the team member keep the owner's temporary password.
+  const isTeamLogin = (user.app_metadata as Record<string, unknown> | undefined)?.kind === 'team_member'
+  if (body.clear_password_flag && isTeamLogin) {
+    return NextResponse.json({ error: 'Please set your own password to continue.' }, { status: 403 })
+  }
+
   if (body.clear_password_flag) {
     updates.must_change_password = false
   } else {
