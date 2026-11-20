@@ -22,7 +22,7 @@ interface BridgeStatus {
 }
 
 interface VoiceCheckCardData {
-  level: 'ask' | 'warning' | 'problem'
+  level: 'info' | 'ask' | 'warning' | 'problem'
   title: string
   text: string
   actions: Array<'played' | 'not_played' | 'resend'>
@@ -189,7 +189,7 @@ function VoiceCheckCard({ v, onChanged }: { v: VoiceCheckCardData; onChanged: ()
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const red = v.level === 'problem'
-  const tone = red ? 'border-red-200 bg-red-50 text-red-900' : v.level === 'warning' ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-blue-200 bg-blue-50 text-blue-900'
+  const tone = red ? 'border-red-200 bg-red-50 text-red-900' : v.level === 'warning' ? 'border-amber-200 bg-amber-50 text-amber-900' : v.level === 'info' ? 'border-zinc-200 bg-zinc-50 text-zinc-800' : 'border-blue-200 bg-blue-50 text-blue-900'
   const answer = async (a: 'played' | 'not_played' | 'resend') => {
     setBusy(true); setErr(null)
     try {
@@ -202,7 +202,7 @@ function VoiceCheckCard({ v, onChanged }: { v: VoiceCheckCardData; onChanged: ()
       setErr(e instanceof Error && e.message ? e.message : 'Could not save your answer — please try again.')
     } finally { setBusy(false) }
   }
-  const label = { played: 'Yes, it played', not_played: 'No, it did not', resend: 'Send a new test' } as const
+  const label = { played: 'Yes, it played', not_played: 'No, it did not', resend: v.level === 'info' ? 'Send a test now' : 'Send a new test' } as const
   return (
     <div className={`flex items-start gap-3 border-b px-4 py-3 ${tone}`} role="alert" data-testid="wa-voice-check">
       <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
