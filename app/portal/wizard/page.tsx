@@ -34,6 +34,7 @@ import { latestRound, parseReviewRequests } from '@/lib/tax/review-requests'
 import { identifyFormation, isFormationWizardEditable } from '@/lib/portal/formation-resubmit-gate'
 import { resolveClosureSubject } from '@/lib/portal/closure-subject'
 import { getPendingClosures, type PendingClosure } from '@/lib/portal/pending-closures'
+import { memberPortalAccessOn } from '@/lib/portal/member-access-switch'
 import {
   resolveTaxWizardEligibility,
   taxWizardSurfaceVisible,
@@ -1060,6 +1061,12 @@ export default async function WizardPage({
     sameEmailNote = (await getPortalAccounts(contactId)).length > 0
   }
 
+  // The per-member "portal access" tick on the Members step (dev job beb43385, delivery B). Off unless the switch says so for
+  // this record (on, or "test" and this is a test record); only the formation and onboarding wizards carry it.
+  const memberAccessTick =
+    (wizardType === 'formation' || wizardType === 'onboarding') &&
+    (await memberPortalAccessOn({ accountId, leadId: formationLeadId, contactId }))
+
   // ITIN Renewal: pre-fill previous ITIN from contact
   if (isItinRenewal && contact.itin_number) {
     prefillData.has_previous_itin = 'Yes'
@@ -1459,6 +1466,7 @@ export default async function WizardPage({
           prefillData={prefillData}
           lockedValues={lockedValues}
           sameEmailNote={sameEmailNote}
+          memberAccessTick={memberAccessTick}
           savedData={savedData as Record<string, string>}
           savedStep={savedStep}
           progressId={progressId}

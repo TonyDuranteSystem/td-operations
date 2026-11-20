@@ -40,5 +40,6 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let url = content.userInfo["url"] as? String
         let thread = content.threadIdentifier
         await MainActor.run { AppModel.shared.openFromAlert(url: url, thread: thread.isEmpty ? nil : thread) }
+        await AppModel.shared.clearSameThread(as: thread.isEmpty ? nil : thread)
     }
 }

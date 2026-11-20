@@ -8,6 +8,8 @@ import { visibleLinkCode } from "@/lib/messaging/wabridge-link"
 import { recoverView, codeRequestView } from "@/lib/messaging/wabridge-commands"
 import { normalizeSendMode } from "@/lib/messaging/wabridge-outbox"
 import { updateNotice } from "@/lib/messaging/wabridge-update"
+import { parseVoiceCheck, voiceCheckView } from "@/lib/messaging/wabridge-voice-check"
+import { attentionSummary } from "@/lib/messaging/wabridge-attention"
 
 export const dynamic = "force-dynamic"
 
@@ -83,10 +85,17 @@ export async function GET() {
     // The Mac's nightly program-update report: any staff sees it (it holds no secret), worst channel's row first.
     const update = updateNotice((worst.state ?? states?.[0] ?? null) as unknown as { update_status?: unknown; update_status_at?: string | null } | null, now)
 
+    // The weekly voice-note test (off until a test chat is chosen): shown to any staff; nothing secret in it.
+    const voiceCheck = voiceCheckView(parseVoiceCheck(stateRow?.voice_check), now, typeof stateRow?.voice_check_group_id === "string")
+    // ONE plain sentence for the red dot beside "WhatsApp" in the left menu: the worst thing a person should know right now.
+    const attention = attentionSummary({ health: worst.health, problemText: text?.reason ?? null, update, voiceCheck })
+
     return NextResponse.json(
       {
         send,
         update,
+        voiceCheck,
+        attention,
         health: worst.health,
         isOwner,
         reason: text?.reason ?? null,

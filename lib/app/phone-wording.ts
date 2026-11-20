@@ -1,12 +1,12 @@
 /**
  * TD Social — what a lock screen may show, per kind of alert (pure; dev job 2072bc3e, Step 2 pull request C2; Council-reviewed plan of 5 Nov 2026).
  *
- * THE RULE: who, never what. A lock screen is visible to anyone near the phone, so almost every kind shows fixed words. The ONLY kind that shows typed
- * text is a direct or group message a person typed in TD Talk in a chat with no client attached (`talk_direct_message`; the sender decides the kind, and
- * `talkAlertKind` makes any chat tied to a client the client kind). Everything else shows generic words, plus at most one cleaned NAME the sender passes
- * on purpose (`phoneName`: a company, a lead or a person's name). Nothing is guessed from the web title, the body or the link. A kind that is not on the
- * list shows "New notification". Names are cleaned (controls, line breaks and direction marks removed, cut by whole characters) because a client or a
- * sender can type anything as a name.
+ * PREVIEWS (decided by Antonio, 20 Nov 2026: "all chats"): every CHAT kind now shows the start of the message under the name — TD Talk, the client chats
+ * (portal and client threads), WhatsApp, email (the subject) and the Marketing chats. The text is the sender's own preview line (never a file name: a file or a
+ * card shows fixed words), cleaned and cut. The iPhone's own "Show Previews: When Unlocked" setting hides it until Face ID if wanted. Every other kind
+ * (staff note, approval, notices, Claude, shared item, calls) still shows fixed words plus at most one cleaned NAME the sender passes on purpose
+ * (`phoneName`). Nothing is guessed from the link. A kind that is not on the list shows "New notification". Names are cleaned (controls, line breaks and
+ * direction marks removed, cut by whole characters) because a client or a sender can type anything as a name.
  *
  * Italian wording for Marketing (Rocco's team); English for staff.
  */
@@ -39,6 +39,14 @@ const ATTACHMENT_MARK = String.fromCodePoint(0x1f4ce)
 const CARD_MARK = String.fromCodePoint(0x1f4c7)
 /** the only two mailboxes an email alert may name (a closed list: the value never comes from the mail itself) */
 const EMAIL_PLACES = ["support", "antonio"] as const
+
+/** The message start for a chat alert: cleaned and cut; a file or a card (the web code builds those lines from a FILE NAME) shows fixed words instead. */
+function previewOf(raw: unknown): string {
+  const text = typeof raw === "string" ? raw : ""
+  if (text.startsWith(ATTACHMENT_MARK)) return "Sent an attachment"
+  if (text.startsWith(CARD_MARK)) return "Shared a card"
+  return cleanLabel(text, BODY_MAX)
+}
 
 /** The TD Social tab an alert belongs to (null = none). A person who muted that tab gets no phone alert for it. */
 export function phoneTabFor(kind: AlertKind): TabId | null {
@@ -79,10 +87,7 @@ export function phoneWording(input: WordingInput): PhoneAlertText | null {
       const title = cleanLabel(input.title, TITLE_MAX)
       if (!title) return GENERIC
       // the web body is typed text, EXCEPT when the message was only a file or a card: then the web code builds it from the FILE NAME, which must never reach a lock screen
-      const raw = typeof input.body === "string" ? input.body : ""
-      if (raw.startsWith(ATTACHMENT_MARK)) return { title, body: "Sent an attachment" }
-      if (raw.startsWith(CARD_MARK)) return { title, body: "Shared a card" }
-      return { title, body: cleanLabel(raw, BODY_MAX) }
+      return { title, body: previewOf(input.body) }
     }
     case "talk_room_message":
       return null
@@ -92,16 +97,16 @@ export function phoneWording(input: WordingInput): PhoneAlertText | null {
       if (input.dm !== true) return null
       return { title: name ? `${name} shared something with you` : "Something was shared with you", body: "" }
     case "client_thread_message":
-      return { title: "New message in a client chat", body: "" }
+      return { title: "New message in a client chat", body: previewOf(input.body) }
     case "client_chat":
-      return { title: `Chat: ${name || "a client"}`, body: "" }
+      return { title: `Chat: ${name || "a client"}`, body: previewOf(input.body) }
     case "client_share_check":
       return { title: "A file was sent to a client", body: "" }
     case "whatsapp_message":
-      return { title: name ? `WhatsApp · ${name}` : "New WhatsApp message", body: "" }
+      return { title: name ? `WhatsApp · ${name}` : "New WhatsApp message", body: previewOf(input.body) }
     case "email_message": {
       const place = (EMAIL_PLACES as readonly string[]).includes(input.place as string) ? (input.place as string) : null
-      return { title: name ? `Email · ${name}` : place ? `New email in ${place}` : "New email", body: "" }
+      return { title: name ? `Email · ${name}` : place ? `New email in ${place}` : "New email", body: previewOf(input.body) }
     }
     case "staff_note":
       return { title: "New staff note", body: "" }
@@ -115,9 +120,9 @@ export function phoneWording(input: WordingInput): PhoneAlertText | null {
     case "test_alert":
       return { title: "Test notification", body: "Alerts are working." }
     case "marketing_lead_chat":
-      return { title: name ? `Nuovo messaggio · ${name}` : "Nuovo messaggio", body: "" }
+      return { title: name ? `Nuovo messaggio · ${name}` : "Nuovo messaggio", body: previewOf(input.body) }
     case "marketing_team_chat":
-      return { title: name ? `Nuovo messaggio da ${name}` : "Nuovo messaggio nel team", body: "" }
+      return { title: name ? `Nuovo messaggio da ${name}` : "Nuovo messaggio nel team", body: previewOf(input.body) }
     case "marketing_lead_moved":
       return { title: name ? `Chiamata spostata · ${name}` : "Chiamata spostata", body: "" }
     case "marketing_call":

@@ -168,6 +168,8 @@ export function GroupRow({ group, items, isActive, onMobileClose, moveFor, flyou
   // The chat dot (new TD Talk / Team Chat message) shows NEXT TO the numbers: a number is almost always there (email), and it
   // used to hide the dot, so a new message showed nothing until the panel was opened.
   const dot = items.some(i => i.dotBadge)
+  // A WhatsApp health pointer on any page inside the group shows on the group row too, so a collapsed group never hides it (red beats amber).
+  const attention = items.map(i => i.attention).filter((a): a is NonNullable<typeof a> => !!a).sort((a, b) => (a.level === 'problem' ? 0 : 1) - (b.level === 'problem' ? 0 : 1))[0]
   const hasActive = items.some(isActive)
   const open = flyoutMode === true && ctl.openId === group.id
 
@@ -210,6 +212,14 @@ export function GroupRow({ group, items, isActive, onMobileClose, moveFor, flyou
         </span>
       )}
       {dot && <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse shrink-0" aria-label="New messages" />}
+      {attention && (
+        <span
+          title={attention.text}
+          aria-label={attention.text}
+          data-testid="group-attention-dot"
+          className={cn('flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-bold leading-none text-white', attention.level === 'problem' ? 'bg-red-600 animate-pulse' : 'bg-amber-500')}
+        >!</span>
+      )}
     </>
   )
 
