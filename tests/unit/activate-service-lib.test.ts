@@ -30,7 +30,7 @@ vi.mock('@/lib/portal/welcome-message', () => ({
   renderTemplate: vi.fn((t: string) => t),
 }))
 vi.mock('@/lib/referral-utils', () => ({ calculateCommission: vi.fn() }))
-vi.mock('@/lib/tax-return-context', () => ({ findTaxReturnService: vi.fn() }))
+vi.mock('@/lib/tax-return-context', () => ({ findTaxReturnService: vi.fn(() => ({ status: 'not_found' })) })) // the real one never returns undefined: the year is now read for every offer (job 06a3c8e9)
 vi.mock('@/lib/settings', () => ({ isTaxSeasonPaused: vi.fn(() => false) }))
 vi.mock('@/lib/portal/entity-type-from-contract', () => ({ getEntityTypeFromContract: vi.fn() }))
 vi.mock('@/lib/portal/tier-config', () => ({

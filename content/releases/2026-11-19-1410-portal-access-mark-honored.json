@@ -1,0 +1,5 @@
+{
+  "title": "Behind the scenes: the portal can now hide a company from a member",
+  "tag": "behind-the-scenes",
+  "text": "Nothing to see on screen yet. The client portal, its chat, its notices and the Storage app now leave out a company when the person's link to it carries a \"no portal access\" mark, while the person stays an owner everywhere else (Operating Agreement, SS-4, ownership list). Nobody has the mark today, so nothing changes for any client. This is the first part of the per-member portal access tick for multi-member companies; the tick itself and the team buttons come next and stay switched off until we have tested the whole thing."
+}

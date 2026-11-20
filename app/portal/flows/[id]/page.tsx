@@ -6,7 +6,7 @@ import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { isPersonalDocumentHiddenFrom } from '@/lib/documents/visibility-guard'
 import { isHiddenByHistoryCutoff } from '@/lib/documents/history-cutoff'
 import { getHistoryCutoff } from '@/lib/portal/history-cutoff'
-import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
+import { getTeammateScopeOrNull, requirePortalCapability } from '@/lib/portal/team/gate'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { t, getLocale } from '@/lib/portal/i18n'
 import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
@@ -280,6 +280,8 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
     .limit(50)
   const decisions = (decisionData ?? []) as DecisionRequest[]
   const newestPendingId = decisions.find((d) => d.status === 'pending')?.id ?? null
+  // Owners and members answer. A team login (no contact of its own) answers only when the owner ticked "Can answer client decisions".
+  const canAnswerDecisions = contactId ? true : (await requirePortalCapability(user, 'answer_decisions')).allowed
   const actionableDecisions = decisions.filter((d) => d.id === newestPendingId)
   const historicalDecisions = decisions.filter((d) => d.id !== newestPendingId)
 
@@ -370,7 +372,7 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
       {actionableDecisions.length > 0 && (
         <div className="space-y-3">
           {actionableDecisions.map((d) => (
-            <DecisionCard key={d.id} request={d} locale={locale} actionable />
+            <DecisionCard key={d.id} request={d} locale={locale} actionable={canAnswerDecisions} />
           ))}
         </div>
       )}

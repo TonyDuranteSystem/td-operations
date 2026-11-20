@@ -240,3 +240,41 @@ describe('extractMembersFromWizardData', () => {
     expect(result).toHaveLength(2)
   })
 })
+
+describe('member_portal_access (the "portal access" tick, dev job beb43385)', () => {
+  it('reads the tick from the flat wizard keys: ticked, unticked, no answer', () => {
+    const result = extractMembersFromWizardData({
+      member_count: 3,
+      member_0_member_first_name: 'Ann', member_0_member_email: 'ann@t.com', member_0_member_portal_access: true,
+      member_1_member_first_name: 'Bob', member_1_member_email: 'bob@t.com', member_1_member_portal_access: false,
+      member_2_member_first_name: 'Cy', member_2_member_email: 'cy@t.com',
+    })
+    expect(result.map(m => m.member_portal_access)).toEqual([true, false, null])
+  })
+
+  it('accepts the saved text forms and the standalone array path', () => {
+    const flat = extractMembersFromWizardData({
+      member_count: 2,
+      member_0_member_first_name: 'Ann', member_0_member_portal_access: 'false',
+      member_1_member_first_name: 'Bob', member_1_member_portal_access: 'true',
+    })
+    expect(flat.map(m => m.member_portal_access)).toEqual([false, true])
+    const array = extractMembersFromWizardData({ additional_members: [{ member_first_name: 'Dee', member_portal_access: false }] })
+    expect(array[0].member_portal_access).toBe(false)
+  })
+
+  it('a company member carries the tick for its representative', () => {
+    const result = extractMembersFromWizardData({
+      member_count: 1,
+      member_0_member_type: 'company', member_0_member_company_name: 'Acme Ltd', member_0_member_rep_email: 'rep@acme.com',
+      member_0_member_portal_access: false,
+    })
+    expect(result[0].member_type).toBe('company')
+    expect(result[0].member_portal_access).toBe(false)
+  })
+
+  it('the tick alone never creates a member', () => {
+    expect(extractMembersFromWizardData({ member_count: 1, member_0_member_portal_access: true })).toEqual([])
+  })
+})
+

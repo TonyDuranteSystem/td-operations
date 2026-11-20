@@ -1,0 +1,26 @@
+{
+  "title": "Reactions in WhatsApp groups",
+  "tag": "new",
+  "text": "You can now react to a message in a WhatsApp group from TD Social, and the reaction goes to the group. When a group member reacts to a message, you see their reaction with their first name, one for each person, instead of nothing.",
+  "points": [
+    "React to a group message from the CRM",
+    "See each member's reaction",
+    "Business phone reactions still show"
+  ],
+  "stepsTitle": "Reacting in a group",
+  "steps": [
+    {
+      "name": "Open a group chat",
+      "detail": "The one with the green Group label."
+    },
+    {
+      "name": "Pick a reaction on a message",
+      "detail": "The same smiley button as in other chats.",
+      "flag": "new"
+    },
+    {
+      "name": "See members' reactions",
+      "detail": "Each pill shows the member's first name."
+    }
+  ]
+}

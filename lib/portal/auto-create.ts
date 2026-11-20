@@ -79,6 +79,7 @@ export async function autoCreatePortalUser(params: AutoCreateParams): Promise<Au
       const { data: links } = await supabaseAdmin
         .from('account_contacts')
         .select('contact_id')
+        .is('access_revoked_at', null) // a member with the no-access mark never gets a login picked for them
         .eq('account_id', accountId)
         .limit(1)
 
@@ -347,6 +348,7 @@ export async function ensureMinimalAccount(params: {
 
   // Check if contact is already linked to an account
   const { data: existingLink } = await supabaseAdmin
+    // portal-access-ok: linking a new company, not a visibility check
     .from('account_contacts')
     .select('account_id')
     .eq('contact_id', contactId)
@@ -407,6 +409,7 @@ export async function ensureMinimalAccount(params: {
         }
       }
       // Link contact to existing account
+      // portal-access-ok: write
       await supabaseAdmin.from('account_contacts').upsert({
         account_id: lead.converted_to_account_id,
         contact_id: contactId,
@@ -469,6 +472,7 @@ export async function ensureMinimalAccount(params: {
   }
 
   // Link contact to account
+  // portal-access-ok: write
   await supabaseAdmin.from('account_contacts').insert({
     account_id: account.id,
     contact_id: contactId,

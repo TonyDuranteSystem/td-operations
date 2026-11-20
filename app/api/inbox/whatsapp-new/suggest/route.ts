@@ -81,6 +81,8 @@ export async function POST(request: NextRequest) {
   let leadId = leadIdBody
   let contactId = contactIdBody
   let phone = phoneBody
+  // A WhatsApp GROUP is not one person's number: the draft is for everyone in it, from the group's own messages.
+  let groupChat: { id: string; name: string | null } | null = null
 
   try {
     // 0. An existing conversation may already carry a lead/contact link and
@@ -90,15 +92,20 @@ export async function POST(request: NextRequest) {
     if (groupId) {
       const { data: group } = await supabaseAdmin
         .from('messaging_groups')
-        .select('external_group_id, lead_id, contact_id')
+        .select('external_group_id, lead_id, contact_id, group_name')
         .eq('id', groupId)
         .single()
       if (!group) {
         return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
       }
-      leadId = leadId ?? group.lead_id ?? undefined
-      contactId = contactId ?? group.contact_id ?? undefined
-      phone = phone ?? jidToE164(group.external_group_id)
+      if ((group.external_group_id ?? '').endsWith('@g.us')) {
+        groupChat = { id: groupId, name: group.group_name ?? null }
+        phone = 'group'
+      } else {
+        leadId = leadId ?? group.lead_id ?? undefined
+        contactId = contactId ?? group.contact_id ?? undefined
+        phone = phone ?? jidToE164(group.external_group_id)
+      }
     }
     if (!phone) {
       return NextResponse.json({ error: 'Could not resolve a phone number for this conversation' }, { status: 400 })
@@ -127,26 +134,27 @@ export async function POST(request: NextRequest) {
 
     // 2. Load whatever WhatsApp conversation exists so far for this number,
     // on the active WhatsApp channel — read-only, does not create a group.
-    const jid = toWhatsAppJid(phone)
     let conversationText = '(No previous WhatsApp messages with this number.)'
-    const { data: group } = await supabaseAdmin
-      .from('messaging_groups')
-      .select('id')
-      .eq('external_group_id', jid)
-      .limit(1)
-      .maybeSingle()
+    const { data: group } = groupChat
+      ? { data: { id: groupChat.id } }
+      : await supabaseAdmin
+          .from('messaging_groups')
+          .select('id')
+          .eq('external_group_id', toWhatsAppJid(phone))
+          .limit(1)
+          .maybeSingle()
 
     if (group?.id) {
       const { data: history } = await supabaseAdmin
         .from('messages')
-        .select('direction, content_text, content_type, created_at')
+        .select('direction, content_text, content_type, created_at, sender_name')
         .eq('group_id', group.id)
         .order('created_at', { ascending: false })
         .limit(20)
       const ordered = (history ?? []).reverse()
       if (ordered.length > 0) {
         conversationText = ordered
-          .map((m) => `${m.direction === 'outbound' ? 'Antonio' : 'Lead/Contact'}: ${m.content_text ?? `[${m.content_type}]`}`)
+          .map((m) => `${m.direction === 'outbound' ? 'Antonio' : groupChat ? (m.sender_name ?? 'Member') : 'Lead/Contact'}: ${m.content_text ?? `[${m.content_type}]`}`)
           .join('\n')
       }
     }
@@ -160,8 +168,8 @@ export async function POST(request: NextRequest) {
       : "You are drafting a WhatsApp reply for Antonio, owner of a US company-formation/tax firm, to a PRE-SALE lead or prospect (not yet a paying client) — or an existing client he's sending an occasional WhatsApp message to. This is a casual, first-contact-appropriate channel, not a formal client support channel. Be warm, direct, brief (WhatsApp message length, not an email). Never invent services, prices, or timelines TD doesn't actually offer — if the lead asks something you don't have grounded information for, draft a reply that offers to follow up rather than guessing. Draft in the same language the lead/contact has been writing in. Output ONLY the message text itself, exactly as it should be sent — no preamble like 'here is a draft', no framing, no quotation marks around it, no explanation."
 
     const userMessage = isRewrite
-      ? `LEAD/CONTACT: ${name ?? 'Unknown name'} (${phone})\n\nCONVERSATION SO FAR (for tone only — do not answer it):\n${conversationText}\n\nREWRITE THIS MESSAGE INTO ${languageName.toUpperCase()}:\n${rewriteText}`
-      : `LEAD/CONTACT: ${name ?? 'Unknown name'} (${phone})${sourceNote ? `\n${sourceNote}` : ''}\n\nCONVERSATION SO FAR:\n${conversationText}\n\nDraft Antonio's next WhatsApp message:`
+      ? `${groupChat ? `GROUP CHAT: ${groupChat.name ?? 'WhatsApp group'} (several people read this — write for the whole group)` : `LEAD/CONTACT: ${name ?? 'Unknown name'} (${phone})`}\n\nCONVERSATION SO FAR (for tone only — do not answer it):\n${conversationText}\n\nREWRITE THIS MESSAGE INTO ${languageName.toUpperCase()}:\n${rewriteText}`
+      : `${groupChat ? `GROUP CHAT: ${groupChat.name ?? 'WhatsApp group'} (several people read this — write for the whole group)` : `LEAD/CONTACT: ${name ?? 'Unknown name'} (${phone})`}${sourceNote ? `\n${sourceNote}` : ''}\n\nCONVERSATION SO FAR:\n${conversationText}\n\nDraft Antonio's next WhatsApp message:`
 
     const { reply, reachedMaxLoops } = await callWorkerWithAttachments(userMessage, {
       systemPromptOverride,

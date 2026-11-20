@@ -1,0 +1,26 @@
+{
+  "title": "WhatsApp: the Inbox warns you if the nightly program update needs a look",
+  "tag": "new",
+  "text": "The WhatsApp program on the Mac now updates itself every night. If an update goes wrong, falls back to the old version, or the nightly check stops running, a banner at the top of the WhatsApp tab tells you in plain words what happened and what to do.",
+  "points": [
+    "Amber banner: the update went back to the old version, or needs a review",
+    "Red banner: WhatsApp may be down after an update",
+    "Nothing shows when all is well"
+  ],
+  "stepsTitle": "What you will see",
+  "steps": [
+    {
+      "name": "Open the WhatsApp tab",
+      "detail": "The banner sits at the top, only when something needs a look."
+    },
+    {
+      "name": "Read the banner",
+      "detail": "It says what happened and whether messages still work.",
+      "flag": "new"
+    },
+    {
+      "name": "Tell Claude",
+      "detail": "Amber and red banners say to ask Claude to look at it."
+    }
+  ]
+}

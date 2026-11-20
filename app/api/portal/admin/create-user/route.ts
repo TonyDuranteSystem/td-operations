@@ -5,6 +5,8 @@ import { isAdmin } from '@/lib/auth'
 import { PORTAL_BASE_URL } from '@/lib/config'
 import { NextRequest, NextResponse } from 'next/server'
 import { autoCreatePortalUser, sendPortalWelcomeEmail } from '@/lib/portal/auto-create'
+import { localeFromLanguage } from '@/lib/locale'
+import { resolveLoginTarget } from '@/lib/members/portal-access-refusal'
 
 /**
  * POST /api/portal/admin/create-user
@@ -31,19 +33,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'account_id required' }, { status: 400 })
   }
 
-  // Resolve contact
-  let targetContactId = contact_id
+  // Resolve contact. A person with the "no portal access" mark on this company never gets a login made for it (the team
+  // gives the access back first); with nobody named, the first person who still has access is picked.
+  const target = await resolveLoginTarget(account_id, contact_id)
+  if (target.refusal) {
+    return NextResponse.json({ error: target.refusal }, { status: 409 })
+  }
+  const targetContactId = target.contactId
   if (!targetContactId) {
-    const { data: links } = await supabaseAdmin
-      .from('account_contacts')
-      .select('contact_id')
-      .eq('account_id', account_id)
-      .limit(1)
-
-    if (!links || links.length === 0) {
-      return NextResponse.json({ error: 'No contacts linked to this account' }, { status: 400 })
-    }
-    targetContactId = links[0].contact_id
+    return NextResponse.json({ error: 'No contacts linked to this account' }, { status: 400 })
   }
 
   // Get contact details
@@ -57,7 +55,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Contact has no email address' }, { status: 400 })
   }
 
-  const contactLang = contact.language === 'Italian' || contact.language === 'it' ? 'it' : 'en'
+  const contactLang = localeFromLanguage(contact.language)
 
   // Check if user already exists (paginated — P1.9)
   const existingUser = await findAuthUserByEmail(contact.email)
@@ -68,6 +66,7 @@ export async function POST(request: NextRequest) {
     const { data: allLinks } = await supabaseAdmin
       .from('account_contacts')
       .select('account_id')
+      .is('access_revoked_at', null) // a company the person has no access to is not listed on their login
       .eq('contact_id', targetContactId)
     const allAccountIds = (allLinks ?? []).map(l => l.account_id)
 
@@ -100,6 +99,7 @@ export async function POST(request: NextRequest) {
 
     // Ensure portal flags are set on ALL linked accounts
     const accountIdsToUpdate = allAccountIds.length > 0 ? allAccountIds : [account_id]
+    // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw write, untouched by the language fix; extract to lib/operations/ per dev_task fda76fd3
     await supabaseAdmin
       .from('accounts')
       .update({
@@ -111,8 +111,10 @@ export async function POST(request: NextRequest) {
 
     // Ensure contact has portal_tier set
     if (!contactFull?.portal_tier) {
+      // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw write, untouched by the language fix; extract to lib/operations/ per dev_task fda76fd3
       await supabaseAdmin
         .from('contacts')
+        // eslint-disable-next-line no-restricted-syntax -- pre-P2.4 raw write, untouched by the language fix; extract to lib/operations/ per dev_task fda76fd3
         .update({ portal_tier: effectiveTier, updated_at: new Date().toISOString() })
         .eq('id', targetContactId)
     }

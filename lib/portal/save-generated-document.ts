@@ -124,7 +124,7 @@ export async function saveSignedGeneratedDocument(
   let coOwnersAlerted = 0
   try {
     if (await isNewDocumentAlertEnabled()) {
-      const { data: links } = await db.from('account_contacts').select('contact_id').eq('account_id', accountId)
+      const { data: links } = await db.from('account_contacts').select('contact_id').is('access_revoked_at', null).eq('account_id', accountId)
       const coOwnerIds = Array.from(
         new Set(
           ((links ?? []) as Array<{ contact_id: string }>)

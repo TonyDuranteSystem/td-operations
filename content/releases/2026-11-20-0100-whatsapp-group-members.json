@@ -1,0 +1,26 @@
+{
+  "title": "See who is in a WhatsApp group, and filter to groups only",
+  "tag": "new",
+  "text": "Open a group in the WhatsApp tab and press Members to see everyone in it: name, phone number and an Admin tag. If a number belongs to a client or lead in the CRM, their CRM name shows too. A new Groups button next to All / Unread / Read shows only the group chats.",
+  "points": [
+    "Members list with Admin tag",
+    "CRM name when the number is known",
+    "Groups filter button"
+  ],
+  "stepsTitle": "Seeing who is in a group",
+  "steps": [
+    {
+      "name": "Open a group chat",
+      "detail": "It has the green Group label."
+    },
+    {
+      "name": "Press Members",
+      "detail": "A window lists everyone in the group.",
+      "flag": "new"
+    },
+    {
+      "name": "Press Groups above the list",
+      "detail": "Only group chats stay in the list."
+    }
+  ]
+}

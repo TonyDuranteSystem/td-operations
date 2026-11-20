@@ -1,0 +1,5 @@
+{
+  "title": "Internal: database type list refreshed for the WhatsApp groups function",
+  "tag": "behind-the-scenes",
+  "text": "The generated list of database types now includes the function that records the phone's WhatsApp groups. No screen changes; this only keeps the automatic type check green."
+}

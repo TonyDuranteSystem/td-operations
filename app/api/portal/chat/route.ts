@@ -750,7 +750,7 @@ async function pushNotifyAdmin(accountId: string | null, contactId: string | nul
   await sendPushToStaff({
     title: `Chat: ${displayName}`,
     body: messagePreview.slice(0, 200) || '[Attachment]',
-    url: `/portal-chats${accountId ? `?account=${accountId}` : ''}`,
+    url: `/portal-chats${accountId ? `?account=${accountId}` : contactId ? `?contact=${contactId}` : ''}`,
     tag: `admin-chat-${accountId || contactId || 'unknown'}`,
     alertKind: 'client_chat',
     phoneName: displayName,

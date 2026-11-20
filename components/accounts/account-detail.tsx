@@ -55,6 +55,9 @@ import { BankReferralsPanel } from './bank-referrals-panel'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 import { ClosureNotifyCheckbox, isClosureServiceType, showClosurePromptToast } from '@/components/services/closure-notify'
+import { ChangeLoginEmailStaffDialog } from '@/components/contacts/change-login-email-staff-dialog'
+import { MemberAccessRow } from './member-access-row'
+import { LOGIN_LINKED_ERROR } from '@/lib/portal/login-email-change-staff-shared'
 import { updateAccountField as updateAccountFieldRaw, updateContactField as updateContactFieldRaw, addAccountNote, updateAccountContactRole as updateAccountContactRoleRaw, promoteAccountToActive, createDBA, updateDBADetails } from '@/app/(dashboard)/accounts/actions'
 import { StorageCheckBanner } from './storage-check-banner'
 import { notifyStorageCheck } from '@/lib/crm-store/storage-check-events'
@@ -180,6 +183,8 @@ interface AccountDetailProps {
   signedContractLines?: AccountContractLine[] | null
   /** signed contracts whose amounts differ from this company's installment amounts (null = the check could not run; undefined = not loaded) */
   contractMismatches?: ContractMismatch[] | null
+  /** per-member portal-access chips and buttons: shown only while the switch is on for this company (dev job beb43385, delivery C) */
+  memberAccess?: { on: boolean; loginContactIds: string[] }
   account: Account
   /** Client-facing base URL for the current environment (server-computed). */
   appBaseUrl?: string
@@ -282,10 +287,12 @@ function ContactsSection({
   contacts,
   account,
   makeContactSaver,
+  memberAccess,
 }: {
   contacts: Contact[]
   account: Account
   makeContactSaver: (contactId: string, field: string, updatedAt: string) => (value: string) => Promise<{ success: boolean; error?: string }>
+  memberAccess?: { on: boolean; loginContactIds: string[] }
 }) {
   const [showSearch, setShowSearch] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -654,6 +661,18 @@ function ContactsSection({
                 </FastTooltip>
               </div>
               <div className="pl-9 grid gap-1.5">
+                {memberAccess?.on ? (
+                  <MemberAccessRow
+                    accountId={account.id}
+                    contactId={c.id}
+                    name={c.full_name}
+                    marked={Boolean(c.access_revoked_at)}
+                    markedByTeam={Boolean(c.access_revoked_by)}
+                    hasLogin={memberAccess.loginContactIds.includes(c.id)}
+                    accountTier={account.portal_tier}
+                    openLinkCount={contacts.filter(x => !x.access_revoked_at).length}
+                  />
+                ) : null}
                 {c.history_visible_from ? (
                   <div className="flex flex-wrap items-center gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1">
                     <span>In the portal this person sees the company&apos;s documents, invoices, messages and other history only from {new Date(c.history_visible_from).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}.</span>
@@ -706,7 +725,7 @@ function ContactsSection({
   )
 }
 
-export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.us', contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offers = [], partnerName = null, pendingActivations = {}, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [], ss4Applications = [], ss4ServiceDeliveries = [], stepperDeliveries = [], stagesByServiceType = {}, dbaServiceDeliveries = [], flows = [], becameClientGuess = null, signedContractLines, contractMismatches }: AccountDetailProps) {
+export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.us', contacts, services, payments, deals, taxReturns, documents = [], today, isAdmin = false, offers = [], partnerName = null, pendingActivations = {}, wizardProgress = null, serviceDeliveriesRaw = [], allWizards = [], bankReferrals = [], ss4Applications = [], ss4ServiceDeliveries = [], stepperDeliveries = [], stagesByServiceType = {}, dbaServiceDeliveries = [], flows = [], becameClientGuess = null, signedContractLines, contractMismatches, memberAccess }: AccountDetailProps) {
   const router = useRouter()
   const searchParams = useSearchParams()
   // AccountJourney's progress tracker (Signed/Paid/Activated) still wants
@@ -1049,7 +1068,7 @@ export function AccountDetail({ account, appBaseUrl = 'https://app.tonydurante.u
       {/* Tab content */}
       {activeTab === 'overview' && (
         <>
-          <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} onOpenStatusDialog={() => setShowStatusDialog(true)} dbaServiceDeliveries={dbaServiceDeliveries} stagesByServiceType={stagesByServiceType} becameClientGuess={becameClientGuess} contractMismatches={contractMismatches} />
+          <PanoramicaTab account={account} contacts={contacts} deals={deals} payments={payments} isAdmin={isAdmin} partnerName={partnerName} onOpenStatusDialog={() => setShowStatusDialog(true)} dbaServiceDeliveries={dbaServiceDeliveries} stagesByServiceType={stagesByServiceType} becameClientGuess={becameClientGuess} contractMismatches={contractMismatches} memberAccess={memberAccess} />
           {/* Recent emails (auto-matched + linked) — visible without hunting
               for the Emails tab (Antonio 2026-07-08) */}
           <div className="px-4 pb-4">
@@ -2514,7 +2533,7 @@ function MembersSection({ accountId, accountCompanyName, contacts, memberCount: 
 
 /* ── Panoramica Tab ───────────────────────────────────── */
 
-function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, partnerName, onOpenStatusDialog, dbaServiceDeliveries = [], stagesByServiceType = {}, becameClientGuess = null, contractMismatches }: { contractMismatches?: ContractMismatch[] | null; becameClientGuess?: GuessSummary | null; account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean; partnerName: string | null; onOpenStatusDialog: () => void; dbaServiceDeliveries?: NonNullable<AccountDetailProps['dbaServiceDeliveries']>; stagesByServiceType?: Record<string, PipelineStage[]> }) {
+function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, partnerName, onOpenStatusDialog, dbaServiceDeliveries = [], stagesByServiceType = {}, becameClientGuess = null, contractMismatches, memberAccess }: { memberAccess?: { on: boolean; loginContactIds: string[] }; contractMismatches?: ContractMismatch[] | null; becameClientGuess?: GuessSummary | null; account: Account; contacts: Contact[]; deals: Deal[]; payments: Payment[]; isAdmin: boolean; partnerName: string | null; onOpenStatusDialog: () => void; dbaServiceDeliveries?: NonNullable<AccountDetailProps['dbaServiceDeliveries']>; stagesByServiceType?: Record<string, PipelineStage[]> }) {
   const router = useRouter()
   const [noteText, setNoteText] = useState('')
   const [addingNote, setAddingNote] = useState(false)
@@ -2530,8 +2549,16 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
     return result
   }
 
+  // "Change login email" (staff): opened from an Email box when that contact HAS a portal login (dev job beb43385, step 3)
+  const [loginEmailDialog, setLoginEmailDialog] = useState<{ contactId: string; initial: string } | null>(null)
+
   const makeContactSaver = (contactId: string, field: string, contactUpdatedAt: string) => async (value: string) => {
     const result = await updateContactField(contactId, field, value, contactUpdatedAt, account.id)
+    // The contact has a portal login: the box must not change the contact alone, so open the real change instead
+    if (field === 'email' && !result.success && result.error === LOGIN_LINKED_ERROR) {
+      setLoginEmailDialog({ contactId, initial: value })
+      return { success: true }
+    }
     if (result.success) toast.success('Saved')
     else toast.error(result.error ?? 'Failed')
     return result
@@ -2562,6 +2589,14 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
 
   return (
     <div className="grid gap-6 lg:grid-cols-2">
+      {loginEmailDialog && (
+        <ChangeLoginEmailStaffDialog
+          contactId={loginEmailDialog.contactId}
+          initialEmail={loginEmailDialog.initial}
+          onClose={() => setLoginEmailDialog(null)}
+          onChanged={() => { setLoginEmailDialog(null); router.refresh() }}
+        />
+      )}
       {/* Company Info */}
       <div className="bg-white rounded-lg border p-5 space-y-4">
         <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">Company Info</h3>
@@ -2712,6 +2747,7 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
         contacts={contacts}
         account={account}
         makeContactSaver={makeContactSaver}
+        memberAccess={memberAccess}
       />
 
       {/* Members — any multi-member account (MMLLC or C-Corp Elected with multiple members) */}

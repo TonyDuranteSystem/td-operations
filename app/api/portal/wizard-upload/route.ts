@@ -9,6 +9,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isClient } from '@/lib/auth'
+import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
+import { teammateMayUseWizard } from '@/lib/portal/wizard-submit-access'
 import { wizardFileTypeProblem } from '@/lib/portal/wizard-file-rules'
 
 const BUCKET = 'onboarding-uploads' // Shared bucket for all wizard uploads
@@ -25,7 +27,18 @@ export async function POST(req: NextRequest) {
     const file = formData.get('file') as File
     const fieldName = formData.get('field_name') as string
     const wizardType = formData.get('wizard_type') as string
-    const identifier = formData.get('identifier') as string || user.email || user.id
+    let identifier = formData.get('identifier') as string || user.email || user.id
+
+    // A team login uploads only for a wizard its tick covers, and ONLY into its own company's folder:
+    // the path below is built from the company id the browser names, so without this a team login could
+    // write into (and, on this route, overwrite) any other company's files.
+    const identity = await resolvePortalIdentity(user)
+    if (identity.kind === 'teammate') {
+      if (!teammateMayUseWizard(identity.capabilities, wizardType)) {
+        return NextResponse.json({ error: 'Your team login cannot upload for this form. Ask the company owner.' }, { status: 403 })
+      }
+      identifier = identity.accountId
+    }
 
     if (!file || !fieldName) {
       return NextResponse.json({ error: 'file and field_name required' }, { status: 400 })

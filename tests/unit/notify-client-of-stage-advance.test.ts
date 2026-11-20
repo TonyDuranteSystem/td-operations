@@ -33,6 +33,7 @@ vi.mock("@/lib/supabase-admin", () => ({
       if (table === "account_contacts") {
         return {
           select: vi.fn().mockReturnThis(),
+          is: vi.fn().mockReturnThis(), // the no-portal-access filter (dev job beb43385)
           eq: vi.fn(() => Promise.resolve({ data: accountContactsFixture, error: null })),
         }
       }

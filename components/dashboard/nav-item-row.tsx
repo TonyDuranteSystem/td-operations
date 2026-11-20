@@ -16,6 +16,8 @@ export interface NavItem {
   href: string
   icon: React.ElementType
   badge?: number
+  /** WhatsApp health pointer: a coloured dot with one sentence on hover (red = a problem, amber = worth a look). */
+  attention?: { level: 'problem' | 'warning'; text: string }
   /** Presence dot (no number) — Team Chat shows this for a new DM / @mention. */
   dotBadge?: boolean
   /** Secondary purple badge — used for the Portal Chats "What's New" unhandled count. */
@@ -87,6 +89,14 @@ export function NavItemRow({ item, isActive, onMobileClose, move, onMenuOpenChan
         <item.icon className="h-4 w-4 shrink-0" />
         <span className="flex-1 min-w-0 truncate">{item.name}</span>
         {item.tag && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-200 text-amber-900 shrink-0" data-testid="nav-tag">{item.tag}</span>}
+        {item.attention && (
+          <span
+            title={item.attention.text}
+            aria-label={item.attention.text}
+            data-testid="nav-attention-dot"
+            className={cn('flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-bold leading-none text-white', item.attention.level === 'problem' ? 'bg-red-600 animate-pulse' : 'bg-amber-500')}
+          >!</span>
+        )}
         {item.badge != null && item.badge > 0 && (
           <span className={cn('text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-500 text-white min-w-[20px] text-center animate-pulse', badgeStepAside)}>
             {item.badge > 999 ? '999+' : item.badge}

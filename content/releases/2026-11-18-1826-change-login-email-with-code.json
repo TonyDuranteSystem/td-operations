@@ -1,0 +1,12 @@
+{
+  "title": "Clients can change their own login email, with a code sent to the new address",
+  "tag": "new",
+  "text": "In the client portal, Profile now has a Login email row with a Change email button. The client types the new email and their password, ticks the big red \"Read well before proceeding.\" block, and gets a 6-digit code at the NEW address. The login moves only when the code is entered, and the CRM email moves with it. The OLD address then gets a note with a red \"This wasn't me\" button: it puts the old email back, asks for a new password and alerts the team in the chat. The same Change button is in the formation and onboarding form, where the locked Email box used to say \"message us in chat\".",
+  "points": [
+    "Open Profile as a client: the Email box is now a Login email row with a Change email button",
+    "Try a wrong password, then an email that belongs to someone else: the messages never say whose it is",
+    "Enter the code from the email: the login and the CRM email change together, and the old address gets the note",
+    "Press \"This wasn't me\" in that note: the old email comes back and the team sees an alert in the chat"
+  ],
+  "screenshot": "login-email-change-with-code.png"
+}

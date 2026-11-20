@@ -59,16 +59,21 @@ describe('decideAdminSendScope (pure invariant)', () => {
 function fakeDb(tables: Record<string, { rows?: unknown[]; error?: { message: string } }>) {
   return {
     from: (table: string) => ({
-      select: () => ({
-        eq: () => {
-          const t = tables[table] ?? { rows: [] }
-          const result = { data: t.error ? null : (t.rows ?? []), error: t.error ?? null }
-          return {
-            // thenable so `await` works without a real Promise builder chain
-            then: (resolve: (v: typeof result) => unknown) => resolve(result),
-          }
-        },
-      }),
+      select: () => {
+        const sel = {
+          eq: () => {
+            const t = tables[table] ?? { rows: [] }
+            const result = { data: t.error ? null : (t.rows ?? []), error: t.error ?? null }
+            return {
+              // thenable so `await` works without a real Promise builder chain
+              then: (resolve: (v: typeof result) => unknown) => resolve(result),
+            }
+          },
+          // the no-portal-access filter (dev job beb43385): the fake keeps every row, the real database drops marked links
+          is: () => sel,
+        }
+        return sel
+      },
     }),
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any

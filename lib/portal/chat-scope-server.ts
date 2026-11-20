@@ -24,6 +24,7 @@ export async function resolvePersonalNullInclusion(
   const { data: links } = await supabaseAdmin
     .from('account_contacts')
     .select('contact_id')
+    .is('access_revoked_at', null)
     .eq('account_id', accountId)
   const ids = (links ?? []).map((r) => r.contact_id as string)
   const ownedAlone = mayIncludePersonalNull({

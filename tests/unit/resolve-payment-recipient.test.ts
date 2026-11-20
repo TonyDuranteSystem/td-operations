@@ -68,6 +68,7 @@ describe("resolvePaymentRecipient", () => {
         if (table === "account_contacts") {
           return {
             select: vi.fn().mockReturnThis(),
+            is: vi.fn().mockReturnThis(), // the no-portal-access filter (dev job beb43385)
             eq: vi.fn().mockReturnThis(),
             limit: vi.fn().mockResolvedValue({
               data: [{ role: "Member", contacts: { email: "alex@example.com", full_name: "Alex V", language: "en" } }],
@@ -105,6 +106,7 @@ describe("resolvePaymentRecipient", () => {
         if (table === "account_contacts") {
           return {
             select: vi.fn().mockReturnThis(),
+            is: vi.fn().mockReturnThis(), // the no-portal-access filter (dev job beb43385)
             eq: vi.fn().mockReturnThis(),
             limit: vi.fn().mockResolvedValue({
               data: [{ role: "owner", contacts: { email: "lw.adwise@gmail.com", full_name: "Lin Wang Chen", language: "en" } }],
@@ -139,6 +141,7 @@ describe("resolvePaymentRecipient", () => {
         if (table === "account_contacts") {
           return {
             select: vi.fn().mockReturnThis(),
+            is: vi.fn().mockReturnThis(), // the no-portal-access filter (dev job beb43385)
             eq: vi.fn().mockReturnThis(),
             limit: vi.fn().mockResolvedValue({
               data: [
@@ -177,6 +180,7 @@ describe("resolvePaymentRecipient", () => {
         if (table === "account_contacts") {
           return {
             select: vi.fn().mockReturnThis(),
+            is: vi.fn().mockReturnThis(), // the no-portal-access filter (dev job beb43385)
             eq: vi.fn().mockReturnThis(),
             limit: vi.fn().mockResolvedValue({
               data: [{ role: "Member", contacts: { email: "only@example.com", full_name: "Only Member", language: "it" } }],
@@ -211,6 +215,7 @@ describe("resolvePaymentRecipient", () => {
         if (table === "account_contacts") {
           return {
             select: vi.fn().mockReturnThis(),
+            is: vi.fn().mockReturnThis(), // the no-portal-access filter (dev job beb43385)
             eq: vi.fn().mockReturnThis(),
             limit: vi.fn().mockResolvedValue({
               data: [{ contacts: { email: null, full_name: "No Email" } }],
@@ -246,6 +251,7 @@ describe("resolvePaymentRecipient", () => {
         if (table === "account_contacts") {
           return {
             select: vi.fn().mockReturnThis(),
+            is: vi.fn().mockReturnThis(), // the no-portal-access filter (dev job beb43385)
             eq: vi.fn().mockReturnThis(),
             limit: vi.fn().mockResolvedValue({ data: [], error: null }),
           }

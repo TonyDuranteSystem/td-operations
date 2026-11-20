@@ -139,14 +139,17 @@ describe("what is sent", () => {
     const [a, b] = h.sent
     expect(a.host).toBe("api.push.apple.com")
     expect(a.req.headers["apns-topic"]).toBe(BUNDLE)
-    expect(body(a.req)).toEqual({ aps: { alert: { title: "Chat: Acme LLC" }, sound: "default", "thread-id": "admin-chat-1", badge: 4 }, url: "/portal-chats" })
+    expect(body(a.req)).toEqual({ aps: { alert: { title: "Chat: Acme LLC", body: "secret text" }, sound: "default", "thread-id": "admin-chat-1", badge: 4 }, url: "/portal-chats" })
     expect(body(b.req).aps.badge).toBe(7)
   })
 
-  it("the web title and body of a client alert never reach the phone", async () => {
+  it("a client chat shows the message start, but the web TITLE never reaches the phone", async () => {
     const h = harness()
-    await sendToPhones(alert({ title: "Chat: Acme", body: "my EIN is 12-3456789" }), h.deps)
-    for (const s of h.sent) expect(s.req.body).not.toContain("12-3456789")
+    await sendToPhones(alert({ title: "Chat: Maria EIN 12-3456789", body: "please call me" }), h.deps)
+    for (const s of h.sent) {
+      expect(s.req.body).toContain("please call me")
+      expect(s.req.body).not.toContain("12-3456789")
+    }
   })
 
   it("the typed-text kind carries its text", async () => {
@@ -314,7 +317,7 @@ describe("Marketing", () => {
     const h = harness({ over: { mutedTabs: async id => (id === "u1" ? ["marketing"] : []) } })
     const r = await sendToPhones(alert({ source: "marketing", teamId: "t1", kind: "marketing_lead_chat", name: "Giulia" }), h.deps)
     expect(r.sent).toBe(1)
-    expect(body(h.sent[0].req).aps.alert).toEqual({ title: "Nuovo messaggio · Giulia" })
+    expect(body(h.sent[0].req).aps.alert).toEqual({ title: "Nuovo messaggio · Giulia", body: "secret text" })
   })
 })
 

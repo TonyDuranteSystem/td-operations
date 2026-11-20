@@ -325,7 +325,7 @@ export default async function PortalLayout({
     onboardingOfferId: selected.kind === 'onboarding' ? selected.offerId : undefined,
   })
 
-  // Team tab is visible only to the account admin (main person) of the selected company.
+  // Team tab is visible only to a current owner or member of the selected company.
   const canManageTeam = !!contactId && !!selectedAccountId
     ? await isAccountAdmin(contactId, selectedAccountId)
     : false

@@ -12,6 +12,7 @@ import { contactIdForLead } from "@/lib/crm-store/lead-form-store"
 import { FORMATION_STATE_CODES, normalizeFormationState } from "@/lib/formation/states"
 import { formationStateForClient } from "@/lib/formation/state-lookup"
 import type { Json } from "@/lib/database.types"
+import { localeFromLanguage } from "@/lib/locale"
 
 export function registerFormationTools(server: McpServer) {
 
@@ -74,7 +75,7 @@ export function registerFormationTools(server: McpServer) {
         }
 
         // 6. Determine language
-        const formLang = language || (lead.language === "Italian" || lead.language === "it" ? "it" : "en")
+        const formLang = language || localeFromLanguage(lead.language)
 
         // 6b. Resolve state (WS-B): explicit param → the lead's signed offer's
         // pinned state → NM default. The offer tier is what makes "Wyoming
