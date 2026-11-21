@@ -1,0 +1,6 @@
+{
+  "title": "Shared sign-in counter recorded in the system's data map",
+  "tag": "behind-the-scenes",
+  "text": "The shared wrong-password counter for team logins is now live in the production database. This update adds it to the system's internal map of the database, so the automatic checks that compare the code with the database stay green for everyone. Nothing changes on screen or in how anyone signs in.",
+  "points": []
+}

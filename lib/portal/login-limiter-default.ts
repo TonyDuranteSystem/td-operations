@@ -11,7 +11,7 @@ let shared: LoginLimiter | null = null
 export function defaultLoginLimiter(): LoginLimiter {
   if (!shared) {
     shared = layeredLoginLimiter(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- portal_login_* are not in the generated database types until the production migration is applied
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the typed rpc() only takes literal function names; the limiter passes the name as a plain string (it is behind the RpcCall interface in login-limiter.ts)
       databaseLoginLimiter((fn, args) => (supabaseAdmin as any).rpc(fn, args)),
       memoryLoginLimiter(),
     )

@@ -15372,6 +15372,30 @@ export type Database = {
           },
         ]
       }
+      portal_login_attempts: {
+        Row: {
+          failures: number
+          first_at: string
+          key: string
+          locked_until: string | null
+          updated_at: string
+        }
+        Insert: {
+          failures?: number
+          first_at?: string
+          key: string
+          locked_until?: string | null
+          updated_at?: string
+        }
+        Update: {
+          failures?: number
+          first_at?: string
+          key?: string
+          locked_until?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       portal_login_email_changes: {
         Row: {
           auth_user_id: string
@@ -23814,6 +23838,7 @@ export type Database = {
         }
         Returns: Json
       }
+      portal_login_clear: { Args: { p_key: string }; Returns: undefined }
       portal_login_email_take_attempt: {
         Args: { p_id: string; p_lock_ms: number; p_max: number; p_user: string }
         Returns: {
@@ -23826,6 +23851,14 @@ export type Database = {
           old_email: string
           status: string
           taken: boolean
+        }[]
+      }
+      portal_login_release: { Args: { p_key: string }; Returns: undefined }
+      portal_login_reserve: {
+        Args: { p_key: string; p_max: number; p_window_seconds?: number }
+        Returns: {
+          allowed: boolean
+          retry_after_seconds: number
         }[]
       }
       release_company_suite_if_free: {
