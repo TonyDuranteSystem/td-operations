@@ -24,6 +24,7 @@ import { ThreadEmailPanel } from '@/components/portal-chats/thread-email-panel'
 import { ThreadWorkerPanel } from '@/components/portal-chats/thread-worker-panel'
 import { ContactLanguageField } from '@/components/portal-chats/contact-language-field'
 import { DEFAULT_LIST_FILTER, LIST_FILTER_CHIPS, matchesListFilter, orderThreadsForChip, type ListFilter } from '@/lib/portal-chats/list-filter'
+import { daysWaiting } from '@/lib/portal-chats/waiting'
 import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { VoiceNote } from '@/components/team-chat/voice-note'
 import { chatPreviewText, isVoiceAttachment } from '@/lib/portal/chat-voice'
@@ -125,6 +126,8 @@ interface ChatThread {
   is_pinned?: boolean
   /** A client or a team member wrote here (not only automatic notices) — the "Chats" chip. undefined = unknown. */
   has_people_messages?: boolean
+  /** Marked "waiting for client" by staff and the client has not written since (ISO of the mark). null = not waiting. */
+  waiting_since?: string | null
   /** Active service deliveries for this account — sourced live from service_deliveries, fully dynamic */
   active_services: { service_type: string; stage: string | null }[]
   /** Overdue invoices owed to TD — account-level thread's account, or contact-direct invoices. */
@@ -434,6 +437,8 @@ export default function PortalChatsPage() {
   // SEND target: sends use selectedCompanyId (explicit only).
   const panelCompanyId = selectedCompanyId ?? selectedThreadCompanies.find(c => !c.closed)?.id ?? null
   const [replyText, setReplyText] = useState('')
+  // "Waiting for client" tick beside the emoji button: when on, the message goes out and the conversation is marked waiting.
+  const [markWaiting, setMarkWaiting] = useState(false)
   const [notificationsEnabled, setNotificationsEnabled] = useState(false)
   const [aiSuggestion, setAiSuggestion] = useState('')
   const [aiLoading, setAiLoading] = useState(false)
@@ -1672,6 +1677,29 @@ export default function PortalChatsPage() {
     },
   })
 
+  // Mark / clear "waiting for client" on a conversation (staff, shared; ends by itself when the client writes).
+  const waitingThreadMutation = useMutation({
+    mutationFn: async ({ account_id, contact_id, waiting }: { account_id: string | null; contact_id: string | null; waiting: boolean }) => {
+      const res = await fetch('/api/portal/chat/waiting-thread', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_id, contact_id, waiting }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || 'Could not update "Waiting for client" — please try again.')
+      }
+      return res.json()
+    },
+    onSuccess: (_d, vars) => {
+      queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
+      toast.success(vars.waiting ? 'Marked: waiting for client' : 'No longer waiting for client')
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error && err.message ? err.message : 'Failed to update "Waiting for client"')
+    },
+  })
+
   // Scroll a message into view + flash-highlight it (used by the Pinned strip).
   const scrollToMessage = (messageId: string) => {
     const el = document.getElementById(`pc-msg-${messageId}`)
@@ -2068,7 +2096,7 @@ export default function PortalChatsPage() {
     // from live component state — see the capture comment in handleSend for
     // why (an attachment upload is a real await; live state can point at a
     // different client/company/topic by the time this actually runs).
-    mutationFn: async ({ message, reply_to_id, attachments, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToMemberId, targetAddressedToCompany }: { message: string; reply_to_id?: string; attachments?: { url: string; name: string }[]; targetAccountId: string | null; targetContactId: string | null; targetCompanyId: string | null; targetTopic: string | null; targetAddressedToMemberId: string | null; targetAddressedToCompany: boolean }) => {
+    mutationFn: async ({ message, reply_to_id, attachments, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToMemberId, targetAddressedToCompany }: { message: string; reply_to_id?: string; attachments?: { url: string; name: string }[]; targetAccountId: string | null; targetContactId: string | null; targetCompanyId: string | null; targetTopic: string | null; targetAddressedToMemberId: string | null; targetAddressedToCompany: boolean; waiting?: boolean }) => {
       const res = await fetch('/api/portal/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2150,6 +2178,24 @@ export default function PortalChatsPage() {
           body: JSON.stringify(readBody),
         })
       } catch { /* non-fatal */ }
+      // The "Waiting for client" tick was on: mark this conversation now that the message is out. A failure is
+      // shown (the message itself did go), so staff can mark it by hand from the list.
+      if (variables.waiting) {
+        setMarkWaiting(false)
+        try {
+          const wr = await fetch('/api/portal/chat/waiting-thread', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ account_id: variables.targetAccountId, contact_id: variables.targetAccountId ? null : variables.targetContactId, waiting: true }),
+          })
+          if (!wr.ok) {
+            const d = await wr.json().catch(() => ({}))
+            throw new Error(d.error || 'unknown error')
+          }
+        } catch (e) {
+          toast.error(`Message sent, but it could not be marked "waiting for client": ${e instanceof Error ? e.message : 'please try again'}`)
+        }
+      }
       queryClient.invalidateQueries({ queryKey: ['portal-chat-messages', targetKey] })
       queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
     },
@@ -2164,6 +2210,9 @@ export default function PortalChatsPage() {
       toast.error(err instanceof Error && err.message ? err.message : 'Failed to send — please try again.')
     },
   })
+
+  // The "Waiting for client" tick belongs to the conversation it was ticked in — never carry it to another client.
+  useEffect(() => { setMarkWaiting(false) }, [selectedAccountId, selectedContactId])
 
   // Reset topic when thread changes. The very first run (page load / refresh) keeps the
   // topic restored from `?topic=`; only a REAL change of conversation resets it.
@@ -2514,7 +2563,7 @@ export default function PortalChatsPage() {
             contactId: targetAccountId ? undefined : targetContactId,
           })
         ))
-        sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, attachments: uploaded, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToMemberId, targetAddressedToCompany })
+        sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, attachments: uploaded, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToMemberId, targetAddressedToCompany, waiting: markWaiting })
       } catch (err) {
         toast.error(err instanceof Error && err.message ? err.message : 'Failed to upload file')
       } finally {
@@ -2522,7 +2571,7 @@ export default function PortalChatsPage() {
         if (adminFileRef.current) adminFileRef.current.value = ''
       }
     } else {
-      sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToMemberId, targetAddressedToCompany })
+      sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToMemberId, targetAddressedToCompany, waiting: markWaiting })
     }
   }
 
@@ -2938,6 +2987,23 @@ export default function PortalChatsPage() {
                       </div>
                     </div>
                     <div className="flex items-center gap-1.5 ml-2 shrink-0">
+                      {/* Waiting for client (staff, shared): amber + days when waiting; click toggles. Ends by itself when the client writes. */}
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        onClick={e => {
+                          e.stopPropagation()
+                          waitingThreadMutation.mutate({ account_id: thread.account_id, contact_id: thread.contact_id, waiting: !thread.waiting_since })
+                        }}
+                        title={thread.waiting_since ? `Waiting for client — ${daysWaiting(thread.waiting_since, new Date())} day(s). Click to clear` : 'Mark as waiting for client'}
+                        className={cn(
+                          'shrink-0 rounded p-0.5 cursor-pointer hover:bg-zinc-200 inline-flex items-center gap-0.5',
+                          thread.waiting_since ? 'text-amber-600' : 'text-zinc-300 hover:text-zinc-500'
+                        )}
+                      >
+                        <Hourglass className="h-3.5 w-3.5" />
+                        {thread.waiting_since && <span className="text-[10px] font-medium">{daysWaiting(thread.waiting_since, new Date())}d</span>}
+                      </span>
                       {/* Pin conversation (staff, shared) — pinned threads sort above everything */}
                       <span
                         role="button"
@@ -5140,6 +5206,23 @@ export default function PortalChatsPage() {
                         />
                       </div>
                     )}
+                  </div>
+                  {/* Waiting for client — tick before Send: the message goes out and the conversation is marked "Waiting" */}
+                  <div className="app-hide relative shrink-0">
+                    <FastTooltip label={markWaiting ? 'Will be marked “waiting for client” when sent (click to undo)' : openThreadRow?.waiting_since ? 'Already waiting — tick to restart the wait with this message' : 'Waiting for client: mark this conversation when you send'}>
+                      <button
+                        type="button"
+                        onClick={() => setMarkWaiting(v => !v)}
+                        aria-pressed={markWaiting}
+                        aria-label="Waiting for client"
+                        className={cn(
+                          'p-2 rounded-full transition-colors',
+                          markWaiting ? 'text-amber-600 bg-amber-100 hover:bg-amber-200' : openThreadRow?.waiting_since ? 'text-amber-500 hover:bg-zinc-100' : 'text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100'
+                        )}
+                      >
+                        <Hourglass className="h-5 w-5" />
+                      </button>
+                    </FastTooltip>
                   </div>
                   {/* Paperclip */}
                   <div className="app-hide relative shrink-0">
