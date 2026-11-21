@@ -8,6 +8,8 @@ import StandaloneServiceAgreement, { contractWordingFor, ContractNotReady } from
 import { isStandaloneAgreementType, isCustomContractType, type ShortContractType } from '@/lib/offers/standalone-contract-types'
 import { InlineText, AgreementBody } from '@/components/contracts/agreement-body'
 import { isNoChargeFee } from '@/lib/offers/fee-label'
+import { planPaymentWordingFor } from '@/lib/contracts/plan-payment-wording'
+import { PaymentSentence } from '@/components/contracts/payment-sentence'
 import RenewalAgreement from './renewal-agreement'
 import ServiceAgreement from './service-agreement'
 import { ensureBankDetails, type BankDetails } from './bank-defaults'
@@ -975,6 +977,8 @@ export default function ContractPage() {
   }
 
   const { fee, planFeeWording, llcType, installments, annualFee, annualSchedule, year } = getContractData()
+  // The offer's payment plan, as section 5 of each add-on agreement states it (null = no usable plan: the ordinary "payable in full" sentence).
+  const planWording = planPaymentWordingFor(offer as unknown as Record<string, unknown>)
   // WS-B: the offer's pinned formation state (null on pre-WS-B offers → row hidden)
   const contractFormationState = normalizeFormationState((offer as { formation_state?: string | null } | null)?.formation_state)
   const effDate = today()
@@ -1251,7 +1255,7 @@ export default function ContractPage() {
 
               {isCustomContractType(svcCt) ? (
                 // a NEW service's agreement reads exactly as the owner approved it (the preview uses the same body)
-                <AgreementBody ct={ct} clientName={form.name || ''} serviceName={svc.name || ''} serviceDesc={svc.description || ''} fee={svcFee} includes={(svc.includes || []) as string[]} scopeClosing={ct.scope.closing} workPhrase={ct.workPhrase ?? ''} liabilityPhrase={ct.liabilityPhrase ?? ''} />
+                <AgreementBody ct={ct} clientName={form.name || ''} serviceName={svc.name || ''} serviceDesc={svc.description || ''} fee={svcFee} includes={(svc.includes || []) as string[]} scopeClosing={ct.scope.closing} workPhrase={ct.workPhrase ?? ''} liabilityPhrase={ct.liabilityPhrase ?? ''} plan={planWording} />
               ) : (
               <>
 
@@ -1303,7 +1307,7 @@ export default function ContractPage() {
                   <p>No service fee is payable to the Service Provider for this service itself; it is included in your offer. Any third-party or government charges described in this Agreement remain the Client&rsquo;s responsibility.</p>
                 ) : (
                   <>
-                    <p>The total fee for this service is <strong>{svcFee}</strong>, payable in full before services begin. Payment may be made via credit/debit card or bank wire transfer as indicated in the offer.</p>
+                    <PaymentSentence fee={svcFee} plan={planWording} legacy={<>The total fee for this service is <strong>{svcFee}</strong>, payable in full before services begin. Payment may be made via credit/debit card or bank wire transfer as indicated in the offer.</>} />
                     <p><strong>All fees are non-refundable</strong> once services have commenced.</p>
                   </>
                 )}

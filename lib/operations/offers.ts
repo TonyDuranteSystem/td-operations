@@ -35,6 +35,8 @@ import type { Json } from "@/lib/database.types"
 import type { ShortContractType } from "@/lib/offers/standalone-contract-types"
 import { agreementCoverageGap, agreementCoverageWarnings } from "@/lib/offers/standalone-agreement-lines"
 import { multiAgreementsEnabled } from "@/lib/offers/multi-agreements-switch"
+import { normalizeOfferLists } from "@/lib/offers/json-list"
+import { checkTaxYearOnOffer } from "@/lib/offers/tax-year-check"
 
 // ─── JSONB validation ───────────────────────────────────────
 
@@ -532,6 +534,14 @@ async function checkBillToOwnership(
 
 export async function createOffer(params: CreateOfferParams): Promise<CreateOfferResult> {
   try {
+    // 0. A list sent as TEXT (a pre-encoded JSON string) becomes the real list, or is refused — a text-saved
+    //    price breakdown once took the staff contact page down (dev job 20600f18). See lib/offers/json-list.ts.
+    const listCheck = normalizeOfferLists(params as unknown as Record<string, unknown>)
+    if (!listCheck.ok) {
+      return { success: false, outcome: "validation_error", error: listCheck.error }
+    }
+    Object.assign(params, listCheck.values)
+
     // 1. Validate JSONB fields
     const validationError = validateOfferJsonb(params as unknown as Record<string, unknown>)
     if (validationError) {
@@ -551,6 +561,13 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
     const billToOwnershipError = await checkBillToOwnership(billToParsed.billTo ?? null, params.account_id ?? null, params.contact_id ?? null)
     if (billToOwnershipError) {
       return { success: false, outcome: "validation_error", error: billToOwnershipError }
+    }
+
+    // The tax year of a short-contract Tax Return line (dev job 0a60f416, part B): one Tax Return line per offer, and a year the company
+    // could really have a return for. Warnings travel with the created offer.
+    const taxYearCheck = await checkTaxYearOnOffer({ contractType: params.contract_type, services: params.services, accountId: params.account_id })
+    if (taxYearCheck.error) {
+      return { success: false, outcome: "validation_error", error: taxYearCheck.error }
     }
 
     // Multi-option offers (dev job 3c1bb5fa). Refused at the door for the same
@@ -1014,6 +1031,8 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
     } catch (e) {
       console.warn("[createOffer] agreement coverage check failed:", e instanceof Error ? e.message : e)
     }
+
+    creditWarnings.push(...taxYearCheck.warnings)
 
     return {
       success: true,

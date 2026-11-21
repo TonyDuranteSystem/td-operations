@@ -104,7 +104,7 @@ describe('loadSignedContractsForContact — what is read', () => {
       expect(c.columns).not.toContain('*')
       expect(c.columns).not.toMatch(/passport|address|phone|dob|birth|ssn|itin/i)
     }
-    expect(callsOn('contracts')[0].columns).toBe('id, offer_token, signed_at, created_at, updated_at, contract_version, annual_fee, installments, pdf_path')
+    expect(callsOn('contracts')[0].columns).toBe('id, offer_token, signed_at, created_at, updated_at, contract_version, annual_fee, installments, pdf_path, agreements')
   })
 })
 

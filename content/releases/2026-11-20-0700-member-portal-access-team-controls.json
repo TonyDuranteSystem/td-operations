@@ -1,0 +1,26 @@
+{
+  "title": "Behind the scenes: the team can take away or give back a member's portal access (switched off)",
+  "tag": "behind-the-scenes",
+  "text": "On a company page, each person in Contacts now shows where they stand with the client portal, and the team has one button to take the company away from a member or give it back. The person always stays an owner on every document; only the portal changes. Making a login by hand, and the messages and notices that pick one person, now skip a member who has no portal access. It is switched off, so nothing changes yet: we test it on test companies first and Antonio turns it on afterwards.",
+  "points": [
+    "Chip per person: Portal login active, Login after EIN, No login yet, No portal access",
+    "Take away access / Give access, with the team member recorded",
+    "The primary contact and the last person with access cannot be taken away"
+  ],
+  "stepsTitle": "Changing one member's portal access",
+  "steps": [
+    {
+      "name": "Open the company page",
+      "detail": "Contacts shows a chip for each person."
+    },
+    {
+      "name": "Press Take away access or Give access",
+      "detail": "The person stays an owner either way.",
+      "flag": "new"
+    },
+    {
+      "name": "Give access finishes the job",
+      "detail": "Creates the login and sends the welcome email when none exists (admins only)."
+    }
+  ]
+}

@@ -26,6 +26,11 @@ const h = vi.hoisted(() => {
     bellFail: [] as string[],
     emailFail: false,
     bells: [] as string[],
+    /** When set, the next notification saves wait for it (a press caught in the middle of its send); `held` counts how many are waiting. */
+    hold: null as Promise<void> | null,
+    held: 0,
+    /** Runs once, just before the first write of the client-message claim lands (another press getting in between the read and the write). */
+    racer: null as null | (() => void),
   }
 
   type Result = { data: unknown; error: { message: string } | null; count?: number | null }
@@ -59,6 +64,11 @@ const h = vi.hoisted(() => {
       if (hit >= 0) {
         const [i] = state.inject.splice(hit, 1)
         return { data: null, error: { message: i.message } }
+      }
+      if (this.mode === 'update' && this.table === 'service_deliveries' && state.racer && String(this.payload?.notes ?? '').includes('Client message sending')) {
+        const go = state.racer
+        state.racer = null
+        go()
       }
       const rows = (state.db[this.table] ??= [])
       if (this.mode === 'insert') {
@@ -128,6 +138,7 @@ vi.mock('@/lib/portal/mark-thread-read', () => ({
 }))
 vi.mock('@/lib/portal/notifications', () => ({
   createPortalNotification: vi.fn(async (p: { type: string }) => {
+    if (h.state.hold) { h.state.held += 1; await h.state.hold }
     const i = h.state.bellFail.indexOf(p.type)
     if (i >= 0) { h.state.bellFail.splice(i, 1); return { error: `${p.type} bell broke` } }
     h.state.bells.push(p.type)
@@ -139,6 +150,7 @@ vi.mock('@/lib/portal/notifications', () => ({
 }))
 
 import { previewStartNewCompany, startNewCompany } from '@/lib/operations/start-new-company'
+import { messageClaimNote, replacementNote } from '@/lib/operations/start-new-company-rules'
 
 const BUYER = '11111111-1111-4111-8111-111111111111'
 const CO_MEMBER = '22222222-2222-4222-8222-222222222222'
@@ -183,6 +195,9 @@ function seed() {
   h.state.bellFail = []
   h.state.emailFail = false
   h.state.bells = []
+  h.state.hold = null
+  h.state.held = 0
+  h.state.racer = null
 }
 
 const press = (over: Partial<Parameters<typeof startNewCompany>[0]> = {}) =>
@@ -235,6 +250,35 @@ describe('the preview', () => {
   it('treats a lease waiting for a signature as a lease in force', async () => {
     h.state.db.lease_agreements = [{ id: 'l1', account_id: ACCOUNT, status: 'awaiting_signature' }]
     expect((await previewStartNewCompany(BUYER)).candidates[0].blockers.join(' ')).toContain('lease')
+  })
+
+  describe('asked by the formation workspace about ONE job (Antonio, 2026-11-17)', () => {
+    function addSecondFormation() {
+      h.state.db.accounts.push({ id: 'acct-two', company_name: 'Second LLC', state_of_formation: 'Wyoming', status: 'Active', portal_account: true, portal_tier: 'active', notes: null })
+      h.state.db.account_contacts.push({ account_id: 'acct-two', contact_id: BUYER, ended_at: null })
+      h.state.db.service_deliveries.push({ id: 'second-job', service_type: 'Company Formation', status: 'active', stage: 'Articles Received', contact_id: BUYER, account_id: 'acct-two', source_offer_token: 'offer-token-2', notes: null })
+    }
+
+    it('answers about that job only, even when the person has another open formation', async () => {
+      addSecondFormation()
+      expect((await previewStartNewCompany(BUYER)).candidates.map((c) => c.deliveryId).sort()).toEqual(['old-job', 'second-job'])
+      const only = await previewStartNewCompany(BUYER, OLD_JOB)
+      expect(only.candidates.map((c) => c.deliveryId)).toEqual([OLD_JOB])
+      expect(only.candidates[0].companyName).toBe('Novag LLC')
+      expect((await previewStartNewCompany(BUYER, 'second-job')).candidates.map((c) => c.companyName)).toEqual(['Second LLC'])
+    })
+
+    it('answers with no company for a job that is not an open formation of this person', async () => {
+      expect((await previewStartNewCompany(BUYER, 'other-service')).candidates).toEqual([])
+      expect((await previewStartNewCompany(BUYER, 'no-such-job')).candidates).toEqual([])
+      expect((await previewStartNewCompany(CO_MEMBER, OLD_JOB)).candidates).toEqual([])
+    })
+
+    it('still gives the person and the same draft message, so the pop-up reads the same as before', async () => {
+      const p = await previewStartNewCompany(BUYER, OLD_JOB)
+      expect(p.contact?.firstName).toBe('Ugo')
+      expect(p.candidates[0].draftMessage.startsWith('Ciao Ugo,')).toBe(true)
+    })
   })
 })
 
@@ -298,6 +342,9 @@ describe('a press that stops half-way is finished by pressing again', () => {
     // what needs a person is in the notes, not only on screen
     expect(String(newJob()?.notes)).toContain('NOT FINISHED')
     expect(String(newJob()?.notes)).toContain('chat is down')
+    // the panel is on the OLD job (the new one has no company yet), so the note says where to go and gives its path
+    expect(String(newJob()?.notes)).toContain('OLD formation job')
+    expect(String(newJob()?.notes)).toContain(`/flows/${OLD_JOB}`)
 
     const second = await press()
     expect(second.finished).toBe(true)
@@ -547,5 +594,90 @@ describe('two presses at the same moment (browser QA, 2026-11-17)', () => {
     expect(r.error).not.toContain('uq_formation')
     expect(sd(OLD_JOB)?.status).toBe('active')
     expect(h.state.messages).toHaveLength(0)
+  })
+})
+
+describe('the client is told ONCE even when two presses overlap (found on production, 2026-11-17)', () => {
+  /** A job an earlier press already opened on the same offer, with whatever the notes say about the message. */
+  function seedOpenedJob(messageLine: string | null): Row {
+    const row: Row = {
+      id: 'new-job-x', service_type: 'Company Formation', status: 'active', stage: 'Payment Confirmed', contact_id: BUYER, account_id: null, source_offer_token: TOKEN,
+      notes: [replacementNote(OLD_JOB, 'Novag LLC', '2026-11-17', 'staff@example.com'), messageLine].filter(Boolean).join('\n'),
+    }
+    h.state.db.service_deliveries.push(row)
+    return row
+  }
+  const secondsAgo = (n: number) => new Date(Date.now() - n * 1000).toISOString()
+  const settle = () => new Promise((r) => setTimeout(r, 0))
+
+  it('a second press that arrives while the first is still sending sends nothing and cancels nothing', async () => {
+    let release!: () => void
+    h.state.hold = new Promise<void>((r) => { release = r })
+    const first = press()
+    for (let i = 0; i < 200 && h.state.held === 0; i++) await settle() // the first press is now inside its send
+    expect(h.state.held).toBeGreaterThan(0)
+    h.state.hold = null
+
+    const second = await press()
+    expect(second.success).toBe(false)
+    expect(second.error).toContain('sending the client')
+    expect(sd(OLD_JOB)?.status).toBe('active') // the second press did not cancel the old job
+
+    release()
+    const a = await first
+    expect(a.finished).toBe(true)
+    expect(h.state.messages).toHaveLength(1)
+    expect(h.state.bells.filter((t) => t === 'wizard_reminder')).toHaveLength(1)
+    expect(h.state.bells.filter((t) => t === 'chat')).toHaveLength(1)
+    expect(String(newJob()?.notes)).toContain('Client message sent')
+    expect(sd(OLD_JOB)?.status).toBe('cancelled')
+  })
+
+  it('two presses that read the notes at the same moment: only one write lands, the other finds the first one\'s claim', async () => {
+    seedOpenedJob(null)
+    // The other press gets its claim in between this press's read and its write.
+    h.state.racer = () => { const j = sd('new-job-x') as Row; j.notes = `${j.notes}\n${messageClaimNote('2026-11-17', new Date().toISOString())}` }
+    const r = await press()
+    expect(r.success).toBe(false)
+    expect(r.error).toContain('sending the client')
+    expect(h.state.messages).toHaveLength(0)
+    expect(sd(OLD_JOB)?.status).toBe('active')
+  })
+
+  it('a claim another press made seconds ago is respected: nothing is sent, the old job stays', async () => {
+    seedOpenedJob(messageClaimNote('2026-11-17', secondsAgo(10)))
+    const r = await press()
+    expect(r.success).toBe(false)
+    expect(h.state.messages).toHaveLength(0)
+    expect(sd(OLD_JOB)?.status).toBe('active')
+  })
+
+  it('a claim nobody finished (older than two minutes) does not block the message for good', async () => {
+    seedOpenedJob(messageClaimNote('2026-11-17', secondsAgo(300)))
+    const r = await press()
+    expect(r.finished).toBe(true)
+    expect(h.state.messages).toHaveLength(1)
+    expect(sd(OLD_JOB)?.status).toBe('cancelled')
+  })
+
+  it('a send that fails lets the claim go, so the very next press can send', async () => {
+    h.state.inject.push({ table: 'portal_messages', mode: 'insert', message: 'chat is down' })
+    const first = await press()
+    expect(first.finished).toBe(false)
+    expect(String(newJob()?.notes)).toContain('Client message not sent')
+    expect(h.state.messages).toHaveLength(0)
+
+    const second = await press()
+    expect(second.finished).toBe(true)
+    expect(h.state.messages).toHaveLength(1)
+    expect(String(newJob()?.notes)).toContain('Client message sent')
+  })
+
+  it('a message that already went out is never sent again', async () => {
+    seedOpenedJob('2026-11-17 — Client message sent (Italian).')
+    const r = await press()
+    expect(h.state.messages).toHaveLength(0)
+    expect(r.steps.find((s) => s.step === 'message to the client')?.status).toBe('skipped')
+    expect(r.finished).toBe(true)
   })
 })

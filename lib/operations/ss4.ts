@@ -24,6 +24,7 @@ import { formatCountyAndState } from "@/lib/addresses"
 import { checkAgentInCompanyState } from "@/lib/formation/registered-agent-state"
 import { resolveMailing } from "@/lib/operations/ss4-refresh"
 import { pickDefaultSs4SignerLink } from "@/lib/operations/ss4-signer"
+import { isMarkedOnCompany } from "@/lib/members/marked-on-company"
 
 export interface CreateSS4Params {
   account_id: string
@@ -45,6 +46,7 @@ export type CreateSS4Outcome =
   | "missing_ra"
   | "missing_county"
   | "ra_state_mismatch"
+  | "signer_no_portal_access"
   | "error"
 
 export interface CreateSS4Ss4 {
@@ -273,6 +275,17 @@ export async function prepareSS4(
 
   if (ctErr || !contact) {
     return { ok: false, outcome: "no_contact", message: `Contact not found: ${ctErr?.message || "no data"}` }
+  }
+
+  // The Responsible Party signs the SS-4 IN THE PORTAL. A person whose link carries the "no portal access" mark cannot open the
+  // company there, so the SS-4 (and its "Sign your SS-4" alert) would wait for someone who cannot sign it and the EIN would stall.
+  // Refuse before anything is written (QA 21 Nov 2026, dev job beb43385).
+  if (await isMarkedOnCompany(params.account_id, contactId)) {
+    return {
+      ok: false,
+      outcome: "signer_no_portal_access",
+      message: `${contact.full_name ?? "This person"} has no portal access to ${account.company_name}, so they cannot sign the SS-4 there. Give them portal access first, or choose another member as the signer.`,
+    }
   }
 
   // ─── 5. MEMBER COUNT ───

@@ -144,6 +144,24 @@ describe("offer_update and the status 'sent' (call 1): an offer becomes sent onl
     expect(h.writes).toEqual([{ client_email: "new@email.com" }])
   })
 
+  // Dev job 20600f18: a price breakdown saved as TEXT took the staff contact page down.
+  it("a list sent as pre-encoded text is saved as the real list", async () => {
+    h.status = "draft"
+    const groups = [{ label: "Total", total: "$500" }]
+    const r = await update({ updates: { cost_summary: JSON.stringify(groups), client_email: "new@email.com" } })
+    expect(r.content[0].text).toContain("Offer t1 updated")
+    expect(h.writes).toEqual([{ cost_summary: groups, client_email: "new@email.com" }])
+  })
+
+  it("text that is not a list is refused and nothing is written", async () => {
+    h.status = "draft"
+    const r = await update({ updates: { services: "not a list" } })
+    expect(r.content[0].text).toContain("offer_update error")
+    expect(r.content[0].text).toContain("services")
+    expect(r.content[0].text).toContain("not a list")
+    expect(h.writes).toEqual([])
+  })
+
   it("the tool's own help text no longer teaches the shortcut", () => {
     const t = registered.offer_update
     expect(t.description).toContain("offer_send")

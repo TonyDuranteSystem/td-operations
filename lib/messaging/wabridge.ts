@@ -6,9 +6,11 @@
  * message shape can be unit-tested without a phone.
  *
  * What is deliberately NOT ingested (the receiver acknowledges these with 200 so GOWA does not retry):
- *  - anything that is not a one-to-one chat with a real phone number (groups, status/broadcast,
- *    newsletters, unresolved @lid identifiers) — a fake "phone number" built from such an id would
- *    open a garbage thread that no reply can ever reach (bug-hunter, 2026-09-24);
+ *  - anything that is neither a one-to-one chat with a real phone number nor a WhatsApp GROUP
+ *    (status/broadcast, newsletters, unresolved @lid identifiers) — a fake "phone number" built from
+ *    such an id would open a garbage thread that no reply can ever reach (bug-hunter, 2026-09-24).
+ *    GROUPS ARE SAVED since 2026-11-19 (Antonio): the chat is keyed by the group's own `…@g.us` id,
+ *    never by a phone number, and each message carries the participant who wrote it;
  *  - reactions, receipts, presence, edits, deletions, calls, labels — not messages;
  *  - the owner's own "message yourself" chat.
  */
@@ -30,8 +32,12 @@ export type WabridgeContentType =
 
 export interface WabridgeMessage {
   externalId: string
-  /** Digits only, no plus — the other party of the chat (never the owner). */
+  /** Digits only, no plus — the other party of the chat (never the owner). For a GROUP message this is the group's own id (`<digits>@g.us`). */
   remoteDigits: string
+  /** True for a message in a WhatsApp group. The chat key is then the group id and `senderDigits` is the participant. */
+  isGroup?: boolean
+  /** Group messages only: digits of the participant who wrote it (null when WhatsApp hides the number behind a linked id). */
+  senderDigits?: string | null
   direction: "inbound" | "outbound"
   senderName: string | null
   contentType: WabridgeContentType
@@ -67,6 +73,13 @@ const PLACEHOLDER: Partial<Record<WabridgeContentType, string>> = {
 export function userDigitsFromJid(jid: string | null): string | null {
   if (!jid) return null
   const m = /^(\d{6,15})(?::\d+)?@(?:s\.whatsapp\.net|c\.us)$/.exec(jid.trim())
+  return m ? m[1] : null
+}
+
+/** `120363418403958886@g.us` → itself; null for anything that is not a WhatsApp group id. */
+export function groupJidOf(jid: string | null | undefined): string | null {
+  if (!jid) return null
+  const m = /^(\d{8,30}(?:-\d+)?@g\.us)$/.exec(jid.trim())
   return m ? m[1] : null
 }
 
@@ -115,7 +128,8 @@ export function parseGowaEvent(body: unknown, now: Date = new Date()): WabridgeP
   if (!id) return { action: "ignore", reason: "no message id" }
 
   const chatId = str(p.chat_id)
-  const remote = userDigitsFromJid(chatId)
+  const groupJid = groupJidOf(chatId)
+  const remote = groupJid ?? userDigitsFromJid(chatId)
   if (!remote) {
     return {
       action: "ignore",
@@ -125,7 +139,7 @@ export function parseGowaEvent(body: unknown, now: Date = new Date()): WabridgeP
   }
 
   const owner = userDigitsFromJid(str(body.device_id))
-  if (owner && owner === remote) return { action: "ignore", reason: "message-yourself chat" }
+  if (!groupJid && owner && owner === remote) return { action: "ignore", reason: "message-yourself chat" }
 
   const fromMe = p.is_from_me === true
   const content = detectContent(p, str(p.body))
@@ -133,6 +147,7 @@ export function parseGowaEvent(body: unknown, now: Date = new Date()): WabridgeP
 
   const metadata: Record<string, unknown> = { source: "wabridge" }
   if (fromMe) metadata.sent_from = "phone"
+  if (groupJid) metadata.group = true
   if (p.view_once === true) metadata.view_once = true
   if (p.forwarded === true) metadata.forwarded = true
   const repliedTo = str(p.replied_to_id)
@@ -145,6 +160,7 @@ export function parseGowaEvent(body: unknown, now: Date = new Date()): WabridgeP
     message: {
       externalId: id,
       remoteDigits: remote,
+      ...(groupJid ? { isGroup: true, senderDigits: fromMe ? null : userDigitsFromJid(str(p.from)) } : {}),
       direction: fromMe ? "outbound" : "inbound",
       senderName: fromMe ? null : str(p.sender_display_name) ?? str(p.from_name),
       contentType: content.type,
@@ -170,6 +186,10 @@ export interface BackfillItem {
   id?: unknown
   /** digits of the other party (script derives it from the chat JID; 1:1 chats only) */
   chat?: unknown
+  /** Group history only: digits of the participant who wrote the message. */
+  sender?: unknown
+  /** Group history only: the participant's own WhatsApp name (never the group's name). */
+  sender_name?: unknown
   from_me?: unknown
   ts?: unknown // ISO timestamp from WhatsApp
   text?: unknown
@@ -197,7 +217,9 @@ const MEDIA_KIND: Record<string, WabridgeContentType> = {
 export function normalizeBackfillItem(item: unknown, now: Date = new Date()): WabridgeMessage | null {
   if (!isObj(item)) return null
   const id = str(item.id)
-  const chat = typeof item.chat === "string" && /^\d{6,15}$/.test(item.chat) ? item.chat : null
+  const chat = typeof item.chat === "string" && /^\d{6,15}$/.test(item.chat) ? item.chat : groupJidOf(typeof item.chat === "string" ? item.chat : null)
+  const isGroup = chat !== null && chat.endsWith("@g.us")
+  const senderDigits = isGroup && typeof item.sender === "string" && /^\d{6,15}$/.test(item.sender) ? item.sender : null
   if (!id || !chat) return null
   const text = str(item.text)
   const mediaRaw = str(item.media_type)?.toLowerCase() ?? null
@@ -219,12 +241,14 @@ export function normalizeBackfillItem(item: unknown, now: Date = new Date()): Wa
   return {
     externalId: id,
     remoteDigits: chat,
+    ...(isGroup ? { isGroup: true, senderDigits } : {}),
     direction: fromMe ? "outbound" : "inbound",
-    senderName: fromMe ? null : str(item.chat_name),
+    // a group's `chat_name` is the GROUP's name, never a person's — only the participant's own `sender_name` is used there
+    senderName: fromMe ? null : isGroup ? str(item.sender_name) : str(item.chat_name),
     contentType,
     contentText,
     createdAt: safeTimestamp(item.ts, now),
     tsReal: isRealTimestamp(item.ts, now),
-    metadata: { source: "wabridge", history: true, ...(fromMe ? { sent_from: "phone" } : {}) },
+    metadata: { source: "wabridge", history: true, ...(isGroup ? { group: true } : {}), ...(fromMe ? { sent_from: "phone" } : {}) },
   }
 }

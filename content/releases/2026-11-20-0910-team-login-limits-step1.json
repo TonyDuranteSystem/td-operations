@@ -1,0 +1,6 @@
+{
+  "title": "Team logins: forms and uploads now follow the ticks, inside the login's own company",
+  "tag": "behind-the-scenes",
+  "text": "A team login (a colleague an owner added) could post some company forms with nothing ticked, upload into another company's folder, skip choosing its own password, and write into another company's activity record. Now it can use only the bank application (Bank applications tick) and the company data form (Company data form tick). Tax, ITIN, closing the company and formation stay closed whatever is ticked. Uploads and activity lines stay in its own company, and it must set its own password. The menu already hid these forms, so nothing changes on screen.",
+  "points": []
+}

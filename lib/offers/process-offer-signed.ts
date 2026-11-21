@@ -10,6 +10,7 @@
  */
 import { chosenInvoiceDescription } from "@/lib/offers/invoice-description"
 import { invoiceTargetForOffer } from "@/lib/offers/bill-to-server"
+import { reportInvoiceNotCreatedAtSigning } from "@/lib/offers/signing-invoice-alert"
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { decideInvoiceAtSigning, getInvoiceDescription } from "@/lib/portal/offer-invoice-policy"
@@ -18,6 +19,7 @@ import { decideSigningBill } from "@/lib/offers/payment-plan"
 import { pinnedRateForInheritance } from "@/lib/payments/card-fee-config"
 import { emitOfferSignedEvent } from "@/lib/portal/chat-events"
 import { normalizeFormationState } from "@/lib/formation/states"
+import { localeFromLanguage } from "@/lib/locale"
 
 export interface WebhookOutcome {
   status: number
@@ -191,7 +193,7 @@ export async function processOfferSigned(offer_token: string): Promise<WebhookOu
               full_name: lead.full_name,
               email: lead.email,
               phone: lead.phone,
-              language: lead.language === "Italian" ? "it" : "en",
+              language: localeFromLanguage(lead.language),
               status: "active",
               // is_test (full E2E QA, 2026-08-28): without this, a test lead's real
               // signature silently produced a real, non-test contact + invoice —
@@ -371,7 +373,12 @@ export async function processOfferSigned(offer_token: string): Promise<WebhookOu
         )
       }
     } catch (invErr) {
-      console.error("[offer-signed] Invoice creation failed:", invErr instanceof Error ? invErr.message : String(invErr))
+      const invReason = invErr instanceof Error ? invErr.message : String(invErr)
+      console.error("[offer-signed] Invoice creation failed:", invReason)
+      // Loud means SEEN, not just logged (dev job 709ac868): the client now holds a signed contract and NO
+      // invoice. Put it where staff look. Awaited (a rare path) so a serverless exit cannot cut it short; the
+      // helper never throws, so it can never break signing.
+      await reportInvoiceNotCreatedAtSigning({ offerToken: offer_token, contactId, reason: invReason })
     }
 
     // Update bundled_pipelines based on selected_services (remove deselected optional service pipelines)

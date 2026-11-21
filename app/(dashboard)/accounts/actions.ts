@@ -9,12 +9,16 @@ import { normalizeEIN } from '@/lib/jobs/validation'
 import { triggerEINReceivedWorkflow } from '@/lib/operations/ein-received'
 import { syncTier, syncContactTiersForAccount } from '@/lib/operations/sync-tier'
 import { syncPortalLoginEmail } from '@/lib/operations/portal-login-email'
+import { contactHasClientLogin } from '@/lib/portal/login-email-change-staff'
+import { LOGIN_LINKED_ERROR } from '@/lib/portal/login-email-change-staff-shared'
 import { createSD } from '@/lib/operations/service-delivery'
 import { createAccount as createAccountOp, createAndLinkContact as createAndLinkContactOp } from '@/lib/operations/account'
 import { setAccountRenewalDate, type RenewalDateColumn } from '@/lib/operations/renewal-dates'
 import { handNameEditProblem } from '@/lib/operations/account-name-change'
 import { allocateCompanySuite, adminChangeCompanySuite, syncPhysicalAddressToSuite } from '@/lib/operations/suite'
-import { isOwnerOnly, isStaffUser } from '@/lib/auth'
+import { isOwnerOnly, isStaffUser, isAdmin } from '@/lib/auth'
+import { memberPortalAccessOn } from '@/lib/portal/member-access-switch'
+import { takeAwayPortalAccess, givePortalAccess, type StaffAccessResult } from '@/lib/members/staff-portal-access'
 import type { Json } from '@/lib/database.types'
 
 const RENEWAL_DATE_FIELDS = new Set<string>(['ra_renewal_date', 'annual_report_due_date'])
@@ -332,6 +336,12 @@ export async function updateContactField(
   const allowedFields = ['full_name', 'email', 'phone', 'language', 'role']
   if (!allowedFields.includes(field)) {
     return { success: false, error: `Field '${field}' is not editable` }
+  }
+
+  // A contact that HAS a portal login gets its email changed only through "Change login email" (login + contact + both
+  // mailboxes together). The screen sees this marker and opens that dialog (dev job beb43385, step 3).
+  if (field === 'email' && await contactHasClientLogin(contactId)) {
+    return { success: false, error: LOGIN_LINKED_ERROR }
   }
 
   return safeAction(async () => {
@@ -717,6 +727,41 @@ export async function showEarlierHistoryToPerson(accountId: string, contactId: s
   })
 }
 
+/**
+ * Staff: take the company out of one member's portal ("No portal access"). The person stays an owner; their login and their
+ * other companies are untouched. Only while the member-portal-access switch is on for this company (dev job beb43385, delivery C).
+ */
+export async function takeAwayMemberPortalAccess(accountId: string, contactId: string): Promise<ActionResult<StaffAccessResult>> {
+  const { data: { user } } = await createClient().auth.getUser()
+  if (!user || !isStaffUser(user)) return { success: false, error: 'Not allowed.' }
+  if (!(await memberPortalAccessOn({ accountId }))) return { success: false, error: 'The portal-access tick is not switched on for this company.' }
+  return safeAction(async () => {
+    const r = await takeAwayPortalAccess({ accountId, contactId, staffUserId: user.id })
+    if (!r.success) throw new Error(r.message)
+    revalidatePath(`/accounts/${accountId}`)
+    return r
+  }, {
+    action_type: 'update', table_name: 'account_contacts', record_id: `${accountId}:${contactId}`, account_id: accountId,
+    summary: `Took away portal access to the company for contact ${contactId}`,
+  })
+}
+
+/** Staff: give a member's portal access back (and create their login with the welcome email when they have none yet). */
+export async function giveMemberPortalAccess(accountId: string, contactId: string): Promise<ActionResult<StaffAccessResult>> {
+  const { data: { user } } = await createClient().auth.getUser()
+  if (!user || !isStaffUser(user)) return { success: false, error: 'Not allowed.' }
+  if (!(await memberPortalAccessOn({ accountId }))) return { success: false, error: 'The portal-access tick is not switched on for this company.' }
+  return safeAction(async () => {
+    const r = await givePortalAccess({ accountId, contactId, canCreateLogin: isAdmin(user), staffUserId: user.id })
+    if (!r.success) throw new Error(r.message)
+    revalidatePath(`/accounts/${accountId}`)
+    return r
+  }, {
+    action_type: 'update', table_name: 'account_contacts', record_id: `${accountId}:${contactId}`, account_id: accountId,
+    summary: `Gave portal access to the company back to contact ${contactId}`,
+  })
+}
+
 export async function searchContacts(
   query: string,
 ): Promise<{ id: string; full_name: string; email: string | null }[]> {
@@ -819,6 +864,9 @@ export async function unlinkContactFromAccount(
 ): Promise<ActionResult> {
   return safeAction(async () => {
     const supabase = createClient()
+    // The last person who can open the company cannot be unlinked while others on it carry "no portal access" (QA 21 Nov 2026).
+    const { wouldLeaveOnlyMarkedPeople, REMOVAL_LEAVES_ONLY_MARKED_MESSAGE } = await import('@/lib/members/removal-guard')
+    if (await wouldLeaveOnlyMarkedPeople(accountId, contactId)) throw new Error(REMOVAL_LEAVES_ONLY_MARKED_MESSAGE)
     // Storage check: remember who is leaving BEFORE the link goes (afterwards nothing says who was there). Never blocks the unlink.
     try {
       const { data: who } = await supabaseAdmin.from('contacts').select('full_name').eq('id', contactId).maybeSingle()

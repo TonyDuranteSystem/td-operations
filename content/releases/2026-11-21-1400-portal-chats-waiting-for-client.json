@@ -1,0 +1,26 @@
+{
+  "title": "Portal Chats: mark a conversation \"Waiting for client\"",
+  "tag": "new",
+  "text": "When you are waiting for a client to answer, you can now mark the conversation. It appears under a new Waiting tab, longest wait first, with the number of days. The mark ends by itself when the client writes back. If they stay silent for 3 days, the client gets an automatic reminder by email and in their portal.",
+  "points": [
+    "Hourglass button beside the emoji button: tick it before Send",
+    "New Waiting tab, longest-waiting first, with days waited",
+    "Automatic reminder to the client after 3 days of silence (at most 2)"
+  ],
+  "stepsTitle": "Marking a conversation as waiting",
+  "steps": [
+    {
+      "name": "Tick the hourglass, then send",
+      "detail": "It sits beside the emoji button in the message box.",
+      "flag": "new"
+    },
+    {
+      "name": "Open the Waiting tab",
+      "detail": "See who has not answered yet, longest wait first."
+    },
+    {
+      "name": "Clear it by hand if needed",
+      "detail": "Click the hourglass on the conversation row."
+    }
+  ]
+}

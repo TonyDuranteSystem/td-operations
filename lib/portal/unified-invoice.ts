@@ -640,6 +640,7 @@ async function resolveCustomerId(accountId?: string, contactId?: string): Promis
     const { data: link } = await supabaseAdmin
       .from('account_contacts')
       .select('contacts(email)')
+      .is('access_revoked_at', null)
       .eq('account_id', accountId)
       .limit(1)
       .maybeSingle()

@@ -1,0 +1,6 @@
+{
+  "title": "A team login's phone alerts no longer stop the owner's message email",
+  "tag": "behind-the-scenes",
+  "text": "When TD sends a company a chat message, the owner gets an email unless they already got a phone or browser alert. In a company with one owner, an alert turned on by a team login was wrongly counted as the owner's, so the owner got no email and no alert. Now only the owner's own devices count. Nothing changes on screen, and no company was affected yet.",
+  "points": []
+}

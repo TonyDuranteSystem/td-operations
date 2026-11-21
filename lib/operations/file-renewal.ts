@@ -26,6 +26,7 @@ import { createPortalNotification } from "@/lib/portal/notifications"
 import { safeAction, type ActionResult } from "@/lib/server-action"
 import { PORTAL_BASE_URL } from "@/lib/config"
 import { NO_STORAGE_REASON_SENTENCE } from "@/lib/crm-store/no-storage"
+import { isItalian } from "@/lib/locale"
 import {
   applyPrincipalOfficeDecision,
   type ApplyPrincipalOfficeResult,
@@ -96,8 +97,8 @@ const DEADLINE_TYPE_BY_KIND: Record<RenewalKind, "RA Renewal" | "Annual Report">
 
 /** Match contacts.language storing both 'it' (ISO) and 'Italian'. */
 export function isItalianLang(lang: string | null | undefined): boolean {
-  if (!lang) return false
-  return ["it", "italian"].includes(lang.toLowerCase())
+  // the shared reader: "Italian", "it", "Italiano", "Italy" … all mean Italian (lib/locale.ts)
+  return isItalian(lang)
 }
 
 /** Drive filename per SOP v7.0 — flat under Compliance/, year in name. */
@@ -392,9 +393,11 @@ export async function fileRenewal(
 
       // 8. Portal notification per SOP — only for portal-active clients
       if (account.portal_tier === "active") {
+        // First person who can open the company: a link carrying the "no portal access" mark is never picked (dev job beb43385).
         const { data: links } = await supabaseAdmin
           .from("account_contacts")
           .select("contact_id")
+          .is("access_revoked_at", null)
           .eq("account_id", account.id)
           .limit(1)
         const primaryContactId = links?.[0]?.contact_id ?? null

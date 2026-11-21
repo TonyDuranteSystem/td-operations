@@ -6,6 +6,7 @@ import { buildPortalChatLink } from '@/lib/portal/chat-link'
 import { escapeHtml } from '@/lib/html-escape'
 import { localeFromLanguage, isItalian } from '@/lib/locale'
 import { recipientHasPush, personHasPush, personHasCompanyPush } from '@/lib/portal/push-presence'
+import { isMarkedOnCompany } from '@/lib/members/marked-on-company'
 
 // Email digest is handled by /api/cron/portal-digest (every 5 min)
 // All notification types are eligible for digest emails.
@@ -34,13 +35,20 @@ export async function createPortalNotification(params: {
   /** Text for the instant push only, when it must differ from the bell row's body — e.g. a lock
    * screen should not show the text of the client's own message. Defaults to `body`. */
   pushBody?: string
-}): Promise<{ error: string | null; pushDone?: Promise<void> }> {
+}): Promise<{ error: string | null; pushDone?: Promise<void>; skipped?: 'no_portal_access' }> {
   // Returns the failure instead of swallowing it, so a caller that reports
   // per-channel results (notifyClientActionRequired) no longer says "ok" for a
   // bell that was never created. Existing callers ignore the return value.
   if (!params.account_id && !params.contact_id) {
     console.error('createPortalNotification: account_id or contact_id required')
     return { error: 'account_id or contact_id required' }
+  }
+
+  // A notice ABOUT a company, addressed to one named person whose link to that company carries the "no portal access" mark, is not
+  // created: the company is hidden from their portal, so the bell, the digest email and the phone alert would tell them about
+  // something they cannot open (QA 21 Nov 2026, dev job beb43385).
+  if (params.account_id && params.contact_id && await isMarkedOnCompany(params.account_id, params.contact_id)) {
+    return { error: null, skipped: 'no_portal_access' }
   }
 
   const { suppressDigestEmail, pushBody, ...row } = params
@@ -102,6 +110,7 @@ async function _sendNotificationEmail(accountId: string, title: string, body: st
   const { data: links } = await supabaseAdmin
     .from('account_contacts')
     .select('contact_id')
+    .is('access_revoked_at', null)
     .eq('account_id', accountId)
     .limit(1)
 
@@ -266,6 +275,10 @@ export async function notifyClientOfAdminMessage({
   const baseKey = account_id || contact_id
   if (!baseKey) return
 
+  // A message about a company, addressed to one named person whose link to it carries the "no portal access" mark, sends no email
+  // (they cannot open the company). QA 21 Nov 2026, dev job beb43385.
+  if (contact_id && account_id && await isMarkedOnCompany(account_id, contact_id)) return
+
   // Per-topic throttle: each topic gets its own 2-hour notification window.
   // Messages with no topic share a single window (backward-compatible).
   const throttleKey = topic ? `${topic}::${baseKey}` : baseKey
@@ -276,7 +289,7 @@ export async function notifyClientOfAdminMessage({
 
   // Resolve all recipients. For contact_id: one recipient. For account_id: ALL
   // contacts on the account so every member of a Multi-Member LLC is notified.
-  type Recipient = { email: string; firstName: string | null; language: string; contactId: string | null }
+  type Recipient = { email: string; firstName: string | null; language: string; contactId: string | null; /** a team login's own sign-in id (its device is its own) */ loginId?: string | null }
   let recipients: Recipient[] = []
 
   if (contact_id) {
@@ -292,6 +305,7 @@ export async function notifyClientOfAdminMessage({
     const { data: links } = await supabaseAdmin
       .from('account_contacts')
       .select('role, contacts(id, email, full_name, language)')
+      .is('access_revoked_at', null)
       .eq('account_id', account_id)
     const linkRows = links ?? []
     const contactRecipients = linkRows
@@ -318,7 +332,7 @@ export async function notifyClientOfAdminMessage({
     // portal_team_members.email — so a non-null filter stays deliverable-safe.
     const { data: teammates } = await supabaseAdmin
       .from('portal_team_members')
-      .select('email, display_name, capabilities, status')
+      .select('email, display_name, capabilities, status, auth_user_id')
       .eq('account_id', account_id)
       .eq('status', 'active')
     const teammateRecipients: Recipient[] = (teammates ?? [])
@@ -328,6 +342,7 @@ export async function notifyClientOfAdminMessage({
         firstName: ((t.display_name as string | null) ?? '').split(' ')[0] || null,
         language: ownerLanguage, // teammates follow the account owner's language
         contactId: null, // teammates aren't contacts; covered by the account-level push check
+        loginId: (t.auth_user_id as string | null) ?? null, // their own device is theirs; another login's device is not (recipientHasPush)
       }))
 
     // Dedupe so a teammate sharing a contact's email isn't emailed twice.
@@ -360,7 +375,7 @@ export async function notifyClientOfAdminMessage({
     // notifications) — they'll get the push instead. Check contact-level first,
     // then account-level (some subscriptions are keyed by account, not contact).
     // (Account-level subscriptions are trusted only for a SINGLE recipient — see recipientHasPush.)
-    const hasPush = await recipientHasPush({ contactId: recipient.contactId, accountId: account_id, singleRecipient: recipients.length === 1 })
+    const hasPush = await recipientHasPush({ contactId: recipient.contactId, accountId: account_id, singleRecipient: recipients.length === 1, ownLoginId: recipient.loginId ?? null })
     if (hasPush) continue // has push — skip the redundant email
 
     // contacts.language is messy free text ("Italian", "Italiano", "it", …) —
@@ -482,6 +497,10 @@ export async function notifyClientOfStageAdvance(params: {
 }): Promise<{ sent: number; failed: number; skippedHasApp: number }> {
   const { account_id, contact_id, service_name, stage_name, custom_message } = params
 
+  // A stage change on a company, addressed to one named person whose link to it carries the "no portal access" mark, sends no
+  // email: they cannot open the company. QA 21 Nov 2026, dev job beb43385.
+  if (contact_id && account_id && await isMarkedOnCompany(account_id, contact_id)) return { sent: 0, failed: 0, skippedHasApp: 0 }
+
   type Recipient = { contactId: string | null; email: string; firstName: string | null; language: string }
   let recipients: Recipient[] = []
 
@@ -503,6 +522,7 @@ export async function notifyClientOfStageAdvance(params: {
     const { data: links } = await supabaseAdmin
       .from('account_contacts')
       .select('contact_id, contacts(email, full_name, language)')
+      .is('access_revoked_at', null)
       .eq('account_id', account_id)
     recipients = (links ?? [])
       .map(l => {

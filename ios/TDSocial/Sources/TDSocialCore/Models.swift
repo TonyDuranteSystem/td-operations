@@ -66,6 +66,12 @@ public struct AppMe: Codable, Equatable {
         return n
     }
 
+    /// True only when the server SAID this tab has nothing unread (0). A missing or failed count is "unknown", never "zero": it must not clear anything.
+    public func isKnownRead(_ tabId: String) -> Bool {
+        guard let all = counts, let entry = all[tabId], let n = entry else { return false }
+        return n == 0
+    }
+
     public var isMarketingOnly: Bool { loginKind == "marketing" }
 
     /// The same answer with other alert settings (everything else untouched).

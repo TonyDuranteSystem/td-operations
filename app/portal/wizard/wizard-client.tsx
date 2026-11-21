@@ -6,8 +6,11 @@ import { WizardShell, type WizardStep } from '@/components/portal/wizard/wizard-
 import { WizardField, type FieldConfig } from '@/components/portal/wizard/wizard-field'
 import { ReviewNote, FLAGGED_FIELD_CLASS } from '@/components/portal/wizard/review-note'
 import { resolveClientLabel } from '@/lib/tax/review-labels'
-import { getWizardConfig, wizardCollectsOwnerMembers, wizardRequiresSs4Signer, OWNER_ITIN_FIELD, MEMBER_ITIN_FIELD, TAX_MEMBER_FIELDS } from '@/components/portal/wizard/wizard-configs'
+import { getWizardConfig, wizardCollectsOwnerMembers, wizardRequiresSs4Signer, OWNER_ITIN_FIELD, MEMBER_ITIN_FIELD, MEMBER_PORTAL_ACCESS_FIELD, RELAY_MEMBERS_CONFIRM_FIELD, TAX_MEMBER_FIELDS } from '@/components/portal/wizard/wizard-configs'
+import { finalizeRelayAnswers, hasOtherOwners, ownershipTotalIsValid, relayOwnershipTotal, soleOwnerShareIsValid, withoutCardPrefillWhenDraftHasCards } from '@/lib/portal/relay-owners'
 import { useLocale } from '@/lib/portal/use-locale'
+import { LOGIN_EMAIL_FIELD, mustReadAckKey } from '@/lib/portal/login-email-field'
+import { ChangeLoginEmailDialog } from '@/components/portal/change-login-email-dialog'
 import { createClient } from '@/lib/supabase/client'
 import { resolveInstitution } from '@/lib/tax/bank-identity'
 import { interpolateString } from '@/lib/template-interpolation'
@@ -35,11 +38,14 @@ function SignerRadio({
   onSelect,
   label,
   hint,
+  why,
 }: {
   checked: boolean
   onSelect: () => void
   label: string
   hint?: string
+  /** Orange line under the choice: what being the Responsible Party means (shown only while the portal-access switch is on). */
+  why?: string
 }) {
   return (
     <label
@@ -56,8 +62,22 @@ function SignerRadio({
       <span className="text-sm">
         <span className="font-medium text-zinc-800">{label}</span>
         {hint && <span className="block text-xs text-zinc-500 mt-0.5">{hint}</span>}
+        {why && <span className="block text-xs font-medium text-orange-700 mt-0.5">{why}</span>}
       </span>
     </label>
+  )
+}
+
+/**
+ * The clear notice above the SS-4 Responsible Party choice (Antonio, 2026-11-19): whoever signs the SS-4 is the person who
+ * appears on the EIN letter. Shown on the Owner step and on the Members step, only while the portal-access switch is on.
+ */
+function Ss4EinLetterNotice({ title, text }: { title: string; text: string }) {
+  return (
+    <div className="rounded-lg border-2 border-orange-300 bg-orange-50 px-3 py-2.5" role="note">
+      <p className="text-sm font-semibold text-orange-900">{title}</p>
+      <p className="text-xs text-orange-900 mt-0.5 leading-relaxed">{text}</p>
+    </div>
   )
 }
 
@@ -117,6 +137,15 @@ interface WizardClientProps {
   closureOtherPendingCount?: number | null
   /** Tax only: what our team asked the client to fix when they pressed Request Changes (dev job 7df278cd) — a note next to the answers it is about, by the answer's own key, plus an optional overall message. Null/absent = nothing was written. */
   reviewRequests?: { message: string | null; notes: Record<string, string> } | null
+  /** Answers the system fixes and the client cannot change, by field name (formation and onboarding: the owner email is the
+   *  portal login email). A locked field is drawn read-only with a lock, its saved value is replaced by this one, and its
+   *  `mustRead` block turns on (dev job beb43385). Empty/absent = every field behaves as before. */
+  lockedValues?: Record<string, string>
+  /** Show the extra paragraph of the login-email block: the client already has a company, so the same email must be kept. */
+  sameEmailNote?: boolean
+  /** The per-member "portal access" tick (dev job beb43385, delivery B): set by the server only when the switch is on for this
+   *  record, on the formation and onboarding wizards. False/absent = the Members step and the SS-4 choice look exactly as before. */
+  memberAccessTick?: boolean
 }
 
 // isFieldVisible lives in lib/portal/wizard-money.ts (dev job 89195c68) so
@@ -323,6 +352,9 @@ export function WizardClient({
   closureServiceDeliveryId = null,
   closureOtherPendingCount = null,
   reviewRequests = null,
+  lockedValues,
+  sameEmailNote = false,
+  memberAccessTick = false,
 }: WizardClientProps) {
   // Any language beyond en/it (dev job 12cab351) — see the identical
   // comment in wizard-field.tsx. Layered UNDER the existing it/en choice,
@@ -352,13 +384,19 @@ export function WizardClient({
   // members step when the offer bundled ITIN (itinCount > 0). Done here (not in
   // the static config) so the question only appears for clients who bought ITIN.
   // dev_task fcf5e254.
+  // The same goes for the "portal access" tick on each additional member (dev job beb43385): only when the server says the
+  // switch is on for this record, and only on the formation and onboarding wizards.
+  const memberTickOn = memberAccessTick && (wizardType === 'formation' || wizardType === 'onboarding')
   const fields = useMemo(() => {
-    if (itinCount <= 0) return baseFields
+    if (itinCount <= 0 && !memberTickOn) return baseFields
     const f: Record<string, typeof baseFields[string]> = { ...baseFields }
-    if (Array.isArray(f.owner)) f.owner = [...f.owner, OWNER_ITIN_FIELD]
-    if (Array.isArray(f.members)) f.members = [...f.members, MEMBER_ITIN_FIELD]
+    if (itinCount > 0) {
+      if (Array.isArray(f.owner)) f.owner = [...f.owner, OWNER_ITIN_FIELD]
+      if (Array.isArray(f.members)) f.members = [...f.members, MEMBER_ITIN_FIELD]
+    }
+    if (memberTickOn && Array.isArray(f.members)) f.members = [...f.members, MEMBER_PORTAL_ACCESS_FIELD]
     return f
-  }, [baseFields, itinCount])
+  }, [baseFields, itinCount, memberTickOn])
 
   // Merge prefill → saved → current (saved takes precedence over prefill, but only for non-empty values)
   // Empty saved values (from stale records saved before prefill fix) must NOT override prefill
@@ -368,7 +406,10 @@ export function WizardClient({
   // Money fields (dev job 89195c68): a stored string that reads cleanly
   // (legacy "5000") becomes a number on load so the step gate and the server
   // agree; an unanswered "80.000" stays a string and re-asks its question.
-  const initialData = normalizeMoneyData(steps, fields, { ...prefillData, ...filteredSaved }, { clearHiddenPending: false })
+  // A locked answer (the portal login email) always wins over a saved draft: an old draft may hold an email typed before the box was locked.
+  // Relay: once a draft holds owner cards it IS the list — the CRM prefill only fills a form with no cards yet.
+  const effectivePrefill = wizardType === 'banking_relay' ? withoutCardPrefillWhenDraftHasCards(prefillData, filteredSaved) : prefillData
+  const initialData = normalizeMoneyData(steps, fields, { ...effectivePrefill, ...filteredSaved, ...(lockedValues ?? {}) }, { clearHiddenPending: false })
 
   const isResubmitMode = initialSubmitStatus === 'submitted' && !isLocked
 
@@ -386,9 +427,15 @@ export function WizardClient({
   // belong only to the EIN-application wizards, not to tax. See
   // wizardRequiresSs4Signer for why tax was carrying it.
   const requiresSs4Signer = isMMLLC && wizardRequiresSs4Signer(wizardType)
+  // The Relay bank application's "other owners" step (dev job 2751fb26): every other owner is a card, a person or a
+  // company with its representative, prefilled from the CRM owners list for the client to check and confirm.
+  const isRelay = wizardType === 'banking_relay'
 
   const [currentStep, setCurrentStep] = useState(Math.min(savedStep, steps.length - 1))
   const [formData, setFormData] = useState<Record<string, string | string[] | boolean | number>>(initialData)
+  // The locked answers (the portal login email) can change while the form is open: the client changes their login email from the form itself.
+  const [lockedNow, setLockedNow] = useState<Record<string, string> | undefined>(lockedValues)
+  const [changeLoginEmailOpen, setChangeLoginEmailOpen] = useState(false)
   const [memberCount, setMemberCount] = useState(Number(initialData.member_count) || 1)
 
   // signerIndex: -1 = owner, 0+ = additional member index, null = none chosen.
@@ -413,9 +460,30 @@ export function WizardClient({
       const next = { ...prev }
       next.owner_is_signer = index === -1
       for (let i = 0; i < memberCount; i++) next[`member_${i}_is_signer`] = index === i
+      // The SS-4 Responsible Party signs the SS-4 IN THE PORTAL, so they keep portal access: the tick is put back on (QA 21 Nov 2026).
+      if (memberTickOn && index >= 0) next[`member_${index}_member_portal_access`] = true
       return next
     })
-  }, [memberCount])
+  }, [memberCount, memberTickOn])
+
+  // The "portal access" tick starts ticked: every member row that has no answer yet is stamped true, so the answer is saved
+  // with the rest of the form (an unticked box is stored as false). Only while the switch is on (dev job beb43385).
+  // The member chosen as the SS-4 signer is always stamped true, even if an earlier draft had it unticked.
+  useEffect(() => {
+    if (!memberTickOn || !isMMLLC) return
+    setFormData(prev => {
+      let next: typeof prev | null = null
+      for (let i = 0; i < memberCount; i++) {
+        const k = `member_${i}_member_portal_access`
+        const mustStayOn = requiresSs4Signer && signerIndex === i
+        if (prev[k] === undefined || prev[k] === '' || prev[k] === null || (mustStayOn && prev[k] !== true && prev[k] !== 'true')) {
+          next = next ?? { ...prev }
+          next[k] = true
+        }
+      }
+      return next ?? prev
+    })
+  }, [memberTickOn, isMMLLC, memberCount, requiresSs4Signer, signerIndex])
   // Track row counts for inline repeater fields (e.g., related_party_transactions)
   const [repeaterCounts, setRepeaterCounts] = useState<Record<string, number>>(() => {
     const counts: Record<string, number> = {}
@@ -445,11 +513,20 @@ export function WizardClient({
   const [autosavedAt, setAutosavedAt] = useState<Date | null>(null)
 
   const handleFieldChange = useCallback((name: string, value: string | string[] | boolean | number) => {
-    setFormData(prev => ({ ...prev, [name]: value }))
+    // A locked answer (the portal login email) cannot be edited, whatever calls this.
+    if (lockedNow && name in lockedNow) return
+    // Relay: any edit of the owner cards (or adding one) withdraws the "I have checked" tick — it must be given again.
+    const withdrawsConfirm = isRelay && name.startsWith('member_')
+    setFormData(prev => withdrawsConfirm && prev['members_confirmed'] === true ? { ...prev, [name]: value, members_confirmed: false } : { ...prev, [name]: value })
     dirtyRef.current = true
     // Clear any server-side validation error for this field when the user edits it
     setFieldErrors(prev => prev.length > 0 ? prev.filter(e => e.field !== name) : prev)
-  }, [])
+    // Ticking "I read it" belongs to its field: clear that field's error too.
+    if (name.endsWith('_read')) {
+      const owner = name.slice(0, -'_read'.length)
+      setFieldErrors(prev => prev.length > 0 ? prev.filter(e => e.field !== owner) : prev)
+    }
+  }, [lockedNow, isRelay])
 
   // File upload handler — uploads the file DIRECTLY to Supabase Storage with a
   // RESUMABLE (TUS) upload: 6MB chunks, auto-retry on network blips, progress
@@ -603,6 +680,9 @@ export function WizardClient({
   const reqMsg = pickText('Required field', 'Campo obbligatorio')!
   const minMsg = pickText('Value is not valid', 'Il valore non è valido')!
   const einMsg = pickText('EIN must be 9 digits (e.g. 30-1482516)', "L'EIN deve avere 9 cifre (es. 30-1482516)")!
+  // The big red "I read it" block (dev job beb43385) is on only for a field whose value the system locked (the portal login email).
+  const mustReadActive = useCallback((f: FieldConfig): boolean => !!f.mustRead && !!lockedNow && f.name in lockedNow, [lockedNow])
+  const readMsg = pickText('Tick "I read it" to continue.', 'Spunta "Ho letto" per continuare.')!
 
   // Localized text for a money problem (dev job 89195c68) — the same wording
   // the server backstop sends, so client and server read identically.
@@ -629,6 +709,8 @@ export function WizardClient({
     }
 
     if (stepId === 'members') {
+      // Relay: no other owners = nothing to check on this step.
+      if (isRelay && !hasOtherOwners(formData)) return errs
       for (let idx = 0; idx < memberCount; idx++) {
         const rawType = formData[`member_${idx}_member_type`]
         const resolvedType = (rawType === undefined || rawType === null || rawType === '') ? 'individual' : String(rawType)
@@ -643,6 +725,23 @@ export function WizardClient({
           if (field.required && isEmptyValue(formData[key])) errs[key] = reqMsg
           else if (belowFieldMin(field, formData[key])) errs[key] = minMsg
           else if (malformedEin(field, formData[key])) errs[key] = einMsg
+        }
+      }
+      if (isRelay) {
+        // The person filling the form (owner step) plus every card must add up to 100%, and the client must tick
+        // that the owners shown are correct — the cards are prefilled from our records, so this is the "check and confirm".
+        const relayTotal = relayOwnershipTotal(formData, memberCount)
+        if (!ownershipTotalIsValid(relayTotal)) {
+          errs['__members_ownership'] = interpolateString(
+            pickText('Ownership shares must total 100% (currently {pctSum}%)', 'Le quote dei soci devono sommare al 100% (ora: {pctSum}%)')!,
+            { pctSum: relayTotal },
+          )
+        }
+        if (formData['members_confirmed'] !== true) {
+          errs['members_confirmed'] = pickText(
+            'Please confirm the owners and representatives above are correct',
+            'Conferma che i soci e i rappresentanti qui sopra sono corretti',
+          )!
         }
       }
       if (wizardType === 'tax' && isMMLLC) {
@@ -696,6 +795,8 @@ export function WizardClient({
       if (field.required && isEmptyValue(formData[field.name])) errs[field.name] = reqMsg
       else if (belowFieldMin(field, formData[field.name])) errs[field.name] = minMsg
       else if (malformedEin(field, formData[field.name])) errs[field.name] = einMsg
+      // The big red block: the client must tick "I read it" before going on (dev job beb43385).
+      else if (mustReadActive(field) && formData[mustReadAckKey(field.name)] !== true) errs[field.name] = readMsg
     }
     // Money amounts (dev job 89195c68): an unanswered "80.000" question, an
     // unreadable amount, too many decimals (legacy 10.596) or a negative in a
@@ -706,8 +807,15 @@ export function WizardClient({
       if (p.stepIndex !== stepIndex || errs[p.key]) continue
       errs[p.key] = moneyMsg(p, formData[p.key])
     }
+    // Relay: "no other owners" means this person holds the whole company, so their share must be 100%.
+    if (isRelay && stepId === 'owner' && !errs['equity_pct'] && !soleOwnerShareIsValid(formData)) {
+      errs['equity_pct'] = pickText(
+        'With no other owners your ownership must be 100%. If there are other owners, change your answer above.',
+        'Senza altri soci la tua quota deve essere 100%. Se ci sono altri soci, cambia la risposta qui sopra.',
+      )!
+    }
     return errs
-  }, [steps, fields, formData, memberCount, repeaterCounts, wizardType, isMMLLC, reqMsg, minMsg, einMsg, institutions, pickText, moneyMsg])
+  }, [steps, fields, formData, memberCount, repeaterCounts, wizardType, isMMLLC, isRelay, reqMsg, minMsg, einMsg, institutions, pickText, moneyMsg, mustReadActive, readMsg])
 
   const getStepErrors = useCallback(() => computeStepErrors(currentStep), [computeStepErrors, currentStep])
 
@@ -717,6 +825,7 @@ export function WizardClient({
   // error list + the highlighted field read plainly (not `member_0_member_zip`).
   const labelForKey = useCallback((key: string): string => {
     if (key === '__members_ownership') return pickText('Member ownership', 'Quote dei soci')!
+    if (key === 'members_confirmed') return pickText('Confirmation', 'Conferma')!
     // Search the current step first, then every other step — a submit-time
     // error (money check / server 400) can name a field on another step, and
     // must still read as its plain label, never the raw key.
@@ -727,7 +836,8 @@ export function WizardClient({
     // member_{idx}_{name}
     const m = key.match(/^member_\d+_(.+)$/)
     if (m) {
-      const f = TAX_MEMBER_FIELDS.find(ff => ff.name === m[1])
+      // Relay's owner cards carry their own labels; every other wizard keeps reading the tax member labels.
+      const f = (isRelay ? (fields.members ?? TAX_MEMBER_FIELDS) : TAX_MEMBER_FIELDS).find(ff => ff.name === m[1])
       if (f) return pick(f)
     }
     // {repeater}_{idx}_{sub}
@@ -743,7 +853,7 @@ export function WizardClient({
     const top = stepFields.find(f => f.name === key)
     if (top) return pick(top)
     return key
-  }, [currentStep, steps, fields, pickText])
+  }, [currentStep, steps, fields, pickText, isRelay])
 
   // After a jump to another step, scroll to the offending field once that
   // step has rendered (querying before the render found nothing and fell back
@@ -877,7 +987,9 @@ export function WizardClient({
     // strings to numbers and clear pending text left in fields the client has
     // since hidden — into a LOCAL copy, which is what gets posted (a state
     // update would not reach this closure's fetch).
-    const submitData = normalizeMoneyData(steps, fields, formData, { clearHiddenPending: true })
+    const normalizedData = normalizeMoneyData(steps, fields, formData, { clearHiddenPending: true })
+    // Relay: "no other owners" means no owner cards go to staff, even if the client first said yes.
+    const submitData = isRelay ? finalizeRelayAnswers(normalizedData, memberCount) : normalizedData
     const moneyProblems = findMoneyProblems(steps, fields, submitData)
     if (moneyProblems.length > 0) {
       const target = moneyProblems[0].stepIndex
@@ -1078,7 +1190,7 @@ export function WizardClient({
         "Invio non riuscito dopo alcuni tentativi. Aggiorna la pagina: se risulta già inviato, è andato a buon fine.",
       )!,
     )
-  }, [wizardType, effectiveEntityType, formData, accountId, contactId, leadId, offerId, currentProgressId, raiseStepErrors, isResubmitMode, itinCount, memberCount, isMMLLC, requiresSs4Signer, pickText, closureServiceDeliveryId, steps, fields, moneyMsg, currentStep, locale, labelForKey])
+  }, [wizardType, effectiveEntityType, formData, accountId, contactId, leadId, offerId, currentProgressId, raiseStepErrors, isResubmitMode, itinCount, memberCount, isMMLLC, isRelay, requiresSs4Signer, pickText, closureServiceDeliveryId, steps, fields, moneyMsg, currentStep, locale, labelForKey])
 
   // Auto-save on step change
   const handleStepChange = useCallback((step: number) => {
@@ -1338,6 +1450,7 @@ export function WizardClient({
       onSubmit={handleSubmit}
       onSave={handleSave}
       canProceed={validateStep()}
+      blockedReason={(fields[steps[currentStep].id] ?? []).some(f => mustReadActive(f) && isFieldVisible(f, fields[steps[currentStep].id] ?? [], formData) && formData[mustReadAckKey(f.name)] !== true) ? readMsg : null}
       isSubmitting={isSubmitting}
       isSaving={isSaving}
       locale={locale}
@@ -1481,9 +1594,41 @@ export function WizardClient({
           acknowledged={formData['prepare_acknowledged'] === true}
           onAcknowledge={v => handleFieldChange('prepare_acknowledged', v)}
         />
+      ) : isMembersStep && isRelay && !hasOtherOwners(formData) ? (
+        <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-700">
+          {pickText(
+            'You said the company has no other owners, so there is nothing to add here. If that is not right, go back one step and change your answer.',
+            'Hai indicato che la società non ha altri soci, quindi qui non c\'è nulla da aggiungere. Se non è corretto, torna al passo precedente e cambia la risposta.',
+          )}
+          {Number(prefillData.member_count) > 0 && (
+            <p className="mt-2 font-medium text-amber-800">
+              {interpolateString(
+                pickText(
+                  'Our records list {n} other owner(s) for your company. If that is right, go back and change your answer to Yes so you can check them.',
+                  'Nei nostri archivi risultano {n} altri soci per la tua società. Se è così, torna indietro e cambia la risposta in Sì per controllarli.',
+                )!,
+                { n: Number(prefillData.member_count) },
+              )}
+            </p>
+          )}
+        </div>
       ) : isMembersStep ? (
         /* Members repeater — add/remove members */
         <div className="space-y-6">
+          {isRelay && (
+            <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+              {pickText(
+                'These are the other owners we have on file for your company. Please read every card, correct anything that is wrong, add any owner that is missing, and confirm at the bottom.',
+                'Questi sono gli altri soci che abbiamo in archivio per la tua società. Leggi ogni scheda, correggi ciò che non è giusto, aggiungi i soci mancanti e conferma in fondo.',
+              )}
+            </div>
+          )}
+          {memberTickOn && requiresSs4Signer && (
+            <Ss4EinLetterNotice
+              title={pickText('The person who signs the SS-4 is the person who appears on the EIN letter.', 'La persona che firma il modulo SS-4 è la persona che compare sulla lettera EIN.')!}
+              text={pickText('Choose the SS-4 Responsible Party carefully: this is the person the IRS prints on the EIN letter.', "Scegli con attenzione il Responsible Party del modulo SS-4: è la persona che l'IRS stampa sulla lettera EIN.")!}
+            />
+          )}
           {Array.from({ length: memberCount }).map((_, idx) => (
             <div key={idx} className="border rounded-lg p-4 space-y-3">
               <div className="flex items-center justify-between">
@@ -1514,6 +1659,7 @@ export function WizardClient({
                         // so a stale member_{i}_is_signer key isn't submitted.
                         delete next[`member_${newCount}_is_signer`]
                         next.member_count = newCount
+                        if (isRelay) next.members_confirmed = false
                         return next
                       })
                       // If the removed member was the signer, clear the selection
@@ -1539,19 +1685,38 @@ export function WizardClient({
                       : String(memberTypeVal)
                     return resolved === field.conditional.value
                   })
-                  .map(field => (
-                    <div key={`${idx}_${field.name}`} data-field-key={`member_${idx}_${field.name}`} className={`${field.type === 'select' || field.type === 'textarea' || field.type === 'file' ? 'md:col-span-2' : ''} ${noteFor(`member_${idx}_${field.name}`) ? FLAGGED_FIELD_CLASS : ''}`}>
+                  .map(field => {
+                    // The member chosen as the SS-4 Responsible Party signs the SS-4 in the portal, so their tick is fixed on
+                    // (QA 21 Nov 2026). The control is drawn locked, with the reason in its hint, and ignores clicks.
+                    const lockedSigner = memberTickOn && requiresSs4Signer && signerIndex === idx && field.name === MEMBER_PORTAL_ACCESS_FIELD.name
+                    const shownField = lockedSigner
+                      ? {
+                          ...field,
+                          hint: 'Required: this member signs the SS-4 in the client portal, so they keep portal access. Choose another SS-4 signer if this member should not use the portal.',
+                          hintIt: 'Obbligatorio: questo membro firma il modulo SS-4 nel portale cliente, quindi mantiene l’accesso. Scegli un altro firmatario SS-4 se questo membro non deve usare il portale.',
+                        }
+                      : field
+                    return (
+                    <div key={`${idx}_${field.name}`} data-field-key={`member_${idx}_${field.name}`} data-locked-signer-tick={lockedSigner ? 'true' : undefined} aria-disabled={lockedSigner ? true : undefined} className={`${field.type === 'select' || field.type === 'textarea' || field.type === 'file' ? 'md:col-span-2' : ''} ${noteFor(`member_${idx}_${field.name}`) ? FLAGGED_FIELD_CLASS : ''} ${lockedSigner ? 'pointer-events-none opacity-70' : ''}`}>
                       <WizardField
-                        field={field}
-                        value={formData[`member_${idx}_${field.name}`] ?? ''}
-                        onChange={(name, value) => handleFieldChange(`member_${idx}_${name}`, value)}
+                        field={shownField}
+                        value={field.name === MEMBER_PORTAL_ACCESS_FIELD.name
+                          ? (() => {
+                              if (lockedSigner) return true
+                              // Starts ticked: no answer yet reads as ticked; a saved "false" stays unticked.
+                              const v = formData[`member_${idx}_${field.name}`]
+                              return v === undefined || v === null || v === '' ? true : v === true || v === 'true'
+                            })()
+                          : formData[`member_${idx}_${field.name}`] ?? ''}
+                        onChange={(name, value) => { if (lockedSigner) return; handleFieldChange(`member_${idx}_${name}`, value) }}
                         onFileUpload={(name, file, onProgress) => handleFileUpload(`member_${idx}_${name}`, file, onProgress)}
                         locale={locale}
                         error={errorFor(`member_${idx}_${field.name}`)}
                       />
                       {noteFor(`member_${idx}_${field.name}`) && <ReviewNote note={noteFor(`member_${idx}_${field.name}`)!} heading={noteHeading} />}
                     </div>
-                  ))}
+                    )
+                  })}
               </div>
               {/* MMLLC: this member can be the SS-4 Responsible Party. Hidden
                   on tax — the EIN already exists by then and nothing in the tax
@@ -1562,6 +1727,7 @@ export function WizardClient({
                   checked={signerIndex === idx}
                   onSelect={() => setSigner(idx)}
                   label={interpolateString(pickText('Member {n} is the SS-4 Responsible Party.', 'Membro {n} è il Responsible Party del modulo SS-4.')!, { n: idx + 1 })}
+                  why={memberTickOn ? pickText('Signs the SS-4 and appears on the EIN letter.', 'Firma il modulo SS-4 e compare sulla lettera EIN.') : undefined}
                 />
               )}
             </div>
@@ -1573,6 +1739,7 @@ export function WizardClient({
               handleFieldChange('member_count', memberCount + 1)
               // Pre-set new member type to individual so individual fields show immediately
               handleFieldChange(`member_${memberCount}_member_type`, 'individual')
+              if (memberTickOn) handleFieldChange(`member_${memberCount}_member_portal_access`, true)
             }}
             className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-700 font-medium"
           >
@@ -1582,11 +1749,14 @@ export function WizardClient({
 
           {/* Live ownership total — tax MMLLC requires every member (including
               the person filling the form) to total exactly 100%. */}
-          {wizardType === 'tax' && (() => {
-            let pctSum = 0
-            for (let i = 0; i < memberCount; i++) {
-              const v = Number(formData[`member_${i}_member_ownership_pct`])
-              if (!Number.isNaN(v)) pctSum += v
+          {(wizardType === 'tax' || isRelay) && (() => {
+            // Relay counts the person filling the form (owner step) plus every card; tax counts the cards (they ARE everyone).
+            let pctSum = isRelay ? relayOwnershipTotal(formData, memberCount) : 0
+            if (!isRelay) {
+              for (let i = 0; i < memberCount; i++) {
+                const v = Number(formData[`member_${i}_member_ownership_pct`])
+                if (!Number.isNaN(v)) pctSum += v
+              }
             }
             const ok = Math.abs(pctSum - 100) <= 0.5
             return (
@@ -1594,7 +1764,12 @@ export function WizardClient({
                 {ok
                   ? interpolateString(pickText('✓ Total ownership: {pctSum}%', '✓ Quote totali: {pctSum}%')!, { pctSum })
                   : interpolateString(
-                      pickText(
+                      isRelay
+                        ? pickText(
+                            'Your share plus the owners below: {pctSum}% — must equal 100%.',
+                            'La tua quota più i soci qui sotto: {pctSum}% — deve fare 100%.',
+                          )!
+                        : pickText(
                         'Total ownership: {pctSum}% — must equal 100%. Include every member, including yourself.',
                         'Quote totali: {pctSum}% — devono fare 100%. Includi tutti i soci, te compreso.',
                       )!,
@@ -1603,6 +1778,19 @@ export function WizardClient({
               </div>
             )
           })()}
+
+          {/* Relay: the client ticks that the prefilled owners and representatives are correct. */}
+          {isRelay && (
+            <div data-field-key="members_confirmed">
+              <WizardField
+                field={RELAY_MEMBERS_CONFIRM_FIELD}
+                value={formData['members_confirmed'] === true}
+                onChange={(name, value) => handleFieldChange(name, value)}
+                locale={locale}
+                error={errorFor('members_confirmed')}
+              />
+            </div>
+          )}
         </div>
       ) : (
         <>
@@ -1612,6 +1800,14 @@ export function WizardClient({
             <p className="text-sm font-semibold text-zinc-700 mb-1.5">
               {pickText('SS-4 Responsible Party', 'Responsible Party (SS-4)')}
             </p>
+            {memberTickOn && (
+              <div className="mb-2">
+                <Ss4EinLetterNotice
+                  title={pickText('The person who signs the SS-4 is the person who appears on the EIN letter.', 'La persona che firma il modulo SS-4 è la persona che compare sulla lettera EIN.')!}
+                  text={pickText('Choose the SS-4 Responsible Party carefully: this is the person the IRS prints on the EIN letter.', "Scegli con attenzione il Responsible Party del modulo SS-4: è la persona che l'IRS stampa sulla lettera EIN.")!}
+                />
+              </div>
+            )}
             <SignerRadio
               checked={signerIndex === -1}
               onSelect={() => setSigner(-1)}
@@ -1620,6 +1816,7 @@ export function WizardClient({
                 'Exactly one person across the owner and members must be selected.',
                 'Una sola persona tra titolare e membri può essere selezionata.',
               )}
+              why={memberTickOn ? pickText('Signs the SS-4 and appears on the EIN letter.', 'Firma il modulo SS-4 e compare sulla lettera EIN.') : undefined}
             />
           </div>
         )}
@@ -1805,9 +2002,9 @@ export function WizardClient({
               }
               // ── Regular field ────────────────────────────────────────
               return (
-                <div key={field.name} data-field-key={field.name} className={`${field.type === 'textarea' || field.type === 'checkbox' || field.type === 'signature' ? 'md:col-span-2' : ''} ${noteFor(field.name) ? FLAGGED_FIELD_CLASS : ''}`}>
+                <div key={field.name} data-field-key={field.name} className={`${field.type === 'textarea' || field.type === 'checkbox' || field.type === 'signature' || mustReadActive(field) ? 'md:col-span-2' : ''} ${noteFor(field.name) ? FLAGGED_FIELD_CLASS : ''}`}>
                   <WizardField
-                    field={{ ...field, prefilled: !!prefillData[field.name] }}
+                    field={{ ...field, prefilled: !!prefillData[field.name] && !(lockedNow && field.name in lockedNow), mustRead: mustReadActive(field) ? field.mustRead : undefined }}
                     value={formData[field.name] ?? ''}
                     onChange={handleFieldChange}
                     onFileUpload={handleFileUpload}
@@ -1815,6 +2012,9 @@ export function WizardClient({
                     locale={locale}
                     error={errorFor(field.name)}
                     context={formData}
+                    locked={!!lockedNow && field.name in lockedNow}
+                    showExtraNote={sameEmailNote}
+                    onChangeLocked={field.name === LOGIN_EMAIL_FIELD ? () => setChangeLoginEmailOpen(true) : undefined}
                   />
                   {noteFor(field.name) && <ReviewNote note={noteFor(field.name)!} heading={noteHeading} />}
                   {/* High-stakes confirmation: show an amber warning when the
@@ -1831,6 +2031,17 @@ export function WizardClient({
             })}
         </div>
         </>
+      )}
+      {changeLoginEmailOpen && lockedNow && (
+        <ChangeLoginEmailDialog
+          currentEmail={lockedNow[LOGIN_EMAIL_FIELD] ?? ''}
+          onClose={() => setChangeLoginEmailOpen(false)}
+          onChanged={(newEmail) => {
+            // the login moved: the locked box and the answer follow it, and the next submit forces the same value on the server
+            setLockedNow(prev => (prev ? { ...prev, [LOGIN_EMAIL_FIELD]: newEmail } : prev))
+            setFormData(prev => ({ ...prev, [LOGIN_EMAIL_FIELD]: newEmail }))
+          }}
+        />
       )}
     </WizardShell>
   )

@@ -22,6 +22,7 @@ import { APP_BASE_URL } from "@/lib/config"
 import type { Json } from "@/lib/database.types"
 import { getOrCreateBankingSubmission } from "@/lib/operations/banking-submission"
 import { companyCmraAddressLine } from "@/lib/operations/suite"
+import { localeFromLanguage } from "@/lib/locale"
 
 const BASE_URL = APP_BASE_URL
 
@@ -72,6 +73,7 @@ Prerequisites:
         const { data: contactLinks } = await supabaseAdmin
           .from("account_contacts")
           .select("contact_id")
+          .is("access_revoked_at", null) // a person with the no-portal-access mark is not picked as the one we write to (dev job beb43385)
           .eq("account_id", account_id)
           .limit(1)
 
@@ -89,7 +91,7 @@ Prerequisites:
           return { content: [{ type: "text" as const, text: `❌ Contact not found.` }] }
         }
 
-        const lang = contact.language === "Italian" || contact.language === "it" ? "it" : "en"
+        const lang = localeFromLanguage(contact.language)
         const clientName = contact.first_name || contact.full_name
         const year = new Date().getFullYear()
         const today = new Date().toISOString().slice(0, 10)
@@ -119,6 +121,7 @@ Prerequisites:
 
             // Determine entity type: check if account has multiple contacts
             const { data: allContacts } = await supabaseAdmin
+              // portal-access-ok: roster — every owner counts as a member of the company, with or without portal access
               .from("account_contacts")
               .select("contact_id")
               .eq("account_id", account_id)

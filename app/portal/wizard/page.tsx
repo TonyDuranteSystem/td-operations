@@ -16,10 +16,14 @@ import { t, getLocale } from '@/lib/portal/i18n'
 import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 import { interpolateString } from '@/lib/template-interpolation'
 import { cookies } from 'next/headers'
+import { redirect } from 'next/navigation'
+import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
+import { teammateMayUseWizard } from '@/lib/portal/wizard-submit-access'
 import { WizardClient } from './wizard-client'
 import { isValidWizardType, isContactScopedWizard, isFlexibleWizardType, isPersonOwnedWizard, getContactScopedDiscoveryServiceTypes, type WizardType } from '@/lib/portal/wizard-map'
 import { wizardLabelFor } from '@/lib/portal/wizard-labels'
 import { getInProgressFormations, getInProgressOnboardings, getPortalAccounts } from '@/lib/portal/queries'
+import { LOGIN_EMAIL_FIELD, loginEmailLock } from '@/lib/portal/login-email-field'
 import { resolveWizardProgressScope } from '@/lib/portal/wizard-scope'
 import { getStartAtWizardServiceTypes } from '@/lib/services'
 import { normalizeEntityType } from '@/lib/portal/entity-type'
@@ -30,6 +34,7 @@ import { latestRound, parseReviewRequests } from '@/lib/tax/review-requests'
 import { identifyFormation, isFormationWizardEditable } from '@/lib/portal/formation-resubmit-gate'
 import { resolveClosureSubject } from '@/lib/portal/closure-subject'
 import { getPendingClosures, type PendingClosure } from '@/lib/portal/pending-closures'
+import { memberPortalAccessOn } from '@/lib/portal/member-access-switch'
 import {
   resolveTaxWizardEligibility,
   taxWizardSurfaceVisible,
@@ -39,6 +44,7 @@ import {
 import { firstYearCoherent } from '@/lib/tax/prior-return-case'
 import { resolveExtensionDeadline, formatDeadlineForDisplay } from '@/lib/tax/extension-deadline'
 import { TaxExtensionFiledBanner } from '@/components/portal/tax-extension-filed-banner'
+import { buildRelayOwnersPrefill, type OwnerContactNames, type OwnerRow } from '@/lib/portal/relay-owners'
 
 export default async function WizardPage({
   searchParams,
@@ -57,6 +63,11 @@ export default async function WizardPage({
   }
 
   const contactId = getClientContactId(user)
+  // A team login (no contact of its own) is tied to its ONE company and may open only the wizards a
+  // tick covers (bank application, company data form) — see teammateMayUseWizard. Before this it fell back
+  // to the company cookie below, which it could set to any company's id and read that company's data.
+  const teamLogin = contactId ? null : await resolvePortalIdentity(user)
+  const teammate = teamLogin?.kind === 'teammate' ? teamLogin : null
   // Closures whose form is still owed — computed at most once per render, only
   // when a closure is actually involved (tab list or closure subject below).
   let owedClosuresPromise: Promise<PendingClosure[]> | null = null
@@ -221,7 +232,7 @@ export default async function WizardPage({
   // verified link; the cookie only selects AMONG owned accounts. For the
   // (defensive) no-contact case the prior cookie fallback is kept.
   // 2026-06-25 — Daniel Pasztor ITIN/formation wizard mis-resolution.
-  let accountId = contactId ? '' : (cookieAccountId || '')
+  let accountId = contactId ? '' : (teammate ? teammate.accountId : (cookieAccountId || ''))
   if (contactId && !formationLeadId && !onboardingOfferId && !formationOfferId) {
     // Default-company rule UNIFIED with the layout/home (2026-07-16, quirk
     // found during the MMLLC E2E walk): this page used to pick the first row
@@ -607,6 +618,9 @@ export default async function WizardPage({
     accountId = ''
     account = {}
   }
+
+  // The wizard is now final: a team login may open it only when its tick covers it.
+  if (teammate && !teammateMayUseWizard(teammate.capabilities, wizardType)) redirect('/portal')
 
   // ── Formation entity type: the signed CONTRACT decides, never a code default ──
   // Placement is load-bearing. It sits AFTER wizardType is final (the SD picker
@@ -1036,6 +1050,24 @@ export default async function WizardPage({
   if (account.formation_date) { prefillData.formation_date = account.formation_date; prefillData.date_of_incorporation = account.formation_date }
   if (account.filing_id) prefillData.filing_id = account.filing_id
 
+  // The Email box of the formation and onboarding wizards IS the client's portal login email (dev job beb43385). For a normal
+  // client it is locked to the real login email (not the CRM contact email, which can differ), with the big red must-read
+  // block; a client who already has a company also sees the "keep using this same email" paragraph. A team login has no
+  // contact, so its box stays as it was. The submit route forces the same value on the server.
+  const loginEmail = loginEmailLock({ wizardType, contactId, authEmail: user.email })
+  const lockedValues: Record<string, string> | undefined = loginEmail ? { [LOGIN_EMAIL_FIELD]: loginEmail } : undefined
+  let sameEmailNote = false
+  if (loginEmail && contactId) {
+    prefillData[LOGIN_EMAIL_FIELD] = loginEmail
+    sameEmailNote = (await getPortalAccounts(contactId)).length > 0
+  }
+
+  // The per-member "portal access" tick on the Members step (dev job beb43385, delivery B). Off unless the switch says so for
+  // this record (on, or "test" and this is a test record); only the formation and onboarding wizards carry it.
+  const memberAccessTick =
+    (wizardType === 'formation' || wizardType === 'onboarding') &&
+    (await memberPortalAccessOn({ accountId, leadId: formationLeadId, contactId }))
+
   // ITIN Renewal: pre-fill previous ITIN from contact
   if (isItinRenewal && contact.itin_number) {
     prefillData.has_previous_itin = 'Yes'
@@ -1084,6 +1116,7 @@ export default async function WizardPage({
     // confirms or corrects instead of retyping data we already hold.
     try {
       const { data: links } = await supabaseAdmin
+        // portal-access-ok: tax-form roster: every owner is listed whether or not they use the portal
         .from('account_contacts')
         .select('ownership_pct, contacts(first_name, last_name, citizenship, itin_number, address_line1, address_city, address_zip, address_country)')
         .eq('account_id', accountId)
@@ -1112,6 +1145,34 @@ export default async function WizardPage({
       }
     } catch (e) {
       console.error('[wizard] Members prefill failed (non-blocking):', e)
+    }
+  }
+
+  // Relay application — "other owners" step (dev job 2751fb26). The cards are prefilled from the CRM owners list
+  // (companies and their representatives too), so the client checks and confirms instead of typing. Read-only here:
+  // what the client corrects stays on the application, it never writes back to the CRM.
+  if (wizardType === 'banking_relay' && accountId) {
+    try {
+      const { data: ownerRows, error: ownerRowsErr } = await supabaseAdmin
+        .from('members')
+        .select('member_type, full_name, company_name, ein, email, phone, address_street, address_city, address_state, address_zip, address_country, ownership_pct, contact_id, representative_name, representative_email, representative_phone, representative_address_street, representative_address_city, representative_address_state, representative_address_zip, representative_address_country, end_date')
+        .eq('account_id', accountId)
+        .order('is_primary', { ascending: false })
+        .order('created_at', { ascending: true })
+      if (ownerRowsErr) console.error('[wizard] Relay owners prefill: could not read the owners list:', ownerRowsErr.message)
+      const rows = (ownerRows ?? []) as OwnerRow[]
+      const personContactIds = rows.filter(r => r.member_type !== 'company' && r.contact_id).map(r => r.contact_id as string)
+      const contactNames: Record<string, OwnerContactNames> = {}
+      if (personContactIds.length > 0) {
+        const { data: cs } = await supabaseAdmin.from('contacts').select('id, first_name, last_name').in('id', personContactIds)
+        for (const c of cs ?? []) contactNames[c.id as string] = { first_name: c.first_name as string | null, last_name: c.last_name as string | null }
+      }
+      Object.assign(
+        prefillData,
+        buildRelayOwnersPrefill(rows, { contactId: contactId ?? null, fullName: contact.full_name ?? null }, contactNames, new Date().toISOString().slice(0, 10)),
+      )
+    } catch (e) {
+      console.error('[wizard] Relay owners prefill failed (non-blocking):', e)
     }
   }
 
@@ -1187,6 +1248,7 @@ export default async function WizardPage({
       const { data: acLinks } = await supabaseAdmin
         .from('account_contacts')
         .select('account_id')
+        .is('access_revoked_at', null)
         .eq('contact_id', contactId)
       for (const l of acLinks ?? []) {
         if (l.account_id && !ownedAccountIds.includes(l.account_id)) ownedAccountIds.push(l.account_id)
@@ -1431,6 +1493,9 @@ export default async function WizardPage({
           entityType={entityType}
           entityUnresolved={entityUnresolved}
           prefillData={prefillData}
+          lockedValues={lockedValues}
+          sameEmailNote={sameEmailNote}
+          memberAccessTick={memberAccessTick}
           savedData={savedData as Record<string, string>}
           savedStep={savedStep}
           progressId={progressId}

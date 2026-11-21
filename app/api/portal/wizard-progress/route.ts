@@ -10,7 +10,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isClient } from '@/lib/auth'
 import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
-import { canSubmitWizard } from '@/lib/portal/wizard-submit-access'
+import { canSubmitWizard, savedDraftTypeAllowed } from '@/lib/portal/wizard-submit-access'
 import { accountIdForWizardSubmission } from '@/lib/portal/wizard-scope'
 import { formationLeadOwned, formationOfferOwned, onboardingOfferOwned } from '@/lib/portal/formation-lead-access'
 import { verifyClosureServiceDelivery } from '@/lib/portal/closure-subject'
@@ -104,7 +104,7 @@ export async function POST(req: NextRequest) {
       // and verify the caller owns its subject before writing.
       const { data: existing, error: fetchErr } = await supabaseAdmin
         .from('wizard_progress')
-        .select('id, account_id, contact_id, lead_id, offer_id')
+        .select('id, account_id, contact_id, lead_id, offer_id, wizard_type')
         .eq('id', progress_id)
         .maybeSingle()
 
@@ -122,6 +122,7 @@ export async function POST(req: NextRequest) {
       if (rowAccountId || rowContactId) {
         // Account- or contact-scoped row → standard subject check.
         allowed = canSubmitWizard(identity, rowAccountId, rowContactId, wizard_type)
+          && savedDraftTypeAllowed(identity, existing.wizard_type as string | null, wizard_type)
       } else if (rowLeadId) {
         // Lead-scoped formation row → re-prove lead ownership.
         allowed = await ownsLeadScopedRow(identity, user, rowLeadId)

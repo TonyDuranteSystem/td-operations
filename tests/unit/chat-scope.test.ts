@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   mayIncludePersonalNull,
+  hasSeparatePersonalChat,
   buildChatQueryPlan,
   messageVisibleInPlan,
   isChatEventMessage,
@@ -119,5 +120,39 @@ describe('isChatEventMessage (chat-event marker detection)', () => {
 
   it('handles an empty string without throwing', () => {
     expect(isChatEventMessage('')).toBe(false)
+  })
+})
+
+describe('hasSeparatePersonalChat (who gets a personal chat, dev job 58cb7a82)', () => {
+  it('a client in a shared company gets one, even when they also own another company alone (the HL owner who is in Redstone)', () => {
+    expect(hasSeparatePersonalChat({ hasSoleOwned: true, hasShared: true, hasFormation: false })).toBe(true)
+  })
+  it('a client who is only in shared companies gets one', () => {
+    expect(hasSeparatePersonalChat({ hasSoleOwned: false, hasShared: true, hasFormation: false })).toBe(true)
+  })
+  it('a client with no company at all gets one (their private messages need a home)', () => {
+    expect(hasSeparatePersonalChat({ hasSoleOwned: false, hasShared: false, hasFormation: false })).toBe(true)
+  })
+  it('a client whose companies are all owned alone does not: private messages stay inside the company chat', () => {
+    expect(hasSeparatePersonalChat({ hasSoleOwned: true, hasShared: false, hasFormation: false })).toBe(false)
+  })
+  it('a company being set up already hosts the private messages, so no separate chat in any case', () => {
+    expect(hasSeparatePersonalChat({ hasSoleOwned: true, hasShared: true, hasFormation: true })).toBe(false)
+    expect(hasSeparatePersonalChat({ hasSoleOwned: false, hasShared: true, hasFormation: true })).toBe(false)
+    expect(hasSeparatePersonalChat({ hasSoleOwned: false, hasShared: false, hasFormation: true })).toBe(false)
+  })
+})
+
+describe('mayIncludePersonalNull with a separate personal chat', () => {
+  it('a company owned alone no longer shows private messages once the viewer has a separate personal chat', () => {
+    expect(mayIncludePersonalNull({ linkedContactCount: 1, viewerIsSoleLinkedContact: true, viewerHasSeparatePersonalChat: true })).toBe(false)
+  })
+  it('unchanged without a separate personal chat', () => {
+    expect(mayIncludePersonalNull({ linkedContactCount: 1, viewerIsSoleLinkedContact: true, viewerHasSeparatePersonalChat: false })).toBe(true)
+    expect(mayIncludePersonalNull({ linkedContactCount: 1, viewerIsSoleLinkedContact: true })).toBe(true)
+  })
+  it('a shared company never shows private messages, with or without a separate personal chat', () => {
+    expect(mayIncludePersonalNull({ linkedContactCount: 3, viewerIsSoleLinkedContact: false, viewerHasSeparatePersonalChat: true })).toBe(false)
+    expect(mayIncludePersonalNull({ linkedContactCount: 3, viewerIsSoleLinkedContact: false })).toBe(false)
   })
 })

@@ -26,8 +26,8 @@ const thread = (over: Partial<FilterableThread> = {}): FilterableThread => ({
 
 describe('chips', () => {
   it('are in the order Antonio asked for', () => {
-    expect(LIST_FILTER_CHIPS.map(([, label]) => label)).toEqual(['All', 'Unread', "What's New", 'Chats', 'Pinned'])
-    expect(LIST_FILTER_CHIPS.map(([key]) => key)).toEqual(['all', 'unread', 'whatsnew', 'chats', 'pinned'])
+    expect(LIST_FILTER_CHIPS.map(([, label]) => label)).toEqual(['All', 'Unread', "What's New", 'Chats', 'Pinned', 'Waiting', 'Waiting on us'])
+    expect(LIST_FILTER_CHIPS.map(([key]) => key)).toEqual(['all', 'unread', 'whatsnew', 'chats', 'pinned', 'waiting', 'waitingus'])
   })
 
   it('open on Chats, not All', () => {
@@ -59,12 +59,13 @@ describe('matchesListFilter', () => {
     expect(matchesListFilter(thread({ has_people_messages: false }), 'chats')).toBe(false)
   })
 
-  it('Chats leaves out the conversations that have their own chip: pinned ones and ones with an unhandled client action', () => {
-    expect(matchesListFilter(thread({ has_people_messages: true, is_pinned: true }), 'chats')).toBe(false)
-    expect(matchesListFilter(thread({ account_id: 'acc-wn', has_people_messages: true }), 'chats', counts)).toBe(false)
-    expect(matchesListFilter(thread({ account_id: null, contact_id: 'con-wn', has_people_messages: true }), 'chats', counts)).toBe(false)
-    // …and a plain chat stays, also when What's New counts exist for other conversations
+  it('Chats keeps pinned conversations and ones with an unhandled client action too (2026-11-20) — all chats, newest first', () => {
+    expect(matchesListFilter(thread({ has_people_messages: true, is_pinned: true }), 'chats')).toBe(true)
+    expect(matchesListFilter(thread({ account_id: 'acc-wn', has_people_messages: true }), 'chats', counts)).toBe(true)
+    expect(matchesListFilter(thread({ account_id: null, contact_id: 'con-wn', has_people_messages: true }), 'chats', counts)).toBe(true)
     expect(matchesListFilter(thread({ account_id: 'acc-plain', has_people_messages: true }), 'chats', counts)).toBe(true)
+    // a notice-only conversation stays out even when pinned or with a What's New count
+    expect(matchesListFilter(thread({ account_id: 'acc-wn', has_people_messages: false, is_pinned: true }), 'chats', counts)).toBe(false)
     // they are still under their own chips
     expect(matchesListFilter(thread({ is_pinned: true }), 'pinned')).toBe(true)
     expect(matchesListFilter(thread({ account_id: 'acc-wn' }), 'whatsnew', counts)).toBe(true)
@@ -205,5 +206,36 @@ describe('wiring (source guards — the project has no jsdom)', () => {
   it('the migration has an UNDO file', () => {
     const undo = readFileSync('scripts/migrations/20261110-1200-portal-chat-people-thread-keys.UNDO.sql', 'utf8')
     expect(undo).toContain('DROP FUNCTION IF EXISTS public.get_portal_chat_people_thread_keys()')
+  })
+})
+
+describe('Waiting chip (2026-11-21)', () => {
+  it('lists only conversations marked waiting, longest-waiting first', () => {
+    const a = thread({ account_id: 'a', waiting_since: '2026-11-18T10:00:00Z' })
+    const b = thread({ account_id: 'b', waiting_since: '2026-11-15T10:00:00Z' })
+    const c = thread({ account_id: 'c', waiting_since: null })
+    const d = thread({ account_id: 'd' })
+    const list = [a, b, c, d]
+    expect(list.filter(x => matchesListFilter(x, 'waiting')).map(x => x.account_id)).toEqual(['a', 'b'])
+    expect(orderThreadsForChip(list.filter(x => matchesListFilter(x, 'waiting')), 'waiting').map(x => x.account_id)).toEqual(['b', 'a'])
+  })
+  it('a waiting conversation also stays in All and Chats', () => {
+    const w = thread({ waiting_since: '2026-11-18T10:00:00Z' })
+    expect(matchesListFilter(w, 'all')).toBe(true)
+    expect(matchesListFilter(w, 'chats')).toBe(true)
+  })
+})
+
+describe('Waiting on us chip (2026-11-21)', () => {
+  it('lists only conversations marked waiting on us, longest-waiting first, apart from the client-waiting chip', () => {
+    const a = thread({ account_id: 'a', waiting_us_since: '2026-11-18T10:00:00Z' })
+    const b = thread({ account_id: 'b', waiting_us_since: '2026-11-15T10:00:00Z' })
+    const c = thread({ account_id: 'c', waiting_since: '2026-11-16T10:00:00Z' })
+    const d = thread({ account_id: 'd' })
+    const list = [a, b, c, d]
+    const us = list.filter(x => matchesListFilter(x, 'waitingus'))
+    expect(us.map(x => x.account_id)).toEqual(['a', 'b'])
+    expect(orderThreadsForChip(us, 'waitingus').map(x => x.account_id)).toEqual(['b', 'a'])
+    expect(list.filter(x => matchesListFilter(x, 'waiting')).map(x => x.account_id)).toEqual(['c'])
   })
 })

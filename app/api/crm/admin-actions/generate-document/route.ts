@@ -26,6 +26,8 @@ import { refreshSS4, resolveMailing } from "@/lib/operations/ss4-refresh"
 import { isMultiMemberEntity } from "@/lib/portal/entity-type"
 import { hasCollectedSignatures } from "@/lib/portal/oa-regenerate-guard"
 import { companyCmraAddressLine } from "@/lib/operations/suite"
+import { localeFromLanguage } from "@/lib/locale"
+import { isMarkedOnCompany } from "@/lib/members/marked-on-company"
 
 const OA_BASE_URL = `${APP_BASE_URL}/operating-agreement`
 const LEASE_BASE_URL = `${APP_BASE_URL}/lease`
@@ -584,6 +586,12 @@ async function generateSS4(accountId: string, opts?: { regenerate?: boolean }) {
     mailing_address: mailingInputs?.mailing_address ?? null,
   } as Parameters<typeof resolveMailing>[0])
 
+  // The Responsible Party signs the SS-4 IN THE PORTAL: a person whose link carries the "no portal access" mark cannot open the company
+  // there. Refuse before anything is written (Bug Hunter, QA 21 Nov 2026, dev job beb43385).
+  if (await isMarkedOnCompany(accountId, responsibleContact.id)) {
+    return { error: `${responsibleContact.full_name ?? "The responsible party"} has no portal access to ${account.company_name}, so they could not sign the SS-4 there. Give them portal access first, or flag another member as the signer.` }
+  }
+
   const slug = slugify(account.company_name)
   const token = `ss4-${slug}-${new Date().getFullYear()}`
   const title = entityType === "SMLLC" ? "Owner" : entityType === "MMLLC" ? "Member" : "President"
@@ -603,7 +611,7 @@ async function generateSS4(accountId: string, opts?: { regenerate?: boolean }) {
       responsible_party_itin: responsibleContact.itin_number || null,
       responsible_party_phone: responsibleContact.phone || null,
       responsible_party_title: title,
-      language: responsibleContact.language === "Italian" ? "it" : "en",
+      language: localeFromLanguage(responsibleContact.language),
       county_and_state: resolvedCountyAndState, // null if RA address unknown — admin must fix RA + ss4_update before signing
       mailing_street: mailing.street,
       mailing_city_state_zip: mailing.cityStateZip,

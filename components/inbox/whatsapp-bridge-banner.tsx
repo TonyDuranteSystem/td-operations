@@ -15,6 +15,17 @@ interface BridgeStatus {
   codeRequested?: boolean
   /** owner only: 5 codes were already made this hour — when the hour is over (ISO) */
   codeLimitUntil?: string | null
+  /** the Mac's nightly program-update report, when a person should know (null = nothing to say) */
+  update?: { level: 'problem' | 'warning'; title: string; text: string } | null
+  /** the weekly voice-note test, when a person has something to answer or fix (null = nothing to say) */
+  voiceCheck?: VoiceCheckCardData | null
+}
+
+interface VoiceCheckCardData {
+  level: 'info' | 'ask' | 'warning' | 'problem'
+  title: string
+  text: string
+  actions: Array<'played' | 'not_played' | 'resend'>
 }
 
 const POLL_MS = 30_000
@@ -75,7 +86,39 @@ export function WhatsAppBridgeBanner() {
   }, [load, unlinked])
 
   if (error && !status) return null // a status-read failure must not block the inbox
-  if (!status || status.health === 'ok' || status.health === 'unmonitored' || status.health === 'none') return null
+  if (!status) return null
+  const linkHealthy = status.health === 'ok' || status.health === 'unmonitored' || status.health === 'none'
+  // The link is fine, but the nightly update of the WhatsApp program needs a person to know (it went back, failed, or stopped running).
+  if (linkHealthy) {
+    const u = status.update
+    const v = status.voiceCheck
+    if (!u && !v) return null
+    const red = u?.level === 'problem'
+    const tone = red ? 'border-red-200 bg-red-50 text-red-900' : 'border-amber-200 bg-amber-50 text-amber-900'
+    const icon = red ? 'text-red-600' : 'text-amber-600'
+    const updateEl = !u ? null : appMode && !unfolded ? (
+      <div role="alert" data-testid="wa-update-notice">
+        <button type="button" onClick={() => setUnfolded(true)} className={`flex min-h-[44px] w-full items-center gap-2 border-b px-3 text-left text-sm ${tone}`}>
+          <AlertTriangle className={`h-4 w-4 shrink-0 ${icon}`} />
+          <span className="min-w-0 flex-1 truncate font-semibold">{u.title}</span>
+        </button>
+      </div>
+    ) : (
+      <div className={`flex items-start gap-3 border-b px-4 py-3 ${tone}`} role="alert" data-testid="wa-update-notice">
+        <AlertTriangle className={`mt-0.5 h-5 w-5 shrink-0 ${icon}`} />
+        <div className="min-w-0 flex-1 space-y-1">
+          <p className="text-sm font-semibold">{u.title}</p>
+          <p className="text-sm">{u.text}</p>
+        </div>
+      </div>
+    )
+    return (
+      <>
+        {v && <VoiceCheckCard v={v} onChanged={load} />}
+        {updateEl}
+      </>
+    )
+  }
 
   if (appMode && !unfolded) {
     return (
@@ -135,6 +178,46 @@ export function WhatsAppBridgeBanner() {
         ) : (
           status.hint && <p className="text-sm">{status.hint}</p>
         )}
+      </div>
+    </div>
+  )
+}
+
+
+/** "Did the weekly test voice note play?" — Yes / No buttons (and "Send a new test" after a No or a failed send). */
+function VoiceCheckCard({ v, onChanged }: { v: VoiceCheckCardData; onChanged: () => void | Promise<void> }) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const red = v.level === 'problem'
+  const tone = red ? 'border-red-200 bg-red-50 text-red-900' : v.level === 'warning' ? 'border-amber-200 bg-amber-50 text-amber-900' : v.level === 'info' ? 'border-zinc-200 bg-zinc-50 text-zinc-800' : 'border-blue-200 bg-blue-50 text-blue-900'
+  const answer = async (a: 'played' | 'not_played' | 'resend') => {
+    setBusy(true); setErr(null)
+    try {
+      const res = await fetch('/api/inbox/whatsapp/voice-check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ answer: a }) })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || 'Could not save your answer — please try again.')
+      await onChanged()
+      window.dispatchEvent(new Event('wa-attention-refresh')) // the left-menu dot re-reads at once instead of within a minute
+    } catch (e) {
+      setErr(e instanceof Error && e.message ? e.message : 'Could not save your answer — please try again.')
+    } finally { setBusy(false) }
+  }
+  const label = { played: 'Yes, it played', not_played: 'No, it did not', resend: v.level === 'info' ? 'Send a test now' : 'Send a new test' } as const
+  return (
+    <div className={`flex items-start gap-3 border-b px-4 py-3 ${tone}`} role="alert" data-testid="wa-voice-check">
+      <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+      <div className="min-w-0 flex-1 space-y-1.5">
+        <p className="text-sm font-semibold">{v.title}</p>
+        <p className="text-sm">{v.text}</p>
+        <div className="flex flex-wrap gap-2 pt-0.5">
+          {v.actions.map((a) => (
+            <button key={a} type="button" disabled={busy} onClick={() => void answer(a)} data-testid={`wa-voice-check-${a}`}
+              className={`rounded-md border px-3 py-1 text-sm font-medium disabled:opacity-50 ${a === 'played' ? 'border-green-600 bg-green-600 text-white hover:bg-green-700' : 'border-current bg-white/70 hover:bg-white'}`}>
+              {label[a]}
+            </button>
+          ))}
+        </div>
+        {err && <p className="text-xs text-red-700">{err}</p>}
       </div>
     </div>
   )

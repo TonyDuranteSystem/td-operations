@@ -6,6 +6,7 @@ import { PORTAL_BASE_URL } from '@/lib/config'
 import { PORTAL_TIERS, type PortalTier } from '@/lib/portal/tier-config'
 import { syncTier } from '@/lib/operations/sync-tier'
 import { NextRequest, NextResponse } from 'next/server'
+import { localeFromLanguage } from '@/lib/locale'
 
 /**
  * POST /api/crm/admin-actions/contact-portal
@@ -446,6 +447,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'account_id required for revoke_access' }, { status: 400 })
     }
 
+    // The last person who can open the company cannot be revoked while others on it carry "no portal access" (QA 21 Nov 2026).
+    const { wouldLeaveOnlyMarkedPeople, REMOVAL_LEAVES_ONLY_MARKED_MESSAGE } = await import('@/lib/members/removal-guard')
+    if (await wouldLeaveOnlyMarkedPeople(account_id, contact_id)) {
+      return NextResponse.json({ error: REMOVAL_LEAVES_ONLY_MARKED_MESSAGE }, { status: 409 })
+    }
+
     // Storage check / Calendar: remember who is leaving BEFORE the link goes (never blocks the revoke).
     try {
       const { recordPersonLeaving } = await import('@/lib/crm-store/storage-check')
@@ -563,7 +570,7 @@ export async function POST(request: NextRequest) {
     // Notify the client (bilingual by contact language — same convention as the
     // rest of the codebase: 'Italian'/'it' → IT, else EN). Suspend email has no
     // login button (they can't log in); restore email links back to the portal.
-    const isItalian = contact.language === 'Italian' || contact.language === 'it'
+    const isItalian = localeFromLanguage(contact.language) === 'it'
     try {
       const { gmailPost } = await import('@/lib/gmail')
       const loginUrl = `${PORTAL_BASE_URL}/portal/login`

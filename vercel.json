@@ -53,6 +53,10 @@
       "schedule": "0 9 * * *"
     },
     {
+      "path": "/api/cron/complete-held-closings",
+      "schedule": "30 9 * * *"
+    },
+    {
       "path": "/api/cron/annual-report-check",
       "schedule": "0 9 * * *"
     },
@@ -141,6 +145,10 @@
       "schedule": "*/1 * * * *"
     },
     {
+      "path": "/api/cron/wa-voice-check",
+      "schedule": "0 14 * * 1"
+    },
+    {
       "path": "/api/cron/wa-media-retention",
       "schedule": "30 6 * * *"
     },
@@ -214,6 +222,10 @@
     },
     {
       "path": "/api/cron/action-required-reminders",
+      "schedule": "0 13 * * *"
+    },
+    {
+      "path": "/api/cron/waiting-for-client-reminders",
       "schedule": "0 13 * * *"
     },
     {

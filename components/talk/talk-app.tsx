@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
+import { decideJump, pendingJumpFromSearch, type PendingJump } from '@/lib/talk/pending-jump'
 import { ChevronLeft, Loader2, Plus, Search, Users, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { createClient } from '@/lib/supabase/client'
@@ -89,9 +90,14 @@ function writeLastOpened(id: string | null) {
  * READ RULE: opening a conversation marks it read (the server does that on GET). Nothing marks anything read while the
  * app is in the background — a notification is how you learn about a message then.
  */
+function initialPendingJump(): PendingJump | null {
+  return typeof window === 'undefined' ? null : pendingJumpFromSearch(window.location.search, Date.now())
+}
+
 export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/talk` (the app) or `/td-talk` (the CRM tab) — the address it keeps the open chat in. */ base?: string } = {}) {
   const searchParams = useSearchParams()
   const urlThread = searchParams.get('thread')
+  const urlMessage = searchParams.get('message')
   // Inside the TD Social phone app TD Talk opens FAST (dev job 2072bc3e): it shows the chat list and chat saved on the phone at once and asks for
   // the chat you were in together with the list. The CRM tab and a normal browser open the way they always did.
   const appMode = useAppMode()
@@ -135,8 +141,12 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQ, setSearchQ] = useState('')
   const [highlightId, setHighlightId] = useState<string | null>(null)
-  // a message link (?message=<id>): once the chat's messages are on screen, scroll to it and flash it — once
-  const pendingJumpRef = useRef<string | null>(typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('message'))
+  // a message link (?thread=<chat>&message=<id>): once THAT chat's messages are on screen, scroll to the message and flash it — once.
+  // It is kept with its chat (a tapped alert while another chat is open must not jump inside the chat that happens to be open) and
+  // read again whenever the address changes while the app is open (a tapped lock-screen alert), not only when the app starts.
+  const pendingJumpRef = useRef<PendingJump | null>(initialPendingJump())
+  const handledUrlMessageRef = useRef<string | null>(pendingJumpRef.current?.messageId ?? null)
+  const [jumpTick, setJumpTick] = useState(0)
   const messagesRef = useRef<TalkMessage[]>([])
   const [peerTyping, setPeerTyping] = useState<{ userId: string; kind: TypingKind } | null>(null)
   // groups: who is in the open group, how far each member has read, and the New-group / Group-info screens
@@ -641,13 +651,29 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
     }, 250)
   }, [loadEarlier])
 
+  // the address changed while the app is open (a tapped alert, a pasted link): remember the message to jump to, with its chat
   useEffect(() => {
-    const id = pendingJumpRef.current
-    if (!id || loadingMsgs || messages.length === 0) return
+    if (!urlMessage) { handledUrlMessageRef.current = null; return }
+    if (urlMessage === handledUrlMessageRef.current) return
+    handledUrlMessageRef.current = urlMessage
+    pendingJumpRef.current = { threadId: urlThread, messageId: urlMessage, at: Date.now() }
+    setJumpTick(t => t + 1)
+  }, [urlMessage, urlThread])
+
+  useEffect(() => {
+    const p = pendingJumpRef.current
+    // wait = the link's chat is not the open one yet (opening it clears the old chat's messages first) or is still loading; drop = too old
+    const decision = decideJump(p, { now: Date.now(), loadingMsgs, messageCount: messages.length, selectedId })
+    if (decision === 'drop') pendingJumpRef.current = null
+    if (decision !== 'go' || !p) return
     pendingJumpRef.current = null
+    // the link is used up: take ?message= out of the address, so the same alert tapped again is a NEW link
+    try {
+      if (new URLSearchParams(window.location.search).has('message')) window.history.replaceState(null, '', selectedId ? `${base}?thread=${selectedId}` : base)
+    } catch { /* ignore */ }
     // a link to an older message: the chat opens, earlier pages load until the message turns up (jumpTo says so when it cannot be found)
-    void jumpTo(id)
-  }, [messages, loadingMsgs, jumpTo])
+    void jumpTo(p.messageId)
+  }, [messages, loadingMsgs, jumpTo, selectedId, jumpTick, base])
 
   // ── groups ──
   const createNewGroup = useCallback(async (name: string, memberIds: string[]) => {
@@ -916,6 +942,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
         <TalkComposer
           key={selected.id} onSend={send} onEdit={edit} mode={mode} onCancelMode={() => setMode(null)} onTyping={announceTyping}
           draftKey={draftKey(meId, selected.id)}
+          soundCheck
           // the recording ended by itself (the 5-minute limit) while the question is open: the note was sent from this chat, so the question no longer applies
           onRecordingChange={on => { recordingRef.current = on; if (!on) setLeaveAsk(cur => (cur && !leaveBusyRef.current ? null : cur)) }}
           recordingControl={recordingControl}

@@ -1,0 +1,12 @@
+{
+  "title": "Portal Chats: every pinned message shows, and clicking one takes you straight to it",
+  "tag": "fixed",
+  "text": "In a client's chat, the Pinned list used to show only the pinned messages that were already loaded on screen, so an older pin stayed hidden until you opened \"Older messages\". It now shows all of the conversation's pins right away. Clicking a pin also used to do nothing when its message was not on screen. Now it loads the older messages it needs, opens the right topic, scrolls to the message and highlights it, and it stays there. The list also keeps itself up to date when someone pins or unpins a message, including an old one.",
+  "points": [
+    "Open a long client chat that has old pinned messages: all pins are in the Pinned list",
+    "Click an old pin: the chat loads back to it, scrolls to it and highlights it",
+    "Click a pin that is in another topic: the topic opens and the message is highlighted",
+    "Unpin a message: it disappears from the list at once"
+  ],
+  "screenshot": "portal-chat-pinned-older.png"
+}

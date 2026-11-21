@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback, useEffect, useRef, useMemo, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { ArrowLeft, ChevronDown, MessageSquare, Mail, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput, Reply, Bot, MessagesSquare, Palette, Ban, Link2, Send, Printer, ArchiveRestore, HelpCircle } from 'lucide-react'
+import { ArrowLeft, ChevronDown, MessageSquare, Mail, PenSquare, Archive, Star, Forward, Trash2, MailOpen, ClipboardList, Cog, Receipt, X, CheckSquare, Search, FolderInput, Reply, Bot, MessagesSquare, Palette, Ban, Link2, Send, Printer, ArchiveRestore, HelpCircle, Users } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -18,6 +18,8 @@ import { WhatsappThread } from './whatsapp-thread'
 import { NewWhatsAppConversationDialog } from '@/components/messaging/new-whatsapp-conversation-dialog'
 import { NewWhatsAppRecipientPicker, type WhatsAppRecipient } from '@/components/messaging/new-whatsapp-recipient-picker'
 import { WhatsAppContactMatchBanner } from '@/components/messaging/whatsapp-contact-match-banner'
+import { WhatsAppGroupMembersDialog } from '@/components/inbox/whatsapp-group-members'
+import { WhatsAppGroupCompanyBar } from '@/components/inbox/whatsapp-group-company-bar'
 import { WhatsAppBackfillMatchesDialog } from '@/components/messaging/whatsapp-backfill-matches-dialog'
 import { ComposeReply } from './compose-reply'
 import { AppThreadActions } from './app-thread-actions'
@@ -186,6 +188,9 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
   const [shareFromBulk, setShareFromBulk] = useState(false)
   const [deepLinkDone, setDeepLinkDone] = useState(false)
   const [unreadFilter, setUnreadFilter] = useState<'all' | 'unread' | 'read'>('all')
+  // WhatsApp: show only group chats (a button beside All / Unread / Read — Antonio 2026-11-20)
+  const [groupsOnly, setGroupsOnly] = useState(false)
+  const [membersOpen, setMembersOpen] = useState(false)
   // Optimistic overrides — the single source of "what the list shows" layered
   // on the eventually-consistent Gmail payload (Luca flicker fix). `overrides`
   // holds hidden (deleted) + pinned (restored) intents and is PERSISTED so a
@@ -292,8 +297,8 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
 
   // Antonio, 2026-09-28: "I want to see the phone number next to the name" — WhatsappThread already
   // fetches the chat's own name/phone; it reports it up here rather than this header re-fetching it.
-  const [waChatInfo, setWaChatInfo] = useState<{ name: string | null; phone: string | null; nameSource?: string } | null>(null)
-  const handleWaChatInfo = useCallback((info: { name: string | null; phone: string | null; nameSource?: string } | null) => setWaChatInfo(info), [])
+  const [waChatInfo, setWaChatInfo] = useState<{ name: string | null; phone: string | null; nameSource?: string; isGroup?: boolean } | null>(null)
+  const handleWaChatInfo = useCallback((info: { name: string | null; phone: string | null; nameSource?: string; isGroup?: boolean } | null) => setWaChatInfo(info), [])
 
   const isWhatsApp = activeChannel === 'whatsapp'
 
@@ -1735,10 +1740,25 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
                 {f === 'all' ? 'All' : f === 'unread' ? 'Unread' : 'Read'}
               </button>
             ))}
+            <button
+              onClick={() => setGroupsOnly(v => !v)}
+              data-testid="wa-groups-filter"
+              aria-pressed={groupsOnly}
+              className={cn(
+                'px-2 py-1 rounded text-xs font-medium transition-colors',
+                groupsOnly ? 'bg-emerald-100 text-emerald-700' : 'text-zinc-400 hover:bg-zinc-100'
+              )}
+            >
+              Groups
+            </button>
           </div>
           {/* Which sound plays for a new customer message (per person, this browser) — dev job c84dfb4d */}
           {!appMode && <WhatsAppSoundPicker />}
         </div>
+      )}
+
+      {membersOpen && (selected?.isGroup || waChatInfo?.isGroup) && whatsappGroupId && (
+        <WhatsAppGroupMembersDialog groupId={whatsappGroupId} groupName={waChatInfo?.name || selected?.name || 'WhatsApp group'} onClose={() => setMembersOpen(false)} />
       )}
 
       {/* Bulk Action Bar — Gmail only */}
@@ -1905,6 +1925,7 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
             onSelectMany={(ids) => setSelectedIds(new Set(ids))}
             mailbox={activeMailbox}
             unreadFilter={unreadFilter}
+            groupsOnly={groupsOnly}
             userLabels={userLabels}
             onSetColor={(conv, color) => emailActionMutation.mutate({ action: 'set_color', color, conv })}
             onMoveToLabel={(conv, labelId, labelName) => emailActionMutation.mutate({ action: 'move_to_label', labelId, labelName, conv })}
@@ -2055,6 +2076,19 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
                       Reply
                     </button>
                   </HoverHint>
+
+                  {selected.channel === 'whatsapp' && whatsappGroupId && (selected.isGroup || waChatInfo?.isGroup) && (
+                    <HoverHint label="Who is in this group">
+                      <button
+                        data-testid="wa-members-button"
+                        onClick={() => setMembersOpen(true)}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-medium"
+                      >
+                        <Users className="h-3.5 w-3.5" />
+                        Members
+                      </button>
+                    </HoverHint>
+                  )}
 
                   {selected.channel === 'whatsapp' && whatsappGroupId && (
                     <HoverHint label="AI worker — reads this chat and the CRM, drafts replies. It cannot send.">
@@ -2294,6 +2328,7 @@ export function InboxShell({ canUsePersonalMailbox = false, userId, channel: loc
                         queryClient.invalidateQueries({ queryKey: ['inbox-conversations'] })
                       }}
                     />
+                    {(selected.isGroup || waChatInfo?.isGroup) && <WhatsAppGroupCompanyBar key={`co-${whatsappGroupId}`} groupId={whatsappGroupId} />}
                     <WhatsappThread groupId={whatsappGroupId} registerInsertDraft={registerWaInsertDraft} onChatInfo={handleWaChatInfo} />
                   </div>
                   {/* Keyed per chat, like WorkerChatPanel below: no state may survive a chat switch. */}

@@ -1,0 +1,10 @@
+{
+  "title": "Behind the scenes: the to-do to create portal accounts leaves out members without portal access",
+  "tag": "behind-the-scenes",
+  "text": "When an onboarding is confirmed for a company with several owners, the to-do \"Create portal accounts for MMLLC members after LLC confirmation\" used to list every owner, even one whose portal access was unticked in the form. It now lists only the owners who are meant to get a portal account, and adds a short note naming the ones left out, who are still owners. If everyone was unticked, no to-do is created. It only matters once the portal access tick is switched on, so nothing changes today.",
+  "points": [
+    "Unticked owners are named in a separate note on the to-do, not on the list",
+    "Owners with no answer in the form stay on the list, as before",
+    "No to-do at all when every owner was unticked"
+  ]
+}

@@ -8,6 +8,7 @@ import { buildDigestSections, buildDigestHeadline, mergeTypeLabels, pickDigestBu
 import { escapeHtml } from '@/lib/html-escape'
 import { NextRequest, NextResponse } from 'next/server'
 import { logCron } from '@/lib/cron-log'
+import { localeFromLanguage } from '@/lib/locale'
 
 /**
  * GET /api/cron/portal-digest
@@ -138,9 +139,12 @@ export async function GET(request: NextRequest) {
         contactEmail = companyEmail
 
         // Still need contact details for greeting personalization
+        // The greeting names the first person who can open the company — never one whose link carries the "no portal access" mark
+        // (dev job beb43385).
         const { data: links } = await supabaseAdmin
           .from('account_contacts')
           .select('contact_id')
+          .is('access_revoked_at', null)
           .eq('account_id', id)
           .limit(1)
 
@@ -195,7 +199,7 @@ export async function GET(request: NextRequest) {
 
       // Build per-type sections (pure helper — lib/portal/digest-render.ts).
       // Types with show_body (documents) render the file name under the title.
-      const isItalian = language === 'Italian' || language === 'it'
+      const isItalian = localeFromLanguage(language) === 'it'
       const sections = buildDigestSections(emailNotifs, typeLabels, isItalian)
 
       // Subject / opening / closing line: the normal digest wording, or the grouped "your services have started" email (S3).

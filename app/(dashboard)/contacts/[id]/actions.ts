@@ -4,6 +4,8 @@ import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { safeAction, updateWithLock, type ActionResult } from '@/lib/server-action'
 import { validateNameParts } from '@/lib/contacts/contact-name'
+import { contactHasClientLogin } from '@/lib/portal/login-email-change-staff'
+import { LOGIN_LINKED_ERROR } from '@/lib/portal/login-email-change-staff-shared'
 
 const ALLOWED_FIELDS = [
   'email', 'email_2', 'phone', 'phone_2', 'phone_3', 'phone_4',
@@ -22,6 +24,12 @@ export async function updateContactField(
 ): Promise<ActionResult> {
   if (!ALLOWED_FIELDS.includes(field)) {
     return { success: false, error: `Field '${field}' is not editable` }
+  }
+
+  // A contact that HAS a portal login must not get a new email on its own: the login would stay on the old address
+  // (silent drift). The screen sees this marker and opens "Change login email" instead (dev job beb43385, step 3).
+  if (field === 'email' && await contactHasClientLogin(contactId)) {
+    return { success: false, error: LOGIN_LINKED_ERROR }
   }
 
   return safeAction(async () => {

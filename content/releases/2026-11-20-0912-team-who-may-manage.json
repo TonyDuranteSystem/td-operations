@@ -1,0 +1,31 @@
+{
+  "title": "Team tab: every owner and member of a company can manage its team",
+  "tag": "improved",
+  "text": "Before, only one \"main person\" per company could add colleagues, change their powers or reset their password. Now every current owner or member of the company can, and nobody else: not an authorized representative, an accountant, a partner, a person who left, or an owner of a different company. A team login can never manage the team.",
+  "points": [
+    "Sign in as a company owner or member: the Team tab is in the menu",
+    "Sign in as an authorized representative of the same company: no Team tab"
+  ],
+  "stepsTitle": "Who may manage a company's team",
+  "steps": [
+    {
+      "name": "Linked to this company now",
+      "detail": "A current link: not ended, not revoked, not expired. Another company's owner does not count."
+    },
+    {
+      "name": "Owner or member",
+      "detail": "The link says owner or member. A representative, accountant or partner never does.",
+      "flag": "locked"
+    },
+    {
+      "name": "On the members list",
+      "detail": "If the company has a members list, the person must be on it. Someone who left is off it.",
+      "flag": "auto"
+    },
+    {
+      "name": "Can manage the team",
+      "detail": "Add colleagues, change their powers, switch them off, reset their password.",
+      "flag": "new"
+    }
+  ]
+}

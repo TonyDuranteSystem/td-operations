@@ -70,6 +70,7 @@ import { GroupRow, useFlyoutController, useFlyoutMode } from '@/components/dashb
 import { EditMenuTree, GroupNameDialog } from '@/components/dashboard/menu-editor'
 import { useMenuLayout } from '@/components/dashboard/use-menu-layout'
 import { isNavItemActive, onWhatsappView } from '@/lib/nav/nav-active'
+import { useWakeSignal } from '@/lib/hooks/use-wake-signal'
 import {
   containerOf,
   createGroup,
@@ -205,6 +206,8 @@ export function Sidebar({
   // Inbox = email only; WhatsApp has its own number (Telegram is not counted anywhere: the Inbox has no Telegram list to open).
   const [liveInbox, setLiveInbox] = useState(badgeCounts?.inbox ?? 0)
   const [liveWhatsapp, setLiveWhatsapp] = useState(badgeCounts?.whatsapp ?? 0)
+  // WhatsApp health pointer: a coloured dot beside the menu item with ONE sentence on hover (Antonio 2026-11-20); null = all well.
+  const [waAttention, setWaAttention] = useState<{ level: 'problem' | 'warning'; text: string } | null>(null)
   const [liveOverdue, setLiveOverdue] = useState(badgeCounts?.overdueInvoices ?? 0)
   const [liveReconReview, setLiveReconReview] = useState(badgeCounts?.reconciliationReview ?? 0)
   const [liveComm] = useState(badgeCounts?.commUnread ?? 0)
@@ -240,6 +243,9 @@ export function Sidebar({
   useEffect(() => { closeFlyout() }, [pathname, search, editMode, naming, closeFlyout])
   const onWhatsapp = onWhatsappView(pathname, search)
 
+  // The full badge check, reachable from outside its effect (the wake signal below).
+  const fetchBadgesRef = useRef<() => void>(() => {})
+
   // Fetch badge counts via API (uses supabaseAdmin server-side to bypass RLS)
   useEffect(() => {
     const fetchBadges = () => {
@@ -250,7 +256,9 @@ export function Sidebar({
         })
         .then(data => {
           if (!data) return
-          if (typeof data.portalChats === 'number' && pathnameRef.current !== '/portal-chats') {
+          // Always follow the server, also while the Portal Chats page is open: a page left open must learn that someone read the
+          // messages in another window (it used to freeze the number from 3 s after you arrived — Antonio, 2026-11-17, the stale red dot).
+          if (typeof data.portalChats === 'number') {
             setLivePortalChats(data.portalChats)
           }
           if (typeof data.teamChat === 'number' && !isChatTab(pathnameRef.current)) {
@@ -279,11 +287,16 @@ export function Sidebar({
         })
         .catch(() => {})
     }
+    fetchBadgesRef.current = fetchBadges
     // Delay first fetch to ensure auth cookies are set after hydration
     const initialTimer = setTimeout(fetchBadges, 2000)
     const interval = setInterval(fetchBadges, 15_000)
     return () => { clearTimeout(initialTimer); clearInterval(interval) }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Coming back to a window that was left (another tab, another app, a locked screen): its timers were paused or slowed while hidden, so the
+  // numbers it shows can be old. Ask at once instead of waiting for the next tick (same hook as the rest of the app).
+  useWakeSignal({ onWake: () => fetchBadgesRef.current() })
 
   // "Invoices to raise": after a click on the Calendar's Raise and send, the red count on the Calendar item drops at once
   // instead of waiting up to 15 seconds for the next refresh (the button announces it with this event).
@@ -296,6 +309,21 @@ export function Sidebar({
     }
     window.addEventListener('td:invoices-to-raise-changed', refresh)
     return () => window.removeEventListener('td:invoices-to-raise-changed', refresh)
+  }, [])
+
+  // WhatsApp health pointer (the same status the WhatsApp page's banner reads). A failed read just shows nothing.
+  useEffect(() => {
+    let cancelled = false
+    const read = () => {
+      fetch('/api/inbox/whatsapp/bridge-status', { cache: 'no-store' })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => { if (!cancelled) setWaAttention(d && d.attention ? d.attention : null) })
+        .catch(() => {})
+    }
+    const first = setTimeout(read, 3000)
+    const timer = setInterval(read, 60_000)
+    window.addEventListener('wa-attention-refresh', read)
+    return () => { cancelled = true; clearTimeout(first); clearInterval(timer); window.removeEventListener('wa-attention-refresh', read) }
   }, [])
 
   // Fetch the global "What's New" unhandled total for the Portal Chats badge.
@@ -384,6 +412,18 @@ export function Sidebar({
     // Team Chat dot) or a DM/@mention (which must). We can't tell from the row
     // alone, so refetch the server's DM+mention-only count (debounced).
     let teamDebounce: ReturnType<typeof setTimeout> | null = null
+    // The Portal Chats number, asked the LIGHT way (`?only=portalChats`: one cheap count, no Gmail) and coalesced, so a burst of changes
+    // is one question per tab. Used when a client message is read in another window (an UPDATE) and for a new one while you are ON the page.
+    let portalDebounce: ReturnType<typeof setTimeout> | null = null
+    const refetchPortalChats = () => {
+      if (portalDebounce) clearTimeout(portalDebounce)
+      portalDebounce = setTimeout(() => {
+        fetch('/api/dashboard/badges?only=portalChats')
+          .then(r => (r.ok ? r.json() : null))
+          .then(d => { if (d && typeof d.portalChats === 'number') setLivePortalChats(d.portalChats) })
+          .catch(() => {})
+      }, 800)
+    }
     const refetchTeamChat = () => {
       if (teamDebounce) clearTimeout(teamDebounce)
       teamDebounce = setTimeout(() => {
@@ -407,10 +447,20 @@ export function Sidebar({
           filter: 'sender_type=eq.client',
         },
         () => {
-          if (pathnameRef.current !== '/portal-chats') {
-            setLivePortalChats(prev => prev + 1)
-          }
+          // on the Portal Chats page the page may have read the message already: ask the server instead of adding one
+          if (pathnameRef.current !== '/portal-chats') setLivePortalChats(prev => prev + 1)
+          else refetchPortalChats()
         }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'portal_messages',
+          filter: 'sender_type=eq.client',
+        },
+        () => { refetchPortalChats() }
       )
       .on(
         'postgres_changes',
@@ -427,6 +477,7 @@ export function Sidebar({
 
     return () => {
       if (teamDebounce) clearTimeout(teamDebounce)
+      if (portalDebounce) clearTimeout(portalDebounce)
       supabase.removeChannel(channel)
     }
   }, [])
@@ -434,7 +485,7 @@ export function Sidebar({
   // Every page with its live red numbers applied.
   const liveItems: NavItem[] = defaultNavigation.map(item => {
     if (item.id === 'inbox' && liveInbox > 0) return { ...item, badge: liveInbox }
-    if (item.id === 'whatsapp' && liveWhatsapp > 0) return { ...item, badge: liveWhatsapp }
+    if (item.id === 'whatsapp') return { ...item, ...(liveWhatsapp > 0 ? { badge: liveWhatsapp } : {}), ...(waAttention ? { attention: waAttention } : {}) }
     // Tasks badge removed — daily work tracked via message action tags instead
     if (item.id === 'portal-chats') return { ...item, badge: livePortalChats > 0 ? livePortalChats : undefined, purpleBadge: liveWhatsNew }
     // Team Chat shows a plain DOT (not a count) — signal only, for a new DM / @mention.

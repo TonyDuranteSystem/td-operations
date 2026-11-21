@@ -81,6 +81,7 @@ export async function resolveClosureSubject(
   const { data: links, error: linksErr } = await supabaseAdmin
     .from("account_contacts")
     .select("account_id")
+    .is("access_revoked_at", null)
     .eq("contact_id", contactId)
   if (linksErr) throw new Error(`closure subject: could not read the client's companies: ${linksErr.message}`)
   const linkedAccountIds = (links ?? []).map((l) => l.account_id as string)
@@ -175,6 +176,7 @@ export async function verifyClosureServiceDelivery(
     const { data: link } = await supabaseAdmin
       .from("account_contacts")
       .select("account_id")
+      .is("access_revoked_at", null)
       .eq("account_id", sd.account_id)
       .eq("contact_id", contactId)
       .maybeSingle()

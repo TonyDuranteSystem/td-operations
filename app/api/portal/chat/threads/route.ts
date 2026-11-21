@@ -4,6 +4,7 @@ import { isDashboardUser } from '@/lib/auth'
 import { fillVoiceListPreviews } from '@/lib/portal/chat-voice'
 import { summarizeOverdue, type OverduePaymentRow, type OverdueSummary } from '@/lib/billing/overdue'
 import { loadPeopleThreadKeys, threadHasPeopleMessages, type PeopleKeysClient } from '@/lib/portal-chats/list-filter'
+import { isStillWaiting } from '@/lib/portal-chats/waiting'
 import { NextResponse } from 'next/server'
 
 /**
@@ -66,6 +67,7 @@ export async function GET() {
       const { data: links } = await supabaseAdmin
         .from('account_contacts')
         .select('contact_id, account_id')
+        .is('access_revoked_at', null)
         .in('contact_id', contactIds)
       for (const link of links ?? []) {
         const cid = link.contact_id as string
@@ -188,6 +190,41 @@ export async function GET() {
       (pinnedRows ?? []).map(r => r.contact_id).filter((x): x is string => !!x)
     )
 
+    // Waiting marks (staff, shared), two kinds: "client" = we wait for the client, "us" = the client waits for us.
+    // A mark counts only while the OTHER side has not written since it was made (client mark ends when the client writes,
+    // "us" mark ends when staff write) — so the mark ends by itself. Failure here never blocks the list (the chips are simply empty).
+    const waitingSince = new Map<string, string>()
+    const waitingUsSince = new Map<string, string>()
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: waitRows } = await (supabaseAdmin as any)
+        .from('portal_chat_waiting_threads')
+        .select('account_id, contact_id, marked_at, kind') as { data: { account_id: string | null; contact_id: string | null; marked_at: string; kind: string | null }[] | null }
+      const rows = waitRows ?? []
+      if (rows.length > 0) {
+        const keys = rows.map(r => (r.account_id ? r.account_id : r.contact_id) as string)
+        const oldest = rows.reduce((m, r) => (r.marked_at < m ? r.marked_at : m), rows[0].marked_at)
+        const { data: sideMsgs } = await supabaseAdmin
+          .from('portal_messages')
+          .select('account_id, contact_id, created_at, sender_type')
+          .in('sender_type', ['client', 'admin'])
+          .is('deleted_at', null)
+          .gte('created_at', oldest)
+          .or(`account_id.in.(${keys.join(',')}),contact_id.in.(${keys.join(',')})`)
+        for (const r of rows) {
+          const key = (r.account_id ? r.account_id : r.contact_id) as string
+          const waitingOnUs = r.kind === 'us'
+          const otherSide = waitingOnUs ? 'admin' : 'client'
+          const times = (sideMsgs ?? [])
+            .filter(m => m.sender_type === otherSide && (r.account_id ? m.account_id === key : m.contact_id === key))
+            .map(m => m.created_at as string)
+          if (isStillWaiting(r.marked_at, times)) (waitingOnUs ? waitingUsSince : waitingSince).set(r.account_id ? `account:${key}` : `contact:${key}`, r.marked_at)
+        }
+      }
+    } catch (e) {
+      console.warn('[portal-chat/threads] waiting marks unavailable:', e instanceof Error ? e.message : e)
+    }
+
     // Closed-account flags. The client portal hides Closed/Cancelled/Delinquent/
     // Pending-Formation accounts (lib/portal/queries.ts getPortalAccounts →
     // status IN Active/Suspended), so a staff message tagged to such an account
@@ -223,6 +260,12 @@ export async function GET() {
       unread_count: Number(r.unread_count ?? 0),
       is_pinned: (!!r.account_id && pinnedAccounts.has(r.account_id)) ||
         (!!r.contact_id && pinnedContacts.has(r.contact_id)),
+      // Feeds the "Waiting" chip: when staff marked this conversation as waiting for the client and the client has not written since.
+      waiting_since: (r.account_id ? waitingSince.get(`account:${r.account_id}`) : undefined)
+        ?? (r.contact_id ? waitingSince.get(`contact:${r.contact_id}`) : undefined) ?? null,
+      // Feeds the "Waiting on us" chip: the client is waiting for the team and the team has not written since.
+      waiting_us_since: (r.account_id ? waitingUsSince.get(`account:${r.account_id}`) : undefined)
+        ?? (r.contact_id ? waitingUsSince.get(`contact:${r.contact_id}`) : undefined) ?? null,
       // Feeds the "Chats" chip: true when a client or a team member wrote in this conversation
       // (not only automatic notices). undefined = unknown (function unavailable) → chip keeps it.
       has_people_messages: peopleKeys ? threadHasPeopleMessages(r, peopleKeys) : undefined,

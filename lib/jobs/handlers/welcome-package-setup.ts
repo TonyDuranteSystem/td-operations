@@ -26,6 +26,7 @@ import { isMultiMemberEntity } from "@/lib/portal/entity-type"
 import { autoDocumentCreationEnabled } from "@/lib/jobs/auto-document-creation-switch"
 import { getOrCreateBankingSubmission } from "@/lib/operations/banking-submission"
 import { companyCmraAddressLine } from "@/lib/operations/suite"
+import { localeFromLanguage } from "@/lib/locale"
 
 interface WelcomePackagePayload {
   account_id: string
@@ -95,6 +96,7 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
   const { data: contactLinks } = await supabaseAdmin
     .from("account_contacts")
     .select("contact_id")
+    .is("access_revoked_at", null) // a person with the no-portal-access mark is not picked as the one we write to (dev job beb43385)
     .eq("account_id", p.account_id)
     .limit(1)
 
@@ -125,17 +127,6 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
   // Runs here (post-EIN / state-confirmed) so members get access only after the LLC is real.
   // Idempotent: autoCreatePortalUser skips existing users and just updates tier.
   try {
-    const { autoCreatePortalUser } = await import("@/lib/portal/auto-create")
-
-    const { data: allLinks } = await supabaseAdmin
-      .from("account_contacts")
-      .select("contact_id")
-      .eq("account_id", p.account_id)
-
-    let portalCreated = 0
-    let portalExisting = 0
-    let portalErrors = 0
-
     // Formation's EIN-received flow already sets the account to 'active'
     // BEFORE enqueueing this job (record-ein-received), so hardcoding
     // "active" here has always just re-confirmed that. But the real
@@ -153,31 +144,24 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
         ? (account.portal_tier as (typeof PORTAL_TIERS)[number])
         : "active"
 
-    for (const link of allLinks ?? []) {
-      try {
-        const pr = await autoCreatePortalUser({
-          accountId: p.account_id,
-          contactId: link.contact_id,
-          tier: memberTier,
-          autoCreated: true,
-        })
-        if (pr.success) {
-          if (pr.alreadyExists) portalExisting++
-          else portalCreated++
-        } else {
-          portalErrors++
-          console.warn("[welcome-package] portal user failed:", pr.error)
-        }
-      } catch (memberErr) {
-        portalErrors++
-        console.warn("[welcome-package] portal user error:", memberErr instanceof Error ? memberErr.message : memberErr)
-      }
-    }
+    // A link carrying the "no portal access" mark (unticked in the form, or taken away by the team) gets no login: they stay
+    // an owner, the company just stays out of the portal. While the member-portal-access switch is on for this company, a
+    // member whose login is created here also gets the welcome email (before, the login was made silently and the member
+    // never learned the password). Off = as before. Dev job beb43385, delivery B.
+    const { createLoginsForLinkedMembers } = await import("@/lib/portal/member-logins")
+    const { memberPortalAccessOn } = await import("@/lib/portal/member-access-switch")
+    const welcomeEmailOn = await memberPortalAccessOn({ accountId: p.account_id })
+    const counts = await createLoginsForLinkedMembers({ accountId: p.account_id, tier: memberTier, welcomeEmailOn })
 
+    // A welcome email that could not be sent turns this step red and names each person: their login exists but nobody has told them the
+    // password. Before, it was only a console line and the step said "ok" (QA 21 Nov 2026, dev job beb43385).
+    const emailFailureText = counts.emailFailures.length > 0
+      ? ` — ${counts.emailFailures.length} welcome email(s) FAILED, send each person a new password from their Contact page: ${counts.emailFailures.map(f => `${f.name} <${f.email}> (${f.reason})`).join("; ")}`
+      : ""
     result.steps.push(step(
       "portal_members",
-      portalErrors > 0 ? "error" : "ok",
-      `${portalCreated} created, ${portalExisting} existing, ${portalErrors} errors`
+      counts.errors > 0 || counts.emailFailures.length > 0 ? "error" : "ok",
+      `${counts.created} created, ${counts.existing} existing, ${counts.errors} errors${welcomeEmailOn ? `, ${counts.emailed} welcome email(s) sent` : ""}${emailFailureText}`
     ))
   } catch (e) {
     result.steps.push(step("portal_members", "error", e instanceof Error ? e.message : String(e)))
@@ -185,7 +169,7 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
 
   await updateJobProgress(job.id, result)
 
-  const lang = contact.language === "Italian" || contact.language === "it" ? "it" : "en"
+  const lang = localeFromLanguage(contact.language)
   const companySlug = account.company_name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
 
   // ─── 3. OPERATING AGREEMENT ───
@@ -351,6 +335,7 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
         // permanently below total_signers — the agreement stuck in progress.
         if (isMMLC && oaSigners.length > 0) {
           const { data: allContacts } = await supabaseAdmin
+            // portal-access-ok: roster — every owner signs the Operating Agreement, with or without portal access
             .from("account_contacts")
             .select("contact_id, contacts(id, full_name, email)")
             .eq("account_id", p.account_id)

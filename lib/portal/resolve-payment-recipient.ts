@@ -54,6 +54,7 @@ export async function resolvePaymentRecipient(
     supabase
       .from("account_contacts")
       .select("role, contacts(email, full_name, language)")
+      .is("access_revoked_at", null)
       .eq("account_id", payment.account_id)
       .limit(10),
   ])

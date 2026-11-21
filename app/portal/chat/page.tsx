@@ -16,19 +16,23 @@ import { getClientAppModeActive } from '@/lib/app-mode/server'
 export default async function PortalChatPage({
   searchParams,
 }: {
-  searchParams: Promise<{ view?: string; topic?: string }>
+  searchParams: Promise<{ view?: string; topic?: string; personal?: string }>
 }) {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/portal/login')
 
   const contactId = getClientContactId(user)
-  const { view, topic } = await searchParams
+  const { view, topic, personal } = await searchParams
 
   let entities: PortalChatEntity[] = []
   let selectedEntityId = ''
   let scope: ChatScope
   let selectedAccountId: string | undefined
+  // The company the rest of the portal is on, which stays the same while the client looks at their personal chat.
+  let companyEntityId = ''
+  // Unread team messages in the client's personal chat, shown on the button that opens it.
+  let personalUnread = 0
 
   if (contactId) {
     entities = await getChatEntities(contactId)
@@ -37,15 +41,32 @@ export default async function PortalChatPage({
     const cookieAccountId = cookieStore.get('portal_account_id')?.value
 
     // Resolve the selected entity, mirroring the sidebar switcher's cookie
-    // precedence: a formation selection wins, then portal_account_id (which can
-    // be a real account id OR the 'personal' sentinel), else the first entity.
+    // precedence: a formation selection wins, then portal_account_id, else the
+    // first company. The personal chat is NOT a company: it is a chat-only view
+    // (?personal=1) that leaves the portal's company alone, so the top-left chip,
+    // the menu and every other tab keep showing the same company. An old
+    // portal_account_id of 'personal' (written by the retired in-chat switch) is ignored.
     const byId = new Map(entities.map(e => [e.id, e]))
     // (A "new message" link's company is applied BEFORE this page renders, by
     // /portal/chat/open, which saves it to these same cookies — dev job 05d997f2.)
-    const selected =
+    const companyChoice =
       (cookieFormationId ? byId.get(cookieFormationId) : undefined) ??
-      (cookieAccountId ? byId.get(cookieAccountId) : undefined) ??
+      (cookieAccountId && cookieAccountId !== 'personal' ? byId.get(cookieAccountId) : undefined) ??
+      entities.find(e => e.kind !== 'personal') ??
       entities[0]
+    const personalEntity = entities.find(e => e.kind === 'personal')
+    const selected = personal === '1' && personalEntity ? personalEntity : companyChoice
+    companyEntityId = companyChoice?.id ?? ''
+
+    if (personalEntity) {
+      try {
+        const { getClientChatUnread } = await import('@/lib/portal/client-chat-unread')
+        const summary = await getClientChatUnread(contactId)
+        personalUnread = Object.values(summary.byEntity[personalEntity.id] ?? {}).reduce((a, n) => a + n, 0)
+      } catch {
+        /* the button just shows no number */
+      }
+    }
 
     selectedEntityId = selected?.id ?? 'personal'
     selectedAccountId = selected?.accountId ?? undefined
@@ -142,6 +163,8 @@ export default async function PortalChatPage({
           locale={locale}
           entities={entities}
           selectedEntityId={selectedEntityId}
+          companyEntityId={companyEntityId}
+          personalUnread={personalUnread}
           initialTopic={initialTopic}
         />
       ) : (

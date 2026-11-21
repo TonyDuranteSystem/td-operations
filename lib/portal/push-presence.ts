@@ -48,6 +48,7 @@ export async function companyEmailRecipientContactId(accountId: string): Promise
   const { data: links } = await supabaseAdmin
     .from('account_contacts')
     .select('contact_id, contacts(email)')
+    .is('access_revoked_at', null)
     .eq('account_id', accountId)
   for (const l of (links ?? []) as Array<{ contact_id: string | null; contacts: { email: string | null } | null }>) {
     if (l.contact_id && (l.contacts?.email ?? '').trim().toLowerCase() === wanted) return l.contact_id
@@ -77,22 +78,36 @@ export async function stageNoticeRecipientHasApp(opts: { contactId?: string | nu
 
 /**
  * The per-recipient rule of the chat "unread message" nudge (notifyClientOfAdminMessage): the person's own devices; a company-level device
- * only when this notification has ONE person to reach (a multi-member company must never be silenced by one member's device).
+ * only when this notification has ONE person to reach (a multi-member company must never be silenced by one member's device) and the device is
+ * not ANOTHER team login's (a team login's alerts reach that login, never the person who gets the email). A recipient who IS a team login
+ * (`ownLoginId`) keeps credit for their own device.
  */
 export async function recipientHasPush(opts: {
   contactId?: string | null
   accountId?: string | null
   /** The notification has ONE person to reach. Account-level subscriptions (legacy rows, never stamped with a person) are trusted only then. */
   singleRecipient: boolean
+  /** The recipient is a team login: its own sign-in id. Its own device counts as theirs. */
+  ownLoginId?: string | null
 }): Promise<boolean> {
-  const { contactId, accountId, singleRecipient } = opts
+  const { contactId, accountId, singleRecipient, ownLoginId } = opts
   if (contactId && (await personHasPush(contactId))) return true
   if (accountId && singleRecipient) {
-    const { count } = await supabaseAdmin
+    // A device stamped with the company only counts when it is NOT another team login's device: a team login's alerts reach that login, never
+    // the person the email goes to (team-login device bug, dev job e59dd470). Every login of the company counts here — removed or switched off
+    // too, because their devices stay registered — except the recipient's own. Any lookup error answers "no app": the email goes out.
+    const { data: devices, error: devicesError } = await supabaseAdmin
       .from('push_subscriptions')
-      .select('id', { count: 'exact', head: true })
+      .select('user_id')
       .eq('account_id', accountId)
-    if (count && count > 0) return true
+    if (devicesError || !devices || devices.length === 0) return false
+    const { data: logins, error: loginsError } = await supabaseAdmin
+      .from('portal_team_members')
+      .select('auth_user_id')
+      .eq('account_id', accountId)
+    if (loginsError) return false
+    const otherLoginIds = new Set((logins ?? []).map((l) => l.auth_user_id).filter((id) => id !== ownLoginId))
+    return devices.some((d) => !d.user_id || !otherLoginIds.has(d.user_id))
   }
   return false
 }

@@ -1,0 +1,5 @@
+{
+  "title": "Behind the scenes: a closing company waits for its final tax return",
+  "tag": "behind-the-scenes",
+  "text": "When a company closure is finished, a tax return that is still to be filed is no longer cancelled. The tax return, its to-dos, its tax deadline and the unpaid invoices of its offer stay, and the company and its portal stay open. When that tax return is filed or cancelled, the company closes by itself; a nightly check closes it too if a cancellation missed it. Going back or finishing without waiting ends the wait. A tax return stopped for non-payment does not hold the company. The nightly renewal, reminder, agreement and invoice jobs skip a waiting company. With no open tax return a closure works as before."
+}

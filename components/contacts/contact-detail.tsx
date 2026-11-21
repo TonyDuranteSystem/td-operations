@@ -29,13 +29,13 @@ import { buildShareChatBody } from '@/lib/crm-store/document-share-client'
 import { NewWhatsAppConversationDialog } from '@/components/messaging/new-whatsapp-conversation-dialog'
 import { ThreadEmailPanel } from '@/components/portal-chats/thread-email-panel'
 import { ChainAuditDialog } from '@/components/contacts/chain-audit-dialog'
-import { StartNewCompanyButton } from '@/components/contacts/start-new-company-dialog'
 import { MessageReactions } from '@/components/chat/message-reactions'
 import type { MessageReaction } from '@/lib/portal/reactions'
 import { ContactHealthPanel } from '@/components/contacts/contact-health-panel'
 import { ReferralsGivenCard } from '@/components/referrals/referrals-given-card'
 import { ConfirmPaymentDialog } from '@/app/(dashboard)/leads/[id]/components/confirm-payment-dialog'
 import { AccountOfferPanel, type OfferData } from '@/components/offers/account-offer-panel'
+import { listOrEmpty } from '@/lib/offers/json-list'
 import { SignedContractsCard } from '@/components/contacts/signed-contracts-card'
 import { replaceEntry } from '@/lib/signed-contracts/list'
 import type { SignedContractEntry } from '@/lib/signed-contracts/types'
@@ -55,6 +55,8 @@ import { StoreDocumentsPanel } from '@/components/accounts/store-documents-panel
 import { StoreBusyScope, useStoreBusy, STORE_BUSY_HINT } from '@/components/accounts/store-busy'
 import { ClosureNotifyCheckbox, isClosureServiceType, showClosurePromptToast } from '@/components/services/closure-notify'
 import { updateContactField, updateContactName, addContactNote } from '@/app/(dashboard)/contacts/[id]/actions'
+import { ChangeLoginEmailStaffDialog } from '@/components/contacts/change-login-email-staff-dialog'
+import { LOGIN_LINKED_ERROR } from '@/lib/portal/login-email-change-staff-shared'
 import { updateAccountContactRole, toggleDocumentPortalVisibility } from '@/app/(dashboard)/accounts/actions'
 import { useShareMessagePrompt, suppressesAutoChat, isSilentShow, type ShareDecision } from '@/components/storage/use-share-message-prompt'
 import { useWorkspaceStepPrompt } from '@/components/storage/use-workspace-step-prompt'
@@ -194,6 +196,8 @@ interface PortalAuth {
   lastLogin: string | null
   createdAt: string | null
   suspended: boolean
+  /** The email the client really signs in with (found by the contact id), or null when no client login is linked. */
+  loginEmail?: string | null
 }
 
 interface ContactDocumentRecord {
@@ -341,8 +345,16 @@ export function ContactDetail({
   const [showWhatsApp, setShowWhatsApp] = useState(false)
   const [chatUnread, setChatUnread] = useState(0)
 
+  // "Change login email" (staff): opened from the Portal tab, or from the Email box when the contact HAS a portal login
+  const [loginEmailDialog, setLoginEmailDialog] = useState<{ initial?: string } | null>(null)
+
   const makeContactSaver = (field: string) => async (value: string) => {
     const result = await updateContactField(contact.id, field, value, contact.updated_at)
+    // The contact has a portal login: the Email box must not change the contact alone, so open the real change instead
+    if (field === 'email' && !result.success && result.error === LOGIN_LINKED_ERROR) {
+      setLoginEmailDialog({ initial: value })
+      return { success: true }
+    }
     if (result.success) toast.success('Saved')
     else toast.error(result.error ?? 'Failed')
     return result
@@ -582,7 +594,7 @@ export function ContactDetail({
         <ChatTab contactId={contact.id} onUnreadChange={setChatUnread} />
       )}
       {activeTab === 'portal' && (
-        <PortalTab contact={contact} portalAuth={portalAuth} accounts={accounts} />
+        <PortalTab contact={contact} portalAuth={portalAuth} accounts={accounts} onChangeLoginEmail={() => setLoginEmailDialog({})} />
       )}
       {activeTab === 'health' && (
         <ContactHealthPanel contactId={contact.id} contactName={contact.full_name} />
@@ -614,6 +626,15 @@ export function ContactDetail({
           contactId={contact.id}
           name={contact.full_name || contact.email || 'this contact'}
           phone={(contact.phone || contact.phone_2 || contact.phone_3 || contact.phone_4) as string}
+        />
+      )}
+
+      {loginEmailDialog && (
+        <ChangeLoginEmailStaffDialog
+          contactId={contact.id}
+          initialEmail={loginEmailDialog.initial}
+          onClose={() => setLoginEmailDialog(null)}
+          onChanged={() => { setLoginEmailDialog(null); router.refresh() }}
         />
       )}
 
@@ -904,7 +925,7 @@ function OverviewTab({
       </div>
 
       {/* Wizard Progress Card */}
-      <WizardProgressCard wizardProgress={wizardProgress} pendingActivations={pendingActivations} contactId={contact.id} contactName={contact.full_name ?? 'this person'} />
+      <WizardProgressCard wizardProgress={wizardProgress} pendingActivations={pendingActivations} contactId={contact.id} />
 
     </div>
   )
@@ -1194,7 +1215,10 @@ function QuickActionsBar({
             contract_type: paymentOffer.contract_type,
             bundled_pipelines: paymentOffer.bundled_pipelines,
             currency: paymentOffer.currency ?? null,
-            cost_summary: (paymentOffer.cost_summary ?? null) as Array<{ label: string; total?: string; items?: Array<{ name: string; price: string }> }> | null,
+            // a list saved as text is read as a real list (dev job 20600f18); no breakdown stays null
+            cost_summary: paymentOffer.cost_summary == null
+              ? null
+              : listOrEmpty<{ label: string; total?: string; items?: Array<{ name: string; price: string }> }>(paymentOffer.cost_summary),
           } : null}
         />
       )}
@@ -1520,7 +1544,7 @@ function OfferStatusCard({
   const offersData: OfferData[] = offers.map((o) => ({
     ...o,
     view_count: o.view_count ?? 0,
-    cost_summary: o.cost_summary as OfferData['cost_summary'],
+    cost_summary: o.cost_summary == null ? null : listOrEmpty<NonNullable<OfferData['cost_summary']>[number]>(o.cost_summary),
     required_documents: o.required_documents as OfferData['required_documents'],
   }))
 
@@ -1567,12 +1591,10 @@ function WizardProgressCard({
   wizardProgress,
   pendingActivations,
   contactId,
-  contactName,
 }: {
   wizardProgress: WizardProgressRecord[]
   pendingActivations: PendingActivationRecord[]
   contactId: string
-  contactName: string
 }) {
   const primaryWizard = wizardProgress[0] ?? null
   const primaryActivation = pendingActivations[0] ?? null
@@ -1630,9 +1652,6 @@ function WizardProgressCard({
           )}>
             {primaryWizard.status === 'submitted' ? 'Submitted' : 'In progress'}
           </span>
-          {wizardProgress.some(w => w.wizard_type === 'formation') && (
-            <StartNewCompanyButton contactId={contactId} contactName={contactName} />
-          )}
         </div>
       </div>
 
@@ -2603,10 +2622,12 @@ function PortalTab({
   contact,
   portalAuth,
   accounts,
+  onChangeLoginEmail,
 }: {
   contact: ContactRecord
   portalAuth: PortalAuth
   accounts: LinkedAccount[]
+  onChangeLoginEmail: () => void
 }) {
   const [loading, setLoading] = useState<string | null>(null)
   const [tier, setTier] = useState(contact.portal_tier ?? '')
@@ -2796,8 +2817,18 @@ function PortalTab({
           )}
 
           <div className="flex items-center justify-between">
-            <span className="text-sm text-muted-foreground">Email</span>
-            <span className="text-sm">{contact.email ?? '—'}</span>
+            <span className="text-sm text-muted-foreground">Login email</span>
+            <span data-testid="portal-login-email" className="text-sm">{portalAuth.loginEmail ?? '—'}</span>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-muted-foreground">Contact email</span>
+            <span
+              data-testid="portal-contact-email"
+              className={cn('text-sm', portalAuth.loginEmail && contact.email && portalAuth.loginEmail.trim().toLowerCase() !== contact.email.trim().toLowerCase() && 'text-amber-700 font-medium')}
+            >
+              {contact.email ?? '—'}
+            </span>
           </div>
         </div>
       </div>
@@ -2888,6 +2919,18 @@ function PortalTab({
               )}
             </div>
           )}
+
+          {/* Change the email the client signs in with — right away, no code, login + contact together, both addresses told
+              (dev job beb43385, step 3). Visible even when the Account row above says "Not created": a login whose email
+              drifted from the contact's is found by the contact id, and the dialog says plainly when there is none. */}
+          <button
+            onClick={onChangeLoginEmail}
+            data-testid="change-login-email-button"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-red-200 bg-red-50 text-red-700 text-sm font-medium hover:bg-red-100 transition-colors mt-3"
+          >
+            <KeyRound className="h-4 w-4" />
+            Change login email
+          </button>
 
           {/* Reconcile Portal Tier — P3.4 #2. Visible regardless of portalExists
               because tier drift (contact vs linked accounts vs auth user) can

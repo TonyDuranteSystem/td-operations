@@ -12,6 +12,7 @@ import { checkContractAgainstCompany, type CompanyLookup } from './company-check
 import { displayContractAmounts, readContractAmounts } from './contract-amounts'
 import { formatSavedNumber } from './amount-input'
 import { contractLabel, hasInstallmentAmounts } from './labels'
+import { signedAgreementsLabel } from '@/lib/offers/signed-agreements'
 import { amountFromSavedText, readRenewalAmounts } from './renewal-amounts'
 import type { AmountsView, SignedContractEntry } from './types'
 
@@ -33,6 +34,8 @@ export interface ContractRow {
   annual_fee: string | null
   installments: unknown
   pdf_path: string | null
+  /** what the contract contained when it was signed (contracts.agreements); null/absent = signed before this was recorded */
+  agreements?: unknown
 }
 export interface AgreementRow {
   token: string
@@ -105,7 +108,8 @@ export function buildEntries(input: {
     if (!offer) continue
     const type = offer.contract_type
     const agreement = type === 'renewal' ? agreementByToken.get(c.offer_token) : undefined
-    const label = contractLabel(type, agreement?.agreement_year ?? (c.signed_at ? new Date(c.signed_at).getUTCFullYear() : null))
+    // what the contract CONTAINS, when that was recorded at signing; else named from the offer's main type as before (dev job 0a60f416)
+    const label = signedAgreementsLabel(c.agreements) ?? contractLabel(type, agreement?.agreement_year ?? (c.signed_at ? new Date(c.signed_at).getUTCFullYear() : null))
     let symbol = currencySymbolOf(offer)
 
     let amounts: AmountsView | null = null

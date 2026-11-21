@@ -3,10 +3,11 @@ import { redirect, notFound } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, ArrowRight, MessageSquare, Layers, PenSquare } from 'lucide-react'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
+import { hideCredentialLinks } from '@/lib/portal/credential-links'
 import { isPersonalDocumentHiddenFrom } from '@/lib/documents/visibility-guard'
 import { isHiddenByHistoryCutoff } from '@/lib/documents/history-cutoff'
 import { getHistoryCutoff } from '@/lib/portal/history-cutoff'
-import { getTeammateScopeOrNull } from '@/lib/portal/team/gate'
+import { getTeammateScopeOrNull, requirePortalCapability } from '@/lib/portal/team/gate'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { t, getLocale } from '@/lib/portal/i18n'
 import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
@@ -264,9 +265,12 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
     .not('message', 'ilike', '%<!-- chat-event:%')
     .order('created_at', { ascending: true })
     .limit(100)
-  const messages = (msgData ?? []) as Array<{
+  // A team login (no person behind it) sees a neutral line where a link that works without a login sits (lib/portal/credential-links.ts).
+  const isTeamLogin = !contactId && (user.app_metadata as Record<string, unknown> | undefined)?.kind === 'team_member'
+  const allMessages = (msgData ?? []) as Array<{
     id: string; sender_type: string; sender_name: string | null; message: string; created_at: string | null
   }>
+  const messages = isTeamLogin ? hideCredentialLinks(allMessages) : allMessages
 
   // ── Client Decision Requests for this flow ──
   // Newest first; only the most recent pending one is actionable, the rest are
@@ -280,6 +284,8 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
     .limit(50)
   const decisions = (decisionData ?? []) as DecisionRequest[]
   const newestPendingId = decisions.find((d) => d.status === 'pending')?.id ?? null
+  // Owners and members answer. A team login (no contact of its own) answers only when the owner ticked "Can answer client decisions".
+  const canAnswerDecisions = contactId ? true : (await requirePortalCapability(user, 'answer_decisions')).allowed
   const actionableDecisions = decisions.filter((d) => d.id === newestPendingId)
   const historicalDecisions = decisions.filter((d) => d.id !== newestPendingId)
 
@@ -370,7 +376,7 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
       {actionableDecisions.length > 0 && (
         <div className="space-y-3">
           {actionableDecisions.map((d) => (
-            <DecisionCard key={d.id} request={d} locale={locale} actionable />
+            <DecisionCard key={d.id} request={d} locale={locale} actionable={canAnswerDecisions} />
           ))}
         </div>
       )}

@@ -21,6 +21,7 @@
  * Schedule: January 1st via Vercel Cron (see vercel.json)
  */
 
+import { companiesWaitingForFinalReturn } from "@/lib/closure/closing-wait"
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { logCron } from "@/lib/cron-log"
@@ -71,8 +72,10 @@ export async function GET(req: NextRequest) {
 
     const results: Array<{ company: string; action: string; detail: string; offerId?: string }> = []
     const missingAmounts: string[] = []
+    // A company waiting for its final tax return before it closes stays Active but must not get a new yearly agreement (dev job 0a60f416, part C).
+    const waitingToClose = await companiesWaitingForFinalReturn()
 
-    for (const acct of accounts) {
+    for (const acct of accounts.filter((a) => !waitingToClose.has(a.id))) {
       // Guard: must have BOTH installment amounts to generate a meaningful MSA.
       // The MSA legally commits the client to two installments — emitting "$0"
       // when an amount is null (the prior fallback) shipped a contract the
@@ -125,6 +128,7 @@ export async function GET(req: NextRequest) {
       const { data: contactLink } = await supabaseAdmin
         .from("account_contacts")
         .select("contact_id, contacts(id, full_name, email)")
+        .is("access_revoked_at", null) // a person with the no-portal-access mark is not picked as the one we write to (dev job beb43385)
         .eq("account_id", acct.id)
         .limit(1)
         .maybeSingle()

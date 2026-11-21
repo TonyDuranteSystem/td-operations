@@ -37,6 +37,7 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/sync-airtable": "0 */6 * * *",
   "/api/cron/check-wire-payments": "0 */6 * * *",
   "/api/cron/ra-renewal-check": "0 9 * * *",
+  "/api/cron/complete-held-closings": "30 9 * * *",
   "/api/cron/annual-report-check": "0 9 * * *",
   "/api/cron/overdue-payments-report": "0 9 * * *",
   "/api/cron/portal-issues": "0 */1 * * *",
@@ -66,6 +67,8 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   "/api/cron/wa-bridge-watch": "*/5 * * * *",
   // Links WhatsApp chats to their lead/contact by phone number every minute (dev job 907b2535).
   "/api/cron/wa-bridge-link": "*/1 * * * *",
+  // Weekly voice-note self-test (Mondays 14:00 UTC = 9:00 New York): sends a short recording to ONE test chat and asks staff "did it play?" in the WhatsApp page. Does nothing until wa_bridge_state.voice_check_group_id is set (Antonio 2026-11-20).
+  "/api/cron/wa-voice-check": "0 14 * * 1",
   // WhatsApp voice notes: delete audio older than 180 days, keep the transcript (dev job 907b2535, child 06674723).
   "/api/cron/wa-media-retention": "30 6 * * *",
   "/api/cron/invoice-overdue": "0 9 * * *",
@@ -119,6 +122,7 @@ export const SCHEDULED_CRONS: Record<string, string> = {
   // not filed (a last-signer render/store hiccup); excludes by_hand.
   "/api/cron/oa-finalize-sweep": "*/10 * * * *",
   "/api/cron/action-required-reminders": "0 13 * * *",
+  "/api/cron/waiting-for-client-reminders": "0 13 * * *",
   "/api/cron/portal-translation-topup": "0 10 * * *",
 }
 

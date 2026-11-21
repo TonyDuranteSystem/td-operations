@@ -10,51 +10,32 @@
 import { headers } from 'next/headers'
 import { createClient } from '@/lib/supabase/server'
 import { isPartner, getPartnerForUser, hasAnyPartnerScope } from '@/lib/partner-auth'
-import { resolveAuthEmailForUsername } from '@/lib/portal/team/server'
-import {
-  checkLoginRateLimit,
-  recordLoginFailure,
-  clearLoginFailures,
-} from '@/lib/portal/rate-limit'
+import { resolveTeamLoginByUsername } from '@/lib/portal/team/server'
+import { teamLoginAttempt, type TeamLoginDeps } from '@/lib/portal/team/login-flow'
+import { defaultLoginLimiter } from '@/lib/portal/login-limiter-default'
 
 export async function teammateLogin(
   username: string,
   password: string,
 ): Promise<{ ok: boolean; error?: string }> {
-  // Brute-force guard (security audit 2026-06-13, H10): lock out after
-  // LOGIN_MAX_FAILURES failures per IP+username for 15 minutes. Keyed on a
-  // lowercased username so the lockout follows the targeted account, plus the
-  // caller IP so one attacker can't lock everyone out from a single source.
+  // Guessing protection (security audit 2026-06-13 H10; reworked after the 20 Nov 2026 bug hunt): one exact spelling of a username,
+  // every attempt counted BEFORE the slow steps in a counter shared by every server (database, with the per-server counter as fallback), a per-address and a per-login cap. The rules and reasons are in
+  // lib/portal/team/login-guard.ts; the order of the steps is lib/portal/team/login-flow.ts (tested without a database).
   const hdrs = headers()
   const ip = hdrs.get('x-forwarded-for')?.split(',')[0]?.trim()
     || hdrs.get('x-real-ip')
     || 'unknown'
-  const rlKey = `teammate-login:${ip}:${(username || '').toLowerCase().trim()}`
 
-  const rl = checkLoginRateLimit(rlKey)
-  if (!rl.allowed) {
-    return {
-      ok: false,
-      error: `Too many failed attempts. Please try again in about ${Math.ceil((rl.retryAfter ?? 0) / 60)} minutes.`,
-    }
+  const deps: TeamLoginDeps = {
+    limiter: defaultLoginLimiter(),
+    resolve: resolveTeamLoginByUsername,
+    signIn: async (email, pwd) => {
+      const supabase = createClient()
+      const { error } = await supabase.auth.signInWithPassword({ email, password: pwd })
+      return !error
+    },
   }
-
-  const email = await resolveAuthEmailForUsername(username)
-  if (!email) {
-    recordLoginFailure(rlKey)
-    return { ok: false, error: 'Invalid username or password' }
-  }
-
-  const supabase = createClient()
-  const { error } = await supabase.auth.signInWithPassword({ email, password })
-  if (error) {
-    recordLoginFailure(rlKey)
-    return { ok: false, error: 'Invalid username or password' }
-  }
-
-  // Success — reset the counter so a legitimate user isn't penalized later.
-  clearLoginFailures(rlKey)
-  return { ok: true }
+  return teamLoginAttempt(deps, { ip, username, password })
 }
 
 /**

@@ -263,6 +263,15 @@ export async function POST(request: Request) {
       )
     }
 
+    // Deleting the last person who can open a company is refused while others on it carry "no portal access" (QA 21 Nov 2026).
+    {
+      const { companiesLeftWithOnlyMarkedPeople, REMOVAL_LEAVES_ONLY_MARKED_MESSAGE } = await import("@/lib/members/removal-guard")
+      const blockedCompanies = await companiesLeftWithOnlyMarkedPeople(contact_id)
+      if (blockedCompanies.length > 0) {
+        return NextResponse.json({ error: REMOVAL_LEAVES_ONLY_MARKED_MESSAGE, accounts: blockedCompanies }, { status: 409 })
+      }
+    }
+
     // Storage check / Calendar: every company this person was linked to loses them — remember it BEFORE the row goes (never blocks).
     try {
       const { data: links } = await supabaseAdmin.from("account_contacts").select("account_id").eq("contact_id", contact_id)

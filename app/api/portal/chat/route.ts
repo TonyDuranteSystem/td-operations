@@ -1,4 +1,5 @@
 import { waitForPhoneLeg } from '@/lib/app/phone-leg'
+import { PINS_LIMIT } from '@/lib/portal/pins'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
@@ -16,6 +17,8 @@ import { fetchClientUnreadRows, topicKey } from '@/lib/portal/client-chat-unread
 import { accountScopeWithHistory, filterByHistoryCutoff, historyKeepClauses } from '@/lib/documents/history-cutoff'
 import { getHistoryCutoffs, getHistoryView, getOpenedItemIds } from '@/lib/portal/history-cutoff'
 import { resolvePersonalNullInclusion } from '@/lib/portal/chat-scope-server'
+import { callerContactIdAllowed } from '@/lib/portal/chat-contact-param'
+import { hideCredentialLinks } from '@/lib/portal/credential-links'
 import { decideAdminSendScope, isContactLinkedToAccount, resolveAdminReplyContact } from '@/lib/portal/admin-send-scope'
 import { contactThreadOrFilter, multiMemberAccountIds } from '@/lib/portal/thread-scope'
 import { resolveAccountMembersForChat } from '@/lib/portal/addressed-to'
@@ -49,7 +52,10 @@ export async function GET(request: NextRequest) {
   const contactIdParam = searchParams.get('contact_id')
   const scope = searchParams.get('scope') // 'company' | 'personal' (client per-company scoping) | absent (legacy/admin)
   const before = searchParams.get('before')
-  const limit = Math.min(Number(searchParams.get('limit') ?? '50'), 100)
+  // `pinned=1` = the conversation's pinned messages only (the Pinned strip), newest pin first, never deleted ones. It is the SAME query as
+  // a normal page — every scope, history-cutoff and visibility rule below applies unchanged — with a different filter, order and cap.
+  const pinnedOnly = searchParams.get('pinned') === '1'
+  const limit = pinnedOnly ? PINS_LIMIT : Math.min(Number(searchParams.get('limit') ?? '50'), 100)
 
   if (!accountId && !contactIdParam) {
     return NextResponse.json({ error: 'account_id or contact_id required' }, { status: 400 })
@@ -61,6 +67,13 @@ export async function GET(request: NextRequest) {
   const isClientUser = user.app_metadata?.role === 'client'
   const authContactId = getClientContactId(user)
   let clientAccountIds: string[] = []
+
+  // A contact id named in the request must be the caller's OWN (a team login names none). Without this, a client — or a team login with
+  // the Chat tick — that named its own company plus ANOTHER person's contact id got that person's whole history: every company and the
+  // private thread. The rule is shared with the send below and the sibling routes (lib/portal/chat-contact-param.ts).
+  if (!callerContactIdAllowed({ isClientUser, authContactId, callerContactId: contactIdParam })) {
+    return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+  }
 
   if (isClientUser && !authContactId) {
     // Teammate (Portal Team Access): may ONLY read their own account's thread,
@@ -116,8 +129,6 @@ export async function GET(request: NextRequest) {
   let query = supabaseAdmin
     .from('portal_messages')
     .select('*, contacts:contact_id(full_name), addressed_to_contact:addressed_to_contact_id(full_name)')
-    .order('created_at', { ascending: false })
-    .limit(limit)
 
   // Client users (contacts AND teammates) never see soft-deleted messages.
   // Admins see them so they can render tombstones.
@@ -189,8 +200,13 @@ export async function GET(request: NextRequest) {
     query = query.eq('account_id', accountId)
   }
 
-  if (before) {
-    query = query.lt('created_at', before)
+  if (pinnedOnly) {
+    // A deleted message keeps its pin mark (the delete route sets only deleted_at), so deleted rows are excluded here — for staff too:
+    // a pins list must never carry a deleted body.
+    query = query.not('pinned_at', 'is', null).is('deleted_at', null).order('pinned_at', { ascending: false }).limit(limit)
+  } else {
+    query = query.order('created_at', { ascending: false }).limit(limit)
+    if (before) query = query.lt('created_at', before)
   }
 
   const { data: rawData, error } = await query
@@ -262,7 +278,7 @@ export async function GET(request: NextRequest) {
   // (and appears at all), so it can be opened and cleared. Same rule as the
   // sidebar total (lib/portal/client-chat-unread). First page only.
   let unreadByTopic: Record<string, number> | undefined
-  if (isClientUser && authContactId && scopedPlan && !before) {
+  if (isClientUser && authContactId && scopedPlan && !before && !pinnedOnly) {
     try {
       const planAccount = scopedPlan.mode === 'personal_only' ? [] : [scopedPlan.accountId]
       const rows = await fetchClientUnreadRows(authContactId, planAccount)
@@ -277,7 +293,10 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  return NextResponse.json({ messages, ...(unreadByTopic ? { unreadByTopic } : {}) })
+  // A team login (a client login with no person) must not read a link that works without a login — a member-info / contact-request form,
+  // an operating-agreement, SS-4, lease or offer page: with the link it could do through the public page what its locked powers forbid
+  // (sign, change the owners). It sees a neutral line instead (lib/portal/credential-links.ts). Owners, members and staff see the link.
+  return NextResponse.json({ messages: isClientUser && !authContactId ? hideCredentialLinks(messages) : messages, ...(unreadByTopic ? { unreadByTopic } : {}) })
 }
 
 export async function POST(request: NextRequest) {
@@ -392,6 +411,11 @@ export async function POST(request: NextRequest) {
     resolvedContactId = null
     teammateSenderName = access.displayName || null
   } else {
+    // A client may send only under their OWN contact id. Before this, naming another person's id (plus the client's own company) stored
+    // the message as that person's — the same hole as the read above (lib/portal/chat-contact-param.ts). Staff may answer as any contact.
+    if (!callerContactIdAllowed({ isClientUser, authContactId, callerContactId: bodyContactId })) {
+      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+    }
     resolvedContactId = bodyContactId || authContactId
     if (!resolvedContactId && account_id && !isClientUser) {
       // Admin send with only account_id → tag the member actually being
@@ -743,7 +767,7 @@ async function pushNotifyAdmin(accountId: string | null, contactId: string | nul
   await sendPushToStaff({
     title: `Chat: ${displayName}`,
     body: messagePreview.slice(0, 200) || '[Attachment]',
-    url: `/portal-chats${accountId ? `?account=${accountId}` : ''}`,
+    url: `/portal-chats${accountId ? `?account=${accountId}` : contactId ? `?contact=${contactId}` : ''}`,
     tag: `admin-chat-${accountId || contactId || 'unknown'}`,
     alertKind: 'client_chat',
     phoneName: displayName,

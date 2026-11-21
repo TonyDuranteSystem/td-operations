@@ -5698,6 +5698,7 @@ export type Database = {
       }
       contracts: {
         Row: {
+          agreements: Json | null
           annual_fee: string | null
           client_address: string | null
           client_city: string | null
@@ -5727,6 +5728,7 @@ export type Database = {
           wire_receipt_path: string | null
         }
         Insert: {
+          agreements?: Json | null
           annual_fee?: string | null
           client_address?: string | null
           client_city?: string | null
@@ -5756,6 +5758,7 @@ export type Database = {
           wire_receipt_path?: string | null
         }
         Update: {
+          agreements?: Json | null
           annual_fee?: string | null
           client_address?: string | null
           client_city?: string | null
@@ -12431,6 +12434,7 @@ export type Database = {
           is_active: boolean
           last_message_at: string | null
           lead_id: string | null
+          members: Json | null
           pinned: boolean
           unread_count: number
           updated_at: string
@@ -12447,6 +12451,7 @@ export type Database = {
           is_active?: boolean
           last_message_at?: string | null
           lead_id?: string | null
+          members?: Json | null
           pinned?: boolean
           unread_count?: number
           updated_at?: string
@@ -12463,6 +12468,7 @@ export type Database = {
           is_active?: boolean
           last_message_at?: string | null
           lead_id?: string | null
+          members?: Json | null
           pinned?: boolean
           unread_count?: number
           updated_at?: string
@@ -15199,6 +15205,82 @@ export type Database = {
           },
         ]
       }
+      portal_chat_waiting_threads: {
+        Row: {
+          account_id: string | null
+          contact_id: string | null
+          id: string
+          kind: string
+          last_reminder_at: string | null
+          marked_at: string
+          marked_by: string | null
+          reminders_sent: number
+        }
+        Insert: {
+          account_id?: string | null
+          contact_id?: string | null
+          id?: string
+          kind?: string
+          last_reminder_at?: string | null
+          marked_at?: string
+          marked_by?: string | null
+          reminders_sent?: number
+        }
+        Update: {
+          account_id?: string | null
+          contact_id?: string | null
+          id?: string
+          kind?: string
+          last_reminder_at?: string | null
+          marked_at?: string
+          marked_by?: string | null
+          reminders_sent?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "portal_chat_waiting_threads_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portal_chat_waiting_threads_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_account_detail"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portal_chat_waiting_threads_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["account_id"]
+          },
+          {
+            foreignKeyName: "portal_chat_waiting_threads_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_sla_monitor"
+            referencedColumns: ["account_id"]
+          },
+          {
+            foreignKeyName: "portal_chat_waiting_threads_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portal_chat_waiting_threads_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["contact_id"]
+          },
+        ]
+      }
       portal_document_views: {
         Row: {
           contact_id: string
@@ -15365,6 +15447,96 @@ export type Database = {
             referencedColumns: ["contact_id"]
           },
         ]
+      }
+      portal_login_attempts: {
+        Row: {
+          failures: number
+          first_at: string
+          key: string
+          locked_until: string | null
+          updated_at: string
+        }
+        Insert: {
+          failures?: number
+          first_at?: string
+          key: string
+          locked_until?: string | null
+          updated_at?: string
+        }
+        Update: {
+          failures?: number
+          first_at?: string
+          key?: string
+          locked_until?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      portal_login_email_changes: {
+        Row: {
+          auth_user_id: string
+          code_attempts: number
+          code_expires_at: string | null
+          code_hash: string | null
+          code_sends: number
+          code_sent_at: string | null
+          confirmed_at: string | null
+          contact_id: string
+          created_at: string
+          id: string
+          locked_until: string | null
+          new_email: string
+          old_email: string
+          requested_by: string
+          status: string
+          undo_expires_at: string | null
+          undo_token_hash: string | null
+          undone_at: string | null
+          updated_at: string
+        }
+        Insert: {
+          auth_user_id: string
+          code_attempts?: number
+          code_expires_at?: string | null
+          code_hash?: string | null
+          code_sends?: number
+          code_sent_at?: string | null
+          confirmed_at?: string | null
+          contact_id: string
+          created_at?: string
+          id?: string
+          locked_until?: string | null
+          new_email: string
+          old_email: string
+          requested_by?: string
+          status?: string
+          undo_expires_at?: string | null
+          undo_token_hash?: string | null
+          undone_at?: string | null
+          updated_at?: string
+        }
+        Update: {
+          auth_user_id?: string
+          code_attempts?: number
+          code_expires_at?: string | null
+          code_hash?: string | null
+          code_sends?: number
+          code_sent_at?: string | null
+          confirmed_at?: string | null
+          contact_id?: string
+          created_at?: string
+          id?: string
+          locked_until?: string | null
+          new_email?: string
+          old_email?: string
+          requested_by?: string
+          status?: string
+          undo_expires_at?: string | null
+          undo_token_hash?: string | null
+          undone_at?: string | null
+          updated_at?: string
+        }
+        Relationships: []
       }
       portal_messages: {
         Row: {
@@ -15625,6 +15797,72 @@ export type Database = {
           },
         ]
       }
+      portal_team_document_shares: {
+        Row: {
+          account_id: string
+          created_at: string
+          granted_ip: string | null
+          notice_version: string | null
+          owner_contact_id: string
+          team_member_id: string
+        }
+        Insert: {
+          account_id: string
+          created_at?: string
+          granted_ip?: string | null
+          notice_version?: string | null
+          owner_contact_id: string
+          team_member_id: string
+        }
+        Update: {
+          account_id?: string
+          created_at?: string
+          granted_ip?: string | null
+          notice_version?: string | null
+          owner_contact_id?: string
+          team_member_id?: string
+        }
+        Relationships: []
+      }
+      portal_team_events: {
+        Row: {
+          account_id: string
+          actor_contact_id: string | null
+          actor_kind: string
+          actor_staff_email: string | null
+          created_at: string
+          detail: Json
+          event: string
+          id: string
+          ip: string | null
+          team_member_id: string
+        }
+        Insert: {
+          account_id: string
+          actor_contact_id?: string | null
+          actor_kind: string
+          actor_staff_email?: string | null
+          created_at?: string
+          detail?: Json
+          event: string
+          id?: string
+          ip?: string | null
+          team_member_id: string
+        }
+        Update: {
+          account_id?: string
+          actor_contact_id?: string | null
+          actor_kind?: string
+          actor_staff_email?: string | null
+          created_at?: string
+          detail?: Json
+          event?: string
+          id?: string
+          ip?: string | null
+          team_member_id?: string
+        }
+        Relationships: []
+      }
       portal_team_members: {
         Row: {
           account_id: string
@@ -15637,7 +15875,13 @@ export type Database = {
           display_name: string
           email: string | null
           id: string
+          notice_accepted_at: string | null
+          notice_accepted_ip: string | null
+          notice_version: string | null
           status: string
+          switched_off_at: string | null
+          switched_off_by: string | null
+          switched_off_reason: string | null
           updated_at: string
           username: string
         }
@@ -15652,7 +15896,13 @@ export type Database = {
           display_name: string
           email?: string | null
           id?: string
+          notice_accepted_at?: string | null
+          notice_accepted_ip?: string | null
+          notice_version?: string | null
           status?: string
+          switched_off_at?: string | null
+          switched_off_by?: string | null
+          switched_off_reason?: string | null
           updated_at?: string
           username: string
         }
@@ -15667,7 +15917,13 @@ export type Database = {
           display_name?: string
           email?: string | null
           id?: string
+          notice_accepted_at?: string | null
+          notice_accepted_ip?: string | null
+          notice_version?: string | null
           status?: string
+          switched_off_at?: string | null
+          switched_off_by?: string | null
+          switched_off_reason?: string | null
           updated_at?: string
           username?: string
         }
@@ -21642,7 +21898,11 @@ export type Database = {
           send_min_gap_seconds: number
           send_mode: string
           send_same_body_per_hour: number
+          update_status: Json | null
+          update_status_at: string | null
           updated_at: string
+          voice_check: Json | null
+          voice_check_group_id: string | null
         }
         Insert: {
           alerted_state?: string | null
@@ -21683,7 +21943,11 @@ export type Database = {
           send_min_gap_seconds?: number
           send_mode?: string
           send_same_body_per_hour?: number
+          update_status?: Json | null
+          update_status_at?: string | null
           updated_at?: string
+          voice_check?: Json | null
+          voice_check_group_id?: string | null
         }
         Update: {
           alerted_state?: string | null
@@ -21724,7 +21988,11 @@ export type Database = {
           send_min_gap_seconds?: number
           send_mode?: string
           send_same_body_per_hour?: number
+          update_status?: Json | null
+          update_status_at?: string | null
           updated_at?: string
+          voice_check?: Json | null
+          voice_check_group_id?: string | null
         }
         Relationships: [
           {
@@ -23652,6 +23920,29 @@ export type Database = {
         }
         Returns: Json
       }
+      portal_login_clear: { Args: { p_key: string }; Returns: undefined }
+      portal_login_email_take_attempt: {
+        Args: { p_id: string; p_lock_ms: number; p_max: number; p_user: string }
+        Returns: {
+          code_attempts: number
+          code_expires_at: string
+          code_hash: string
+          contact_id: string
+          locked_until: string
+          new_email: string
+          old_email: string
+          status: string
+          taken: boolean
+        }[]
+      }
+      portal_login_release: { Args: { p_key: string }; Returns: undefined }
+      portal_login_reserve: {
+        Args: { p_key: string; p_max: number; p_window_seconds?: number }
+        Returns: {
+          allowed: boolean
+          retry_after_seconds: number
+        }[]
+      }
       release_company_suite_if_free: {
         Args: { p_account: string; p_actor?: string; p_reason?: string }
         Returns: string
@@ -24373,6 +24664,10 @@ export type Database = {
       viewas_restore_last_sign_in: {
         Args: { p_ts: string; p_user_id: string }
         Returns: undefined
+      }
+      wabridge_apply_groups: {
+        Args: { p_channel_id: string; p_groups: Json }
+        Returns: number
       }
       wabridge_apply_names: {
         Args: { p_channel_id: string; p_names: Json }

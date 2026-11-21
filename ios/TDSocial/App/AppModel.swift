@@ -69,6 +69,7 @@ final class AppModel: ObservableObject {
         if let open = API.takeDevOpen(), me.tabs.contains(where: { $0.id == open.tab }) { selectedTab = open.tab; host(for: open.tab).load(open.path) }   // simulator tests only
         #endif
         if let b = me.badge { UNUserNotificationCenter.current().setBadgeCount(b) { _ in } }
+        Task { await clearReadAlerts(me) }
         Task { await refreshAlertState() }
     }
 
@@ -127,11 +128,31 @@ final class AppModel: ObservableObject {
         await check()
     }
 
+    /// Alerts on the lock screen whose tab has nothing unread any more (read here, or on the computer) are removed. Only a count the server really gave as 0 counts.
+    private func clearReadAlerts(_ me: AppMe) async {
+        let center = UNUserNotificationCenter.current()
+        let delivered = await center.deliveredNotifications().map {
+            ReadAlerts.Delivered(id: $0.request.identifier, url: $0.request.content.userInfo["url"] as? String, thread: $0.request.content.threadIdentifier)
+        }
+        let ids = ReadAlerts.idsToClear(delivered: delivered, me: me)
+        if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
+    }
+
+    /// The person tapped an alert: the other alerts of the same conversation are read too, so they leave the lock screen.
+    func clearSameThread(as thread: String?) async {
+        let center = UNUserNotificationCenter.current()
+        let delivered = await center.deliveredNotifications().map {
+            ReadAlerts.Delivered(id: $0.request.identifier, url: $0.request.content.userInfo["url"] as? String, thread: $0.request.content.threadIdentifier)
+        }
+        let ids = ReadAlerts.idsOfSameThread(as: thread, delivered: delivered)
+        if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
+    }
+
     /// The person tapped an alert: open the tab it belongs to (and the exact page when the alert carried a safe link)
     func openFromAlert(url: String?, thread: String?) {
         guard let tab = AlertRouting.tab(url: url, thread: thread), me?.tabs.contains(where: { $0.id == tab }) == true else { return }
         selectedTab = tab
-        if let path = AlertRouting.safeRelativePath(url) { host(for: tab).load(path) }
+        if let path = AlertRouting.pagePath(url: url) { host(for: tab).load(path) }
     }
 
     // MARK: alerts permission and the phone registration

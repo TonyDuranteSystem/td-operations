@@ -39,6 +39,7 @@ import { CHANGE_NAME_STAGES } from "@/lib/flows/change-name-stages"
 import { trackingStepsCrossed, trackingMissingMessage } from "@/lib/flows/tracking-gate"
 import { trackingNumberMissing } from "@/lib/operations/tracking-number-check"
 import { POINTER_WORKFLOW_SLUG_BY_SERVICE, mergeSdStageIntoTaskMeta } from "@/lib/tasks/sd-stage-sync"
+import { TAX_RETURN_SERVICES } from "@/lib/closure/wrapup-facts"
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -824,6 +825,13 @@ export async function advanceServiceDelivery(
     }
   }
 
+  // A stage notice about a company never names a person whose link to it carries the "no portal access" mark (the company is hidden from
+  // their portal): it goes to the company's open members instead, so it is redirected, not lost (Bug Hunter, QA 21 Nov 2026, dev job beb43385).
+  const stageContactId: string | null =
+    delivery.contact_id && delivery.account_id && (await (await import("@/lib/members/marked-on-company")).isMarkedOnCompany(delivery.account_id, delivery.contact_id))
+      ? null
+      : (delivery.contact_id ?? null)
+
   // 8. Portal notification for client. Accept either account-scoped SDs or
   // contact-only SDs (Phase 1 ITIN rule, 2026-05-11) so ITIN advances notify
   // the client too. Suppressed when skip_notify (bulk reconcile/backfill).
@@ -848,10 +856,10 @@ export async function advanceServiceDelivery(
       // would email have a device" — for a company-only case that is the company's one email address, NOT "any device of the company"
       // (lib/portal/push-presence.ts). It never throws: any failure means "no app", and the bell + email go out as before.
       const { stageNoticeRecipientHasApp } = await import("@/lib/portal/push-presence")
-      const hasApp = await stageNoticeRecipientHasApp({ contactId: delivery.contact_id ?? null, accountId: delivery.account_id ?? null })
+      const hasApp = await stageNoticeRecipientHasApp({ contactId: stageContactId, accountId: delivery.account_id ?? null })
       await createPortalNotification({
         account_id: delivery.account_id ?? undefined,
-        contact_id: delivery.contact_id ?? undefined,
+        contact_id: stageContactId ?? undefined,
         type: "service",
         title,
         body,
@@ -916,7 +924,7 @@ export async function advanceServiceDelivery(
       const { notifyClientOfStageAdvance } = await import("@/lib/portal/notifications")
       const result = await notifyClientOfStageAdvance({
         account_id: delivery.account_id ?? undefined,
-        contact_id: delivery.contact_id ?? undefined,
+        contact_id: stageContactId ?? undefined,
         service_name: delivery.service_name || delivery.service_type,
         stage_name: usesClientStageWording(delivery.service_type)
           ? (await clientStageLabelFor(targetStage, delivery.contact_id ?? null)).label
@@ -1535,6 +1543,13 @@ export async function advanceServiceDelivery(
   ) {
     if (skip_company_close) {
       autoTriggers.push("Company left open — the job was finished without closing it")
+      // A company that was waiting for its final tax return no longer waits: this explicit choice must not be undone later by that return being filed.
+      try {
+        const { endClosingWait } = await import("@/lib/operations/close-company")
+        if (await endClosingWait(delivery_id, "the job was finished without closing the company")) autoTriggers.push("The company is no longer waiting for its tax return — it stays open")
+      } catch (e) {
+        autoTriggers.push(`Closure problem: the company's waiting note could not be ended (${e instanceof Error ? e.message : String(e)})`)
+      }
     } else {
       const { applyCompanyClosure } = await import("@/lib/operations/close-company")
       const closure = await applyCompanyClosure({
@@ -1554,6 +1569,19 @@ export async function advanceServiceDelivery(
           /* a note must never fail the move */
         }
       }
+    }
+  }
+
+  // 14b. A Tax Return reaching its last step ("TR Filed") completes a company closing that was HELD for it (dev job 0a60f416, part C). Does nothing unless the
+  //      company's closure job left the "CLOSING WAITS" marker; the company then closes and its portal goes off. Never fails the move.
+  if (TAX_RETURN_SERVICES.includes(delivery.service_type) && isCompleted && delivery.account_id) {
+    try {
+      const { completePendingCompanyClosure } = await import("@/lib/operations/close-company")
+      const done = await completePendingCompanyClosure({ accountId: delivery.account_id })
+      autoTriggers.push(...done.lines)
+      for (const problem of done.problems) autoTriggers.push(`Closure problem: ${problem}`)
+    } catch (e) {
+      autoTriggers.push(`Closure problem: ${e instanceof Error ? e.message : String(e)}`)
     }
   }
 

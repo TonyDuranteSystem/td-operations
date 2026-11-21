@@ -12,7 +12,7 @@ describe("splitReactions", () => {
   it("groups staff marks by emoji and keeps the phone's two sides apart", () => {
     const v = splitReactions([staff("👍"), staff("👍", "u2", "Antonio"), phone("client", "❤️"), phone("line", "🙏")])
     expect(v.staff).toEqual([{ emoji: "👍", count: 2, names: ["Luca", "Antonio"], mine: false }])
-    expect(v.phone).toEqual([{ emoji: "❤️", side: "client" }, { emoji: "🙏", side: "line" }])
+    expect(v.phone).toEqual([{ emoji: "❤️", side: "client", key: "client", name: null, member: false }, { emoji: "🙏", side: "line", key: "line", name: null, member: false }])
   })
 
   it("never draws a removal tombstone (empty emoji)", () => {
@@ -32,7 +32,23 @@ describe("splitReactions", () => {
 
   it("skips junk rows and a duplicated side", () => {
     const v = splitReactions([null, 7, { emoji: 5 }, phone("client", "❤️"), phone("client", "😂")])
-    expect(v.phone).toEqual([{ emoji: "❤️", side: "client" }])
+    expect(v.phone).toEqual([{ emoji: "❤️", side: "client", key: "client", name: null, member: false }])
     expect(v.staff).toEqual([])
   })
 })
+
+describe("splitReactions — a WhatsApp group", () => {
+  const member = (id: string, emoji: string, name: string | null) => ({ emoji, reactor_type: "client", reactor_id: `wa-client:${id}`, reactor_name: name })
+  it("draws one pill per member (not one per side), with the member's name, and still one for the business phone", () => {
+    const v = splitReactions([member("111111", "👍", "Mario Rossi"), member("222222", "👍", null), { emoji: "🙏", reactor_type: "line", reactor_id: "wa-line", reactor_name: null }])
+    expect(v.phone).toEqual([
+      { emoji: "👍", side: "client", key: "wa-client:111111", name: "Mario Rossi", member: true },
+      { emoji: "👍", side: "client", key: "wa-client:222222", name: null, member: true },
+      { emoji: "🙏", side: "line", key: "line", name: null, member: false },
+    ])
+  })
+  it("a repeated row for the same member is drawn once", () => {
+    expect(splitReactions([member("111111", "👍", "A"), member("111111", "❤️", "A")]).phone.length).toBe(1)
+  })
+})
+

@@ -74,6 +74,7 @@ function makeChain(data: unknown, count?: number) {
   const chain: Record<string, unknown> = {
     select: vi.fn(() => chain),
     eq: vi.fn(() => chain),
+    is: vi.fn(() => chain), // the no-portal-access filter (dev job beb43385)
     single: vi.fn().mockResolvedValue(result),
     then: (resolve: (v: typeof result) => unknown) => resolve(result),
   }
@@ -87,8 +88,26 @@ function makePushChain(counts: { contact?: number; account?: number }) {
   const chain: Record<string, unknown> = {
     select: vi.fn(() => chain),
     eq: vi.fn((c: string) => { col = c; return chain }),
-    then: (resolve: (v: { data: null; error: null; count: number }) => unknown) =>
-      resolve({ data: null, error: null, count: col === 'contact_id' ? (counts.contact ?? 0) : (counts.account ?? 0) }),
+    then: (resolve: (v: { data: Array<{ user_id: string | null }>; error: null; count: number }) => unknown) => {
+      const count = col === 'contact_id' ? (counts.contact ?? 0) : (counts.account ?? 0)
+      // the rows too (recipientHasPush reads who each company-level device belongs to): legacy devices, stamped with no sign-in id
+      return resolve({ data: Array.from({ length: count }, () => ({ user_id: null })), error: null, count })
+    },
+  }
+  return chain
+}
+
+// A push_subscriptions chain over REAL device rows: each .eq() narrows the rows, so a contact-level check and a company-level check see
+// different devices (a team login's device is stamped with the company and no person).
+function makeDeviceChain(devices: Array<{ contact_id?: string | null; account_id?: string | null; user_id?: string | null }>) {
+  const filters: Record<string, string> = {}
+  const chain: Record<string, unknown> = {
+    select: vi.fn(() => chain),
+    eq: vi.fn((c: string, v: string) => { filters[c] = v; return chain }),
+    then: (resolve: (v: { data: unknown[]; error: null; count: number }) => unknown) => {
+      const rows = devices.filter((d) => Object.entries(filters).every(([k, v]) => (d as Record<string, string | null | undefined>)[k] === v))
+      return resolve({ data: rows, error: null, count: rows.length })
+    },
   }
   return chain
 }
@@ -96,14 +115,15 @@ function makePushChain(counts: { contact?: number; account?: number }) {
 // Dispatch the mocked supabaseAdmin.from(table) to per-table data.
 // pushSubs simulates the push_subscriptions count check (0 = no push → email sent).
 // pushSubsByCol distinguishes contact-level vs account-level subscription counts.
-function mockDb(opts: { contact?: unknown; accountContacts?: unknown[]; teammates?: unknown[]; pushSubs?: number; pushSubsByCol?: { contact?: number; account?: number } }) {
+function mockDb(opts: { contact?: unknown; accountContacts?: unknown[]; teammates?: unknown[]; pushSubs?: number; pushDevices?: Array<{ contact_id?: string | null; account_id?: string | null; user_id?: string | null }>; pushSubsByCol?: { contact?: number; account?: number } }) {
   vi.mocked(supabaseAdmin.from).mockImplementation(((table: string) => {
     if (table === 'contacts') return makeChain(opts.contact ?? null)
     if (table === 'account_contacts') return makeChain(opts.accountContacts ?? [])
     if (table === 'portal_team_members') return makeChain(opts.teammates ?? [])
     if (table === 'push_subscriptions') {
       if (opts.pushSubsByCol) return makePushChain(opts.pushSubsByCol)
-      return makeChain(null, opts.pushSubs ?? 0)
+      if (opts.pushDevices) return makeDeviceChain(opts.pushDevices)
+      return makeChain(Array.from({ length: opts.pushSubs ?? 0 }, () => ({ user_id: null })), opts.pushSubs ?? 0)
     }
     return makeChain(null)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -449,15 +469,47 @@ describe('notifyClientOfAdminMessage', () => {
     expect(gmailPost).not.toHaveBeenCalled()
   })
 
-  it('skips the email via the account-level push check when the recipient has no contact id (teammate)', async () => {
+  it('skips the email via the account-level push check when the recipient has no contact id (teammate) and the device is theirs', async () => {
     mockDb({
       accountContacts: [],
-      teammates: [{ email: 'teammate@example.com', display_name: 'Mate', capabilities: { chat: true }, status: 'active' }],
-      pushSubs: 1,
+      teammates: [{ email: 'teammate@example.com', display_name: 'Mate', capabilities: { chat: true }, status: 'active', auth_user_id: 'login-1' }],
+      pushDevices: [{ account_id: 'account-team-pwa', contact_id: null, user_id: 'login-1' }],
     })
 
     await notifyClientOfAdminMessage({ account_id: 'account-team-pwa', messagePreview: 'New message' })
 
     expect(gmailPost).not.toHaveBeenCalled()
+  })
+
+  it('a team login with alerts on does NOT silence the owner\'s email (team-login device bug, dev job e59dd470)', async () => {
+    mockDb({
+      accountContacts: [
+        { contacts: { id: 'c-solo', email: 'solo@example.com', full_name: 'Solo Owner', language: 'en' } },
+      ],
+      // the login has no real email of its own, so the owner is the ONE person emailed
+      teammates: [{ email: null, display_name: 'Mate', capabilities: { chat: true }, status: 'active', auth_user_id: 'login-1' }],
+      pushDevices: [{ account_id: 'account-solo-with-login-alerts', contact_id: null, user_id: 'login-1' }],
+    })
+
+    await notifyClientOfAdminMessage({ account_id: 'account-solo-with-login-alerts', messagePreview: 'New message' })
+
+    const tos = vi.mocked(gmailPost).mock.calls.map(c => extractMimeTo((c[1] as { raw: string }).raw))
+    expect(tos).toEqual(['solo@example.com'])
+  })
+
+  it('a team login\'s alerts do not silence ANOTHER team login who is the one person emailed', async () => {
+    mockDb({
+      accountContacts: [],
+      teammates: [
+        { email: 'mate@example.com', display_name: 'Mate', capabilities: { chat: true }, status: 'active', auth_user_id: 'login-1' },
+        { email: null, display_name: 'Other', capabilities: { chat: true }, status: 'active', auth_user_id: 'login-2' },
+      ],
+      pushDevices: [{ account_id: 'account-two-logins', contact_id: null, user_id: 'login-2' }],
+    })
+
+    await notifyClientOfAdminMessage({ account_id: 'account-two-logins', messagePreview: 'New message' })
+
+    const tos = vi.mocked(gmailPost).mock.calls.map(c => extractMimeTo((c[1] as { raw: string }).raw))
+    expect(tos).toEqual(['mate@example.com'])
   })
 })

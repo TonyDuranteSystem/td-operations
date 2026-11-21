@@ -3,11 +3,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // Mock supabaseAdmin: account_contacts.select('account_id, contact_id').in('account_id', [...])
 // resolves to a configurable rows array.
 let rows: { account_id: string; contact_id: string }[] = []
+const isCalls: unknown[][] = []
 vi.mock('@/lib/supabase-admin', () => ({
   supabaseAdmin: {
     from: () => ({
       select: () => ({
-        in: async () => ({ data: rows }),
+        // the no-portal-access filter (dev job beb43385) comes before .in(...)
+        is: (...args: unknown[]) => {
+          isCalls.push(args)
+          return { in: async () => ({ data: rows }) }
+        },
       }),
     }),
   },
@@ -105,6 +110,14 @@ describe('multiMemberAccountIds', () => {
       { account_id: 'a2', contact_id: 'c3' },
     ]
     expect(await multiMemberAccountIds(['a1', 'a2'])).toEqual(['a1'])
+  })
+
+  it('asks only for links without the no-portal-access mark (a member who cannot open the company is not a sharer)', async () => {
+    isCalls.length = 0
+    rows = []
+    await multiMemberAccountIds(['a1'])
+    await linkedContactIdsByAccount(['a1'])
+    expect(isCalls).toEqual([['access_revoked_at', null], ['access_revoked_at', null]])
   })
 })
 

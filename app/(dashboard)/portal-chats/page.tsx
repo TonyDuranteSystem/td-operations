@@ -5,9 +5,10 @@ import { useSearchParams } from 'next/navigation'
 import { useSelectionHistory } from '@/lib/hooks/use-selection-history'
 import Link from 'next/link'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, Pencil, FileSignature, Landmark, Calculator, Home, XCircle, MessageCircle, ChevronDown, Pin, Mail, StickyNote, Link2, Languages, Lightbulb, FolderInput } from 'lucide-react'
+import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, Pencil, FileSignature, Landmark, Calculator, Home, XCircle, MessageCircle, ChevronDown, Pin, Mail, StickyNote, Link2, Languages, Lightbulb, FolderInput, HandHelping } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { cn } from '@/lib/utils'
+import { SwipeRow } from '@/components/portal-chats/swipe-row'
 import { useVoiceInput } from '@/lib/hooks/use-voice-input'
 import { useAudioNoteRecorder } from '@/lib/hooks/use-audio-note-recorder'
 import { clock } from '@/lib/talk/chat-model'
@@ -23,10 +24,12 @@ import { ThreadEmailPanel } from '@/components/portal-chats/thread-email-panel'
 import { ThreadWorkerPanel } from '@/components/portal-chats/thread-worker-panel'
 import { ContactLanguageField } from '@/components/portal-chats/contact-language-field'
 import { DEFAULT_LIST_FILTER, LIST_FILTER_CHIPS, matchesListFilter, orderThreadsForChip, type ListFilter } from '@/lib/portal-chats/list-filter'
+import { daysWaiting } from '@/lib/portal-chats/waiting'
 import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { VoiceNote } from '@/components/team-chat/voice-note'
 import { chatPreviewText, isVoiceAttachment } from '@/lib/portal/chat-voice'
 import { isChatEventMessage } from '@/lib/portal/chat-scope'
+import { mergePins, pinSetChanged, PIN_JUMP_MAX_PAGES } from '@/lib/portal/pins'
 import { applyLandingToUrl, parseStaffChatTab, parseStaffChatTopic, pickUnreadTopicToOpen } from '@/lib/portal/staff-chat-landing'
 import { subscribeToDashboardPush } from '@/lib/push/dashboard-push'
 import { NewCardDialog } from '@/components/dashboard/action-board-new-card-dialog'
@@ -123,6 +126,10 @@ interface ChatThread {
   is_pinned?: boolean
   /** A client or a team member wrote here (not only automatic notices) — the "Chats" chip. undefined = unknown. */
   has_people_messages?: boolean
+  /** Marked "waiting for client" by staff and the client has not written since (ISO of the mark). null = not waiting. */
+  waiting_since?: string | null
+  /** Marked "waiting on us" (the client waits for the team) and the team has not written since (ISO). null = not. */
+  waiting_us_since?: string | null
   /** Active service deliveries for this account — sourced live from service_deliveries, fully dynamic */
   active_services: { service_type: string; stage: string | null }[]
   /** Overdue invoices owed to TD — account-level thread's account, or contact-direct invoices. */
@@ -311,10 +318,30 @@ export default function PortalChatsPage() {
   // To-Do cards created from a message (the ⋯ → "To Do" action). Once messages for
   // the scoped thread load, we switch to the message's topic, scroll to it, and
   // flash a highlight ring. See message-actions route + action-board card href.
-  const [targetMessageId] = useState<string | null>(urlParams.get('message'))
+  const [targetMessageId, setTargetMessageId] = useState<string | null>(urlParams.get('message'))
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null)
   const didScrollToTargetRef = useRef(false)
   const deepLinkPagesRef = useRef(0) // bounded back-paging when the target is older than the live window
+  // A click on a pinned message (or a quoted reply) drives the SAME jump as a ?message= link: load older pages until the message is
+  // there (up to PIN_JUMP_MAX_PAGES), switch to its topic, scroll to it, highlight it. `jumpNonce` lets the same message be clicked again.
+  // Only a click-driven jump hands the scroll position back afterwards (a link keeps owning it for the page view, as before).
+  const [jumpNonce, setJumpNonce] = useState(0)
+  const jumpFromClickRef = useRef(false)
+  const jumpMaxPagesRef = useRef(10)
+  const targetMessageIdRef = useRef<string | null>(targetMessageId)
+  targetMessageIdRef.current = targetMessageId
+  const requestJump = useCallback((id: string) => {
+    didScrollToTargetRef.current = false
+    deepLinkPagesRef.current = 0
+    jumpFromClickRef.current = true
+    jumpMaxPagesRef.current = PIN_JUMP_MAX_PAGES
+    setTargetMessageId(id)
+    setJumpNonce(n => n + 1)
+  }, [])
+  // Leaving the conversation ends a click-driven jump (a ?message= link keeps its old behaviour).
+  useEffect(() => {
+    if (jumpFromClickRef.current) { jumpFromClickRef.current = false; setTargetMessageId(null) }
+  }, [selectedAccountId, selectedContactId])
   // Unified thread state: which company the admin is sending as, and all companies for badge lookup.
   // selectedCompanyId is the EXPLICIT send target only — null by default on person
   // threads (2026-08-07 leak fix, dev job 4bad3094: the old auto-selected first
@@ -455,6 +482,8 @@ export default function PortalChatsPage() {
   const [selectedMsgIds, setSelectedMsgIds] = useState<Set<string>>(new Set())
   // Chat-list filter chip: All / Unread / What's New / Chats / Pinned (lib/portal-chats/list-filter.ts). Opens on Chats.
   const [listFilter, setListFilter] = useState<ListFilter>(DEFAULT_LIST_FILTER)
+  // The conversation row currently swiped open on a phone ('<threadKey>|left' or '|right'); only one at a time.
+  const [openSwipeKey, setOpenSwipeKey] = useState<string | null>(null)
   // "Open card" from a What's New note → opens the same dashboard card editor, preset to this client.
   const [cardPreset, setCardPreset] = useState<{
     accountId?: string | null
@@ -465,8 +494,9 @@ export default function PortalChatsPage() {
     noteId?: string // the What's New note this card was opened from (marked handled on save)
   } | null>(null)
   // Internal team chat
-  const [sidebarView, setSidebarView] = useState<'chats' | 'internal' | 'actions'>('chats')
-  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null)
+  // `?view=internal&thread=<id>` opens one internal team thread straight away (a phone alert, a copied link): its own query loads it by id.
+  const [sidebarView, setSidebarView] = useState<'chats' | 'internal' | 'actions'>(urlParams.get('view') === 'internal' && urlParams.get('thread') ? 'internal' : 'chats')
+  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(urlParams.get('view') === 'internal' ? urlParams.get('thread') : null)
   // Make picking a chat a real Back step. Without this, switching chats changes
   // nothing the browser knows about, so the header Back arrow skips the whole
   // page and lands on the dashboard (Antonio, 2026-07-26). Restoring only sets
@@ -950,11 +980,36 @@ export default function PortalChatsPage() {
       .catch(() => toast.error('Could not copy the link on this device.'))
   }, [threadDeepLink])
 
+  // Swipe tools on the open conversation's header (phone): same four tools as the list rows. Pin/Read state comes from the list entry of this thread.
+  const openThreadRow = threads?.find(t => selectedAccountId ? t.account_id === selectedAccountId : t.contact_id === selectedContactId)
+  const openThreadSwipe = {
+    left: (selectedAccountId || selectedContactId) ? [
+      ...((openThreadRow?.unread_count ?? 0) > 0
+        ? [{ key: 'read', label: 'Read', icon: <MailCheck className="h-4 w-4" />, className: 'bg-blue-600', onPress: () => { void markAsRead({ account_id: selectedAccountId, contact_id: selectedContactId }) } }]
+        : [{ key: 'unread', label: 'Unread', icon: <MailOpen className="h-4 w-4" />, className: 'bg-blue-600', onPress: () => { void markAsUnread({ account_id: selectedAccountId, contact_id: selectedContactId }) } }]),
+      { key: 'pin', label: openThreadRow?.is_pinned ? 'Unpin' : 'Pin', icon: <Pin className="h-4 w-4" />, className: 'bg-amber-500', onPress: () => pinThreadMutation.mutate({ account_id: selectedAccountId, contact_id: selectedContactId, pinned: !openThreadRow?.is_pinned }) },
+    ] : [],
+    right: (selectedAccountId || selectedContactId) ? [
+      { key: 'note', label: 'Note', icon: <StickyNote className="h-4 w-4" />, className: 'bg-yellow-500', onPress: () => setNoteSeed({ accountId: selectedAccountId, contactId: selectedAccountId ? null : selectedContactId, prefill: '', originUrl: threadDeepLink() ?? undefined }) },
+      { key: 'link', label: 'Copy link', icon: <Link2 className="h-4 w-4" />, className: 'bg-zinc-600', onPress: () => copyDeepLink() },
+    ] : [],
+  }
+
   const { data: messages, isLoading: messagesLoading } = useQuery<ChatMessage[]>({
     queryKey: ['portal-chat-messages', selectedAccountId || selectedContactId],
     queryFn: () => fetch(`/api/portal/chat?${chatQueryParam}&limit=50`).then(r => r.json()).then(d => d.messages),
     enabled: !!(selectedAccountId || selectedContactId),
     refetchInterval: 30_000, // fallback reconciliation; realtime subscription below is primary
+  })
+
+  // The conversation's pinned messages, read from the server on their own so a pin older than the loaded messages still shows in the
+  // Pinned strip (Antonio, 2026-11-17). Refreshed when anyone pins/unpins (below) and every minute as a fallback.
+  const pinsScopeKey = selectedAccountId || selectedContactId
+  const { data: serverPins } = useQuery<ChatMessage[]>({
+    queryKey: ['portal-chat-pins', pinsScopeKey],
+    queryFn: () => fetch(`/api/portal/chat?${chatQueryParam}&pinned=1`).then(r => r.json()).then(d => (Array.isArray(d.messages) ? d.messages : [])),
+    enabled: !!(selectedAccountId || selectedContactId),
+    refetchInterval: 60_000,
   })
 
   // Older-message pagination (manual accumulation; the API supports
@@ -1085,12 +1140,13 @@ export default function PortalChatsPage() {
       // Not in what's loaded. Copyable links get clicked WEEKS later, so dig
       // backward through history (bounded) instead of silently giving up —
       // the old behaviour opened the chat with no jump and no explanation.
-      if (hasMoreOlder && deepLinkPagesRef.current < 10) {
+      if (hasMoreOlder && deepLinkPagesRef.current < jumpMaxPagesRef.current) {
         if (!loadingOlder) { deepLinkPagesRef.current += 1; void loadOlderMessages() }
         return // effect re-runs as older pages land in combinedMessages
       }
       didScrollToTargetRef.current = true
       toast.error("Couldn't find that message — it may be much older or deleted.")
+      if (jumpFromClickRef.current) { jumpFromClickRef.current = false; setTargetMessageId(null) }
       return
     }
     setAdminActiveTopic(target.topic ?? null)
@@ -1133,7 +1189,11 @@ export default function PortalChatsPage() {
           if (check && onScreen) {
             didScrollToTargetRef.current = true
             setHighlightedMessageId(targetMessageId)
-            setTimeout(() => setHighlightedMessageId(null), 2800)
+            setTimeout(() => {
+              setHighlightedMessageId(null)
+              // a click-driven jump is finished: give the scroll position back (new messages follow the bottom again)
+              if (jumpFromClickRef.current) { jumpFromClickRef.current = false; setTargetMessageId(null) }
+            }, 2800)
             return
           }
           attempts += 1
@@ -1146,7 +1206,7 @@ export default function PortalChatsPage() {
     }
     let timer = setTimeout(tryScroll, 120) // let the topic switch re-render the list first
     return () => clearTimeout(timer)
-  }, [targetMessageId, combinedMessages, hasMoreOlder, loadingOlder, loadOlderMessages])
+  }, [targetMessageId, jumpNonce, combinedMessages, hasMoreOlder, loadingOlder, loadOlderMessages])
 
   // Unread count per topic tab (client + plain-system messages not yet read
   // by admin). Chat-event notices (wizard submitted, document uploaded,
@@ -1241,6 +1301,10 @@ export default function PortalChatsPage() {
         ['portal-chat-messages', threadId],
         (prev) => prev ? prev.map(m => m.id === updated.id ? { ...m, ...updated } : m) : prev
       )
+      // someone pinned / unpinned / deleted a pinned message (maybe an old one that is not on screen): refresh the Pinned strip's list
+      if (pinSetChanged(queryClient.getQueryData<ChatMessage[]>(['portal-chat-pins', threadId]), updated)) {
+        queryClient.invalidateQueries({ queryKey: ['portal-chat-pins', threadId] })
+      }
     }
 
     let channel = supabase
@@ -1275,6 +1339,9 @@ export default function PortalChatsPage() {
   // so the sidebar sees new last-message previews and unread badges immediately.
   useEffect(() => {
     const supabase = createSupabaseBrowserClient()
+    // A client message READ in another window (or by a colleague) is an UPDATE: the list's dots must follow within a second or two, not at the
+    // next 60 s refresh (Antonio, 2026-11-17: a page left open kept the red dot of a message already read). Coalesced: a burst is one reload.
+    let readDebounce: ReturnType<typeof setTimeout> | null = null
     const channel = supabase
       .channel('admin-portal-chat-thread-list')
       .on(
@@ -1288,8 +1355,22 @@ export default function PortalChatsPage() {
           queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
         }
       )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'portal_messages',
+          filter: 'sender_type=eq.client',
+        },
+        () => {
+          if (readDebounce) clearTimeout(readDebounce)
+          readDebounce = setTimeout(() => { queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] }) }, 1000)
+        }
+      )
       .subscribe()
     return () => {
+      if (readDebounce) clearTimeout(readDebounce)
       supabase.removeChannel(channel)
     }
   }, [queryClient])
@@ -1567,6 +1648,7 @@ export default function PortalChatsPage() {
     },
     onSuccess: (_d, vars) => {
       queryClient.invalidateQueries({ queryKey: ['portal-chat-messages', selectedAccountId || selectedContactId] })
+      queryClient.invalidateQueries({ queryKey: ['portal-chat-pins', selectedAccountId || selectedContactId] })
       toast.success(vars.pinned ? 'Message pinned' : 'Message unpinned')
     },
     onError: (err) => {
@@ -1595,10 +1677,41 @@ export default function PortalChatsPage() {
     },
   })
 
+  // Mark / clear "waiting for client" or "waiting on us" on a conversation (staff, shared; the first ends by itself when the client
+  // writes, the second when the team writes). One mark per conversation: a new mark replaces the old one.
+  const waitingThreadMutation = useMutation({
+    mutationFn: async ({ account_id, contact_id, waiting, kind }: { account_id: string | null; contact_id: string | null; waiting: boolean; kind?: 'client' | 'us' }) => {
+      const res = await fetch('/api/portal/chat/waiting-thread', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_id, contact_id, waiting, kind: kind ?? 'client' }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        throw new Error(d.error || 'Could not update "Waiting for client" — please try again.')
+      }
+      return res.json()
+    },
+    onSuccess: (d, vars) => {
+      // Show the new mark at once (the list refetch below takes a few seconds): one mark per conversation, so the other kind is cleared.
+      const since: string | null = vars.waiting ? (d?.waiting_since ?? new Date().toISOString()) : null
+      queryClient.setQueryData<ChatThread[]>(['portal-chat-threads'], old => old?.map(t =>
+        (vars.account_id ? t.account_id === vars.account_id : t.contact_id === vars.contact_id)
+          ? { ...t, waiting_since: vars.kind === 'us' ? null : since, waiting_us_since: vars.kind === 'us' ? since : null }
+          : t))
+      queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
+      toast.success(!vars.waiting ? 'Waiting mark cleared' : vars.kind === 'us' ? 'Marked: waiting on us' : 'Marked: waiting for client')
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error && err.message ? err.message : 'Failed to update "Waiting for client"')
+    },
+  })
+
   // Scroll a message into view + flash-highlight it (used by the Pinned strip).
   const scrollToMessage = (messageId: string) => {
     const el = document.getElementById(`pc-msg-${messageId}`)
-    if (!el) return
+    // Not on screen (older than what is loaded, or in another topic): load older pages / switch topic until it is, then scroll to it.
+    if (!el) { requestJump(messageId); return }
     el.scrollIntoView({ behavior: 'smooth', block: 'center' })
     setHighlightedMessageId(messageId)
     window.setTimeout(() => setHighlightedMessageId(null), 2800)
@@ -1990,7 +2103,7 @@ export default function PortalChatsPage() {
     // from live component state — see the capture comment in handleSend for
     // why (an attachment upload is a real await; live state can point at a
     // different client/company/topic by the time this actually runs).
-    mutationFn: async ({ message, reply_to_id, attachments, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToMemberId, targetAddressedToCompany }: { message: string; reply_to_id?: string; attachments?: { url: string; name: string }[]; targetAccountId: string | null; targetContactId: string | null; targetCompanyId: string | null; targetTopic: string | null; targetAddressedToMemberId: string | null; targetAddressedToCompany: boolean }) => {
+    mutationFn: async ({ message, reply_to_id, attachments, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToMemberId, targetAddressedToCompany }: { message: string; reply_to_id?: string; attachments?: { url: string; name: string }[]; targetAccountId: string | null; targetContactId: string | null; targetCompanyId: string | null; targetTopic: string | null; targetAddressedToMemberId: string | null; targetAddressedToCompany: boolean}) => {
       const res = await fetch('/api/portal/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2157,7 +2270,7 @@ export default function PortalChatsPage() {
     // the right product behaviour regardless of the bug: someone who followed
     // a link to one historical message is reading history, not asking to be
     // snapped to "latest" the moment any background refetch lands.
-    if (targetMessageId) return
+    if (targetMessageIdRef.current) return
     if (isThreadSwitch) {
       // Two frames + a short fallback so late layout (images, tabs) can't strand
       // the view above the last message.
@@ -2167,7 +2280,7 @@ export default function PortalChatsPage() {
       return () => clearTimeout(t)
     }
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
-  }, [messages, selectedAccountId, selectedContactId, targetMessageId])
+  }, [messages, selectedAccountId, selectedContactId])
 
   // Auto-grow textareas
   useEffect(() => {
@@ -2754,6 +2867,29 @@ export default function PortalChatsPage() {
                 : selectedContactId === thread.contact_id
               return (
               <FastTooltip key={threadKey} label={thread.contact_name ? `${thread.company_name} — ${thread.contact_name}` : thread.company_name} className="w-full">
+                <SwipeRow
+                  rowKey={threadKey}
+                  openKey={openSwipeKey}
+                  onOpenChange={setOpenSwipeKey}
+                  leftActions={[
+                    ...((thread.account_id || thread.contact_id) ? [thread.unread_count > 0
+                      ? { key: 'read', label: 'Read', icon: <MailCheck className="h-4 w-4" />, className: 'bg-blue-600', onPress: () => { void markAsRead(thread) } }
+                      : { key: 'unread', label: 'Unread', icon: <MailOpen className="h-4 w-4" />, className: 'bg-blue-600', onPress: () => { void markAsUnread(thread) } }] : []),
+                    { key: 'pin', label: thread.is_pinned ? 'Unpin' : 'Pin', icon: <Pin className="h-4 w-4" />, className: 'bg-amber-500', onPress: () => pinThreadMutation.mutate({ account_id: thread.account_id, contact_id: thread.contact_id, pinned: !thread.is_pinned }) },
+                  ]}
+                  rightActions={(() => {
+                    // Same scope the thread opens with: a multi-member company by account, every other thread by contact.
+                    const byAccount = !!thread.account_id && (thread.members ?? []).length > 0
+                    const rel = byAccount ? `/portal-chats?account=${thread.account_id}` : thread.contact_id ? `/portal-chats?contact=${thread.contact_id}` : null
+                    return [
+                      { key: 'note', label: 'Note', icon: <StickyNote className="h-4 w-4" />, className: 'bg-yellow-500', onPress: () => setNoteSeed({ accountId: byAccount ? thread.account_id : null, contactId: byAccount ? null : thread.contact_id, prefill: '', originUrl: rel ?? undefined }) },
+                      { key: 'link', label: 'Copy link', icon: <Link2 className="h-4 w-4" />, className: 'bg-zinc-600', onPress: () => {
+                        if (!rel) return
+                        navigator.clipboard.writeText(`${window.location.origin}${rel}`).then(() => toast.success('Link copied.')).catch(() => toast.error('Could not copy the link on this device.'))
+                      } },
+                    ]
+                  })()}
+                >
                 <button
                   onClick={() => {
                     const members = thread.members ?? []
@@ -2837,6 +2973,38 @@ export default function PortalChatsPage() {
                       </div>
                     </div>
                     <div className="flex items-center gap-1.5 ml-2 shrink-0">
+                      {/* Waiting marks (staff, shared): amber hourglass + days = waiting for the client; rose hand + days = waiting on us.
+                          Shown only while a mark is on; the marks themselves are set under each message. Click clears. */}
+                      {thread.waiting_since && (
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={e => {
+                            e.stopPropagation()
+                            waitingThreadMutation.mutate({ account_id: thread.account_id, contact_id: thread.contact_id, waiting: false })
+                          }}
+                          title={`Waiting for client — ${daysWaiting(thread.waiting_since, new Date())} day(s). Click to clear`}
+                          className="shrink-0 rounded p-0.5 cursor-pointer hover:bg-zinc-200 inline-flex items-center gap-0.5 text-amber-600"
+                        >
+                          <Hourglass className="h-3.5 w-3.5" />
+                          <span className="text-[10px] font-medium">{daysWaiting(thread.waiting_since, new Date())}d</span>
+                        </span>
+                      )}
+                      {thread.waiting_us_since && (
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={e => {
+                            e.stopPropagation()
+                            waitingThreadMutation.mutate({ account_id: thread.account_id, contact_id: thread.contact_id, waiting: false })
+                          }}
+                          title={`Waiting on us — ${daysWaiting(thread.waiting_us_since, new Date())} day(s). Click to clear`}
+                          className="shrink-0 rounded p-0.5 cursor-pointer hover:bg-zinc-200 inline-flex items-center gap-0.5 text-rose-600"
+                        >
+                          <HandHelping className="h-3.5 w-3.5" />
+                          <span className="text-[10px] font-medium">{daysWaiting(thread.waiting_us_since, new Date())}d</span>
+                        </span>
+                      )}
                       {/* Pin conversation (staff, shared) — pinned threads sort above everything */}
                       <span
                         role="button"
@@ -2940,6 +3108,7 @@ export default function PortalChatsPage() {
                     {thread.last_message_at ? format(parseISO(thread.last_message_at), 'MMM d, h:mm a') : ''}
                   </p>
                 </button>
+                </SwipeRow>
               </FastTooltip>
               )
             })
@@ -3403,6 +3572,14 @@ export default function PortalChatsPage() {
               const companies = selectedThreadCompanies.length > 0 ? selectedThreadCompanies : (currentThread?.companies ?? [])
               const subtitle = companies.length > 0 ? companies.map(c => (c.closed ? `${c.name} (closed)` : c.name)).join(' · ') : 'Portal chat'
               return (
+                <SwipeRow
+                  rowKey="open-header"
+                  className="shrink-0"
+                  openKey={openSwipeKey}
+                  onOpenChange={setOpenSwipeKey}
+                  leftActions={openThreadSwipe.left}
+                  rightActions={openThreadSwipe.right}
+                >
                 <PhoneConvNav
                   title={displayName}
                   titleHref={selectedContactId ? `/contacts/${selectedContactId}` : selectedAccountId ? `/accounts/${selectedAccountId}` : undefined}
@@ -3412,8 +3589,17 @@ export default function PortalChatsPage() {
                   onBack={leaveConversation}
                   onMore={() => setAppSheet('more')}
                 />
+                </SwipeRow>
               )
             })()}
+            <SwipeRow
+              rowKey="open-header"
+              className="app-hide shrink-0"
+              openKey={openSwipeKey}
+              onOpenChange={setOpenSwipeKey}
+              leftActions={openThreadSwipe.left}
+              rightActions={openThreadSwipe.right}
+            >
             <div className="app-conv-header app-hide px-4 py-3 border-b bg-white shrink-0">
               <button
                 onClick={leaveConversation}
@@ -3524,6 +3710,7 @@ export default function PortalChatsPage() {
                 )
               })()}
             </div>
+            </SwipeRow>
 
             {/* Sub-tabs: Messages | Tasks (shown when a client thread is selected) */}
             {(selectedAccountId || selectedContactId) && (
@@ -3919,9 +4106,9 @@ export default function PortalChatsPage() {
             ) : (
             <>
 
-            {/* Pinned messages strip — shared with the client; click to jump. No limit. */}
+            {/* Pinned messages strip — shared with the client; click to jump (loads older messages if needed). Pins come from the server, not just what is loaded. */}
             {(() => {
-              const pinned = combinedMessages.filter(m => m.pinned_at && !m.deleted_at)
+              const pinned = mergePins(serverPins, messages ?? [], combinedMessages)
               if (pinned.length === 0) return null
               return (
                 <div className="shrink-0 border-b border-amber-100 bg-amber-50/70 px-3 py-1.5">
@@ -4524,7 +4711,7 @@ export default function PortalChatsPage() {
                       </div>
                       {!isAdmin && !selectMode && actionButton}
                       </div>
-                      <div className={cn('px-1', isAdmin ? 'self-end' : 'self-start')}>
+                      <div className={cn('px-1 flex items-center gap-1', isAdmin ? 'self-end flex-row-reverse' : 'self-start')}>
                         <MessageReactions
                           messageId={msg.id}
                           reactions={msg.reactions}
@@ -4532,6 +4719,39 @@ export default function PortalChatsPage() {
                           align={isAdmin ? 'right' : 'left'}
                           staffLabel="Team"
                         />
+                        {/* Waiting marks (staff, shared) — on ANY message, any time; they mark the whole conversation. One mark per conversation. */}
+                        {(selectedAccountId || selectedContactId) && !selectMode && (() => {
+                          const waitingClient = !!openThreadRow?.waiting_since
+                          const waitingUs = !!openThreadRow?.waiting_us_since
+                          const setMark = (kind: 'client' | 'us', on: boolean) =>
+                            waitingThreadMutation.mutate({ account_id: selectedAccountId, contact_id: selectedAccountId ? null : selectedContactId, waiting: on, kind })
+                          return (
+                            <span className="inline-flex items-center gap-0.5">
+                              <FastTooltip label={waitingClient ? `Waiting for client — ${daysWaiting(openThreadRow!.waiting_since as string, new Date())} day(s). Click to clear` : 'Waiting for client: mark this conversation'}>
+                                <button
+                                  type="button"
+                                  aria-label="Waiting for client"
+                                  aria-pressed={waitingClient}
+                                  onClick={() => setMark('client', !waitingClient)}
+                                  className={cn('inline-flex items-center justify-center rounded-full p-1 transition-colors', waitingClient ? 'text-amber-600 bg-amber-100 hover:bg-amber-200' : 'text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100')}
+                                >
+                                  <Hourglass className="h-3.5 w-3.5" />
+                                </button>
+                              </FastTooltip>
+                              <FastTooltip label={waitingUs ? `Waiting on us — ${daysWaiting(openThreadRow!.waiting_us_since as string, new Date())} day(s). Click to clear` : 'Waiting on us: the client is waiting for our answer'}>
+                                <button
+                                  type="button"
+                                  aria-label="Waiting on us"
+                                  aria-pressed={waitingUs}
+                                  onClick={() => setMark('us', !waitingUs)}
+                                  className={cn('inline-flex items-center justify-center rounded-full p-1 transition-colors', waitingUs ? 'text-rose-600 bg-rose-100 hover:bg-rose-200' : 'text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100')}
+                                >
+                                  <HandHelping className="h-3.5 w-3.5" />
+                                </button>
+                              </FastTooltip>
+                            </span>
+                          )
+                        })()}
                       </div>
                     </div>
                   )

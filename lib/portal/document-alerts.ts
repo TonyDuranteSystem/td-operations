@@ -188,6 +188,7 @@ export async function resolveDocLocale(accountId: string | null, contactId: stri
   }
   if (accountId) {
     const { data: links } = await supabaseAdmin
+      // portal-access-ok: only picks a language for the alert text
       .from('account_contacts')
       .select('role, contacts(language)')
       .eq('account_id', accountId)

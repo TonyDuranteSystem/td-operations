@@ -188,6 +188,7 @@ export type Ss4SetSignerOutcome =
   | "no_ss4"
   | "locked"
   | "not_linked"
+  | "signer_no_portal_access"
   | "no_contact"
   | "unchanged"
   | "switched"
@@ -240,9 +241,10 @@ export async function setSs4Signer(args: {
     // The chosen contact MUST be linked to this account. The picker is populated
     // from these same links, so a mismatch means a stale page or a hand-made
     // request — never stamp an unrelated person on a federal filing.
+    // portal-access-ok: asks about one named link (and reads its mark)
     const { data: link, error: linkReadErr } = await supabaseAdmin
       .from("account_contacts")
-      .select("contact_id")
+      .select("contact_id, access_revoked_at")
       .eq("account_id", account_id)
       .eq("contact_id", contact_id)
       .maybeSingle()
@@ -254,6 +256,15 @@ export async function setSs4Signer(args: {
         ok: false,
         outcome: "not_linked",
         message: "That person is not linked to this company. Refresh the page and try again.",
+      }
+    }
+    // The signer signs IN THE PORTAL: a person whose link carries the "no portal access" mark cannot open the company there
+    // (QA 21 Nov 2026, dev job beb43385).
+    if (link.access_revoked_at) {
+      return {
+        ok: false,
+        outcome: "signer_no_portal_access",
+        message: "That person has no portal access to this company, so they cannot sign the SS-4 there. Give them portal access first, or choose someone else.",
       }
     }
 

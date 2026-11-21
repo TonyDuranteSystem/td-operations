@@ -1,15 +1,19 @@
 "use client"
 
 /**
- * "Start a new company" — the button in the Contact page's Wizard card and its pop-up (dev job bf9886a3).
+ * The "Start a new company" pop-up (dev job bf9886a3) — opened from the "State refused the company name" panel of the formation
+ * workspace (components/flows/start-new-company-panel.tsx), always about THAT job.
  *
  * For a company the state refused the NAME of after the company already exists: the pop-up shows which company is being
  * replaced, every consequence in plain words, and the message the client will get (in the client's language, editable).
  * Pressing the blue button is the staff member's approval of that message. The work is done by
  * app/api/crm/admin-actions/start-new-company (lib/operations/start-new-company.ts).
+ *
+ * This pop-up does not refresh the page after a press (the old job becomes cancelled and the panel would go with the result). The
+ * dashboard may still refresh it on its own; then the cancelled job's page shows a "Replaced by" card with the link to the new job.
  */
 import { useEffect, useState } from "react"
-import { useRouter } from "next/navigation"
+import Link from "next/link"
 import { toast } from "sonner"
 import { AlertTriangle, CheckCircle2, Loader2, X } from "lucide-react"
 import { isItalian } from "@/lib/locale"
@@ -17,28 +21,27 @@ import type { ReplaceCandidate, StartNewCompanyPreview, StartNewCompanyResult } 
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 
-export function StartNewCompanyButton({ contactId, contactName }: { contactId: string; contactName: string }) {
-  const [open, setOpen] = useState(false)
-  return (
-    <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-colors"
-      >
-        Start a new company
-      </button>
-      <StartNewCompanyDialog open={open} onClose={() => setOpen(false)} contactId={contactId} contactName={contactName} />
-    </>
-  )
-}
-
-function StartNewCompanyDialog({ open, onClose, contactId, contactName }: { open: boolean; onClose: () => void; contactId: string; contactName: string }) {
-  const router = useRouter()
+export function StartNewCompanyDialog({
+  open,
+  onClose,
+  onDone,
+  contactId,
+  contactName,
+  deliveryId,
+}: {
+  open: boolean
+  onClose: () => void
+  /** Called with the answer of a press that went through (finished or not), so the panel can show its result. */
+  onDone?: (result: StartNewCompanyResult) => void
+  contactId: string
+  contactName: string
+  /** The formation job being replaced: the one whose workspace this was opened from. */
+  deliveryId: string
+}) {
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [preview, setPreview] = useState<StartNewCompanyPreview | null>(null)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [candidate, setCandidate] = useState<ReplaceCandidate | null>(null)
   const [message, setMessage] = useState("")
   const [busy, setBusy] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
@@ -50,9 +53,9 @@ function StartNewCompanyDialog({ open, onClose, contactId, contactName }: { open
     setFormError(null)
     setLoadError(null)
     setPreview(null)
-    setSelectedId(null)
+    setCandidate(null)
     setLoading(true)
-    fetch(`/api/crm/admin-actions/start-new-company?contact_id=${encodeURIComponent(contactId)}`)
+    fetch(`/api/crm/admin-actions/start-new-company?contact_id=${encodeURIComponent(contactId)}&delivery_id=${encodeURIComponent(deliveryId)}`)
       .then(async (res) => {
         const data = await res.json().catch(() => ({}))
         if (!res.ok) throw new Error(data.error || "Could not read this company. Please try again.")
@@ -60,27 +63,19 @@ function StartNewCompanyDialog({ open, onClose, contactId, contactName }: { open
       })
       .then((data) => {
         setPreview(data)
-        if (data.candidates.length === 1) {
-          setSelectedId(data.candidates[0].deliveryId)
-          setMessage(data.candidates[0].draftMessage)
-        }
+        const c = data.candidates.find((x) => x.deliveryId === deliveryId) ?? null
+        setCandidate(c)
+        if (c) setMessage(c.draftMessage)
       })
       .catch((e) => setLoadError(e instanceof Error ? e.message : "Could not read this company. Please try again."))
       .finally(() => setLoading(false))
-  }, [open, contactId])
+  }, [open, contactId, deliveryId])
 
   if (!open) return null
 
-  const candidate: ReplaceCandidate | null = preview?.candidates.find((c) => c.deliveryId === selectedId) ?? null
   const firstName = (preview?.contact?.firstName ?? contactName).split(" ")[0]
   const language = isItalian(preview?.contact?.language) ? "Italian" : "English"
   const canSubmit = !!candidate && candidate.blockers.length === 0 && message.trim().length > 0 && !busy
-
-  const pick = (c: ReplaceCandidate) => {
-    setSelectedId(c.deliveryId)
-    setMessage(c.draftMessage)
-    setFormError(null)
-  }
 
   const submit = async () => {
     if (!candidate) return
@@ -93,14 +88,14 @@ function StartNewCompanyDialog({ open, onClose, contactId, contactName }: { open
         body: JSON.stringify({ contact_id: contactId, replace_delivery_id: candidate.deliveryId, message }),
       })
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data.error || "Something went wrong. Check the contact page before pressing again.")
+      if (!res.ok) throw new Error(data.error || "Something went wrong. Check this page before pressing again.")
       const done = data as StartNewCompanyResult
       setResult(done)
+      onDone?.(done)
       if (done.finished) toast.success("New company started")
       else toast.warning("Started, but not finished — press the button again")
-      router.refresh()
     } catch (e) {
-      setFormError(e instanceof Error ? e.message : "Something went wrong. Check the contact page before pressing again.")
+      setFormError(e instanceof Error ? e.message : "Something went wrong. Check this page before pressing again.")
     } finally {
       setBusy(false)
     }
@@ -133,48 +128,32 @@ function StartNewCompanyDialog({ open, onClose, contactId, contactName }: { open
 
             {loadError && <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-red-700">{loadError}</div>}
 
-            {preview && !loading && preview.candidates.length === 0 && (
+            {preview && !loading && !candidate && !result && (
               <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-amber-900">
-                This person has no company with an active formation to replace. If the state refused a name before the company was created, use the name check on the formation job instead.
+                This formation can no longer be replaced from here: it is not open any more, it has no company, or it belongs to another person. Refresh the page and look again. If the state refused a name before the company was created, use the name check on the formation job instead.
               </div>
             )}
 
             {result ? (
               <ResultView result={result} />
             ) : (
-              preview &&
-              preview.candidates.length > 0 && (
+              candidate && (
                 <>
                   <div>
-                    <div className="text-xs font-semibold text-zinc-500 mb-1.5">Which company is being replaced?</div>
-                    <div className="space-y-2">
-                      {preview.candidates.map((c) => {
-                        const on = c.deliveryId === selectedId
-                        return (
-                          <button
-                            type="button"
-                            key={c.deliveryId}
-                            onClick={() => pick(c)}
-                            className={`w-full text-left flex gap-3 items-start rounded-lg border-2 px-3 py-2.5 ${on ? "border-blue-600 bg-blue-50" : "border-zinc-200 hover:border-zinc-300"}`}
-                          >
-                            <span className={`mt-1 h-4 w-4 rounded-full shrink-0 border-[5px] ${on ? "border-blue-600 bg-white" : "border-zinc-300 bg-white"}`} />
-                            <span>
-                              <span className="font-semibold">{c.companyName}</span>
-                              {c.state ? ` · ${c.state}` : ""} · formation step &ldquo;{c.stage ?? "unknown"}&rdquo;
-                              {c.blockers.length > 0 && (
-                                <span className="mt-1.5 flex gap-1.5 items-start text-red-700">
-                                  <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-                                  <span>{c.blockers.join(" ")}</span>
-                                </span>
-                              )}
-                            </span>
-                          </button>
-                        )
-                      })}
+                    <div className="text-xs font-semibold text-zinc-500 mb-1.5">Company being replaced</div>
+                    <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2.5">
+                      <span className="font-semibold">{candidate.companyName}</span>
+                      {candidate.state ? ` · ${candidate.state}` : ""} · formation step &ldquo;{candidate.stage ?? "unknown"}&rdquo;
+                      {candidate.blockers.length > 0 && (
+                        <span className="mt-1.5 flex gap-1.5 items-start text-red-700">
+                          <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                          <span>{candidate.blockers.join(" ")}</span>
+                        </span>
+                      )}
                     </div>
                   </div>
 
-                  {candidate && candidate.blockers.length === 0 && (
+                  {candidate.blockers.length === 0 && (
                     <>
                       <div className="border border-zinc-200 rounded-lg bg-zinc-50 px-4 py-3">
                         <div className="font-semibold mb-2">When you press the button</div>
@@ -217,9 +196,20 @@ function StartNewCompanyDialog({ open, onClose, contactId, contactName }: { open
 
           <div className="flex justify-end gap-2 px-6 py-4 border-t shrink-0">
             {result ? (
-              <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700">
-                Close
-              </button>
+              <>
+                {result.finished && result.newDeliveryId && (
+                  <Link
+                    href={`/flows/${result.newDeliveryId}`}
+                    className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700"
+                    data-testid="start-new-company-open-new-job"
+                  >
+                    Open the new formation job →
+                  </Link>
+                )}
+                <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg border border-zinc-300 text-sm font-semibold hover:bg-zinc-50">
+                  Close
+                </button>
+              </>
             ) : (
               <>
                 <button type="button" onClick={onClose} disabled={busy} className="px-4 py-2 rounded-lg border border-zinc-300 text-sm font-semibold hover:bg-zinc-50 disabled:opacity-50">
@@ -258,7 +248,7 @@ function ResultView({ result }: { result: StartNewCompanyResult }) {
             Not finished yet.
           </div>
           <div className="mt-1">
-            The old company is still open and the client has not been told, unless a line below says the message was sent. Close this window and press &ldquo;Start a new company&rdquo; again: what is already done is not repeated.
+            The old company is still open and the client has not been told, unless a line below says the message was sent. Close this window and press &ldquo;State refused the name&rdquo; again: what is already done is not repeated.
           </div>
         </div>
       )}

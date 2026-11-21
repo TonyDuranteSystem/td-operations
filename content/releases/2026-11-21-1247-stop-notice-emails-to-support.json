@@ -1,0 +1,10 @@
+{
+  "title": "Behind the scenes: five notice emails to the support inbox have stopped",
+  "tag": "behind-the-scenes",
+  "text": "The support inbox no longer gets the daily RA renewal report, \"Lease Signed\", \"OA Signed\" / \"OA Partial Sign\", \"Document Signed\" and the \"Onboarding Auto-Chain\" summary. Nothing they announced is lost: the To-Do cards, tasks and What's New notes are unchanged, and the onboarding review task now lists any step that failed. A client who finishes onboarding gets the bell, the phone push and the welcome chat, but no \"new update\" email. Emails that carry a signed file to print (SS-4, Form 8832) or need a person (signed on paper, declined, formation re-submit) are kept.",
+  "points": [
+    "RA renewal, lease, OA, document-signed and onboarding summary emails are gone",
+    "The onboarding review task now names any failed step",
+    "The client's onboarding notice no longer sends a digest email"
+  ]
+}

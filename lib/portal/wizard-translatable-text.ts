@@ -42,6 +42,12 @@ function collectField(field: FieldConfig, out: Record<string, string>): void {
     addIfPresent(out, field.hint)
     addIfPresent(out, field.repeaterAddLabel)
     addIfPresent(out, field.danger?.text)
+    // The login-email box (dev job beb43385): its locked label and the big red must-read block.
+    addIfPresent(out, field.lockedLabel)
+    addIfPresent(out, field.mustRead?.lead)
+    addIfPresent(out, field.mustRead?.text)
+    addIfPresent(out, field.mustRead?.extraLead)
+    addIfPresent(out, field.mustRead?.extraText)
     for (const opt of field.options ?? []) addIfPresent(out, opt.label)
   }
 
@@ -93,6 +99,13 @@ function isWizardStep(value: unknown): value is WizardStep {
  * phrase never gets translated for a language outside en/it.
  */
 const WIZARD_UI_TEXT_EN: string[] = [
+  // wizard-client.tsx — Relay application, "Other Owners & Representatives" step (dev job 2751fb26)
+  'Please confirm the owners and representatives above are correct',
+  'You said the company has no other owners, so there is nothing to add here. If that is not right, go back one step and change your answer.',
+  'Our records list {n} other owner(s) for your company. If that is right, go back and change your answer to Yes so you can check them.',
+  'These are the other owners we have on file for your company. Please read every card, correct anything that is wrong, add any owner that is missing, and confirm at the bottom.',
+  'With no other owners your ownership must be 100%. If there are other owners, change your answer above.',
+  'Your share plus the owners below: {pctSum}% — must equal 100%.',
   // wizard-client.tsx — PrepareCsvStep
   '⚠️ Read this carefully before you start',
   'As part of your tax return, WE prepare your Profit & Loss (P&L) and Balance Sheet for you — the complete financial picture of your company.',
@@ -161,6 +174,12 @@ const WIZARD_UI_TEXT_EN: string[] = [
   "⚠️ Double-check the account number after you type it — if it's wrong, your P&L will be wrong.",
   'This is a multi-currency service or crypto (no single account number)',
   // wizard-field.tsx
+  // The shared must-read block + the locked login email (dev job beb43385)
+  'Read well before proceeding.',
+  'I read it',
+  'To change it, message us in chat.',
+  // wizard-client.tsx — what the step gate and the grey Next button say while the tick is missing
+  'Tick "I read it" to continue.',
   'Pre-filled',
   'Draft an answer with AI',
   'Drafting…',

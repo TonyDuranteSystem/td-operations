@@ -46,7 +46,7 @@ export async function companyRoutesFor(personOwnerIds: string[], mayOpen: (compa
   for (const p of (people ?? []) as { id: string; contact_id: string | null }[]) if (p.contact_id) contactOf.set(p.id, p.contact_id)
   if (contactOf.size === 0) return []
 
-  const { data: links, error: lErr } = await db().from("account_contacts").select("contact_id, account_id").in("contact_id", Array.from(new Set(contactOf.values())))
+  const { data: links, error: lErr } = await db().from("account_contacts").select("contact_id, account_id").is("access_revoked_at", null).in("contact_id", Array.from(new Set(contactOf.values())))
   if (lErr) throw new Error(`Could not read the people (${lErr.message}).`)
   const accountsOfContact = new Map<string, string[]>()
   for (const l of (links ?? []) as { contact_id: string; account_id: string }[]) accountsOfContact.set(l.contact_id, [...(accountsOfContact.get(l.contact_id) ?? []), l.account_id])
