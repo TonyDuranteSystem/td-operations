@@ -15205,6 +15205,79 @@ export type Database = {
           },
         ]
       }
+      portal_chat_waiting_threads: {
+        Row: {
+          account_id: string | null
+          contact_id: string | null
+          id: string
+          last_reminder_at: string | null
+          marked_at: string
+          marked_by: string | null
+          reminders_sent: number
+        }
+        Insert: {
+          account_id?: string | null
+          contact_id?: string | null
+          id?: string
+          last_reminder_at?: string | null
+          marked_at?: string
+          marked_by?: string | null
+          reminders_sent?: number
+        }
+        Update: {
+          account_id?: string | null
+          contact_id?: string | null
+          id?: string
+          last_reminder_at?: string | null
+          marked_at?: string
+          marked_by?: string | null
+          reminders_sent?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "portal_chat_waiting_threads_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portal_chat_waiting_threads_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_account_detail"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portal_chat_waiting_threads_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["account_id"]
+          },
+          {
+            foreignKeyName: "portal_chat_waiting_threads_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "v_sla_monitor"
+            referencedColumns: ["account_id"]
+          },
+          {
+            foreignKeyName: "portal_chat_waiting_threads_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "contacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "portal_chat_waiting_threads_contact_id_fkey"
+            columns: ["contact_id"]
+            isOneToOne: false
+            referencedRelation: "v_client_full"
+            referencedColumns: ["contact_id"]
+          },
+        ]
+      }
       portal_document_views: {
         Row: {
           contact_id: string
