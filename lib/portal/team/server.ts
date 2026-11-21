@@ -15,6 +15,7 @@ import { generatePassword, escapeLikePattern } from '@/lib/portal/team/credentia
 import { canonicalTeamUsername } from '@/lib/portal/team/login-guard'
 import { recordTeamEvent, recordTeamEventBestEffort, powersGrew, type TeamActor } from '@/lib/portal/team/events'
 import { enqueueTeamNotices } from '@/lib/portal/team/notify'
+import { endSharesOfLogin } from '@/lib/portal/team/personal-docs-server'
 import type { Confirmation } from '@/lib/portal/team/confirm'
 import {
   eventWriter,
@@ -305,7 +306,11 @@ export async function revokeTeammate(id: string, accountId: string, actor: TeamA
   // Ban the login so any existing session is cut, not just future resolves. The result must be checked: the auth client reports
   // a failure in its result instead of throwing, and a removed login that is not blocked can still call routes that only check "is a client".
   const { error: banErr } = await supabaseAdmin.auth.admin.updateUserById(row.auth_user_id, { ban_duration: '876000h' })
-  await recordTeamEventBestEffort(sb(), { teamMemberId: id, accountId, event: 'removed', actor, detail: banErr ? { ban_failed: true } : undefined })
+  // The person is gone for good: end any personal-document shares too. The login is already refused, so a failure here leaves only a dormant
+  // row — noted in the record, never a reason to fail the removal.
+  const sharesEndFailed = await endSharesOfLogin(id, accountId, actor, 'removed').then(() => false, () => true)
+  const removedDetail = { ...(banErr ? { ban_failed: true } : {}), ...(sharesEndFailed ? { shares_end_failed: true } : {}) }
+  await recordTeamEventBestEffort(sb(), { teamMemberId: id, accountId, event: 'removed', actor, detail: Object.keys(removedDetail).length ? removedDetail : undefined })
   if (banErr) throw new Error('The person was removed from the company, but their sign-in could not be fully blocked. Please contact support.')
   return { ok: true }
 }
@@ -372,6 +377,7 @@ export function switchDeps(): SwitchDeps {
       const { error } = await supabaseAdmin.auth.admin.updateUserById(authUserId, { ban_duration: banned ? '876000h' : 'none' })
       if (error) throw new Error(error.message)
     },
+    endShares: async (id, accountId, actor, because) => { await endSharesOfLogin(id, accountId, actor, because) },
     record: eventWriter(sb()),
   }
 }

@@ -9,7 +9,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
 import { hasCapability } from '@/lib/portal/team/capabilities'
 import { mayManageTeam } from '@/lib/portal/team/may-manage'
-import { recordTeamEvent, recordTeamEventBestEffort } from '@/lib/portal/team/events'
+import { recordTeamEvent, recordTeamEventBestEffort, type TeamActor } from '@/lib/portal/team/events'
 import type { ShareDeps, ShareMemberRow } from '@/lib/portal/team/personal-docs-share'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -18,11 +18,13 @@ const sb = () => supabaseAdmin as any
 export function shareDeps(): ShareDeps {
   return {
     fetchMember: async (teamMemberId, accountId) => {
-      const { data } = await sb().from('portal_team_members').select('id, display_name, status, capabilities').eq('id', teamMemberId).eq('account_id', accountId).maybeSingle()
+      const { data, error } = await sb().from('portal_team_members').select('id, display_name, status, capabilities').eq('id', teamMemberId).eq('account_id', accountId).maybeSingle()
+      if (error) throw new Error(error.message)
       return (data as ShareMemberRow | null) ?? null
     },
     hasShare: async (teamMemberId, ownerContactId) => {
-      const { data } = await sb().from('portal_team_document_shares').select('team_member_id').eq('team_member_id', teamMemberId).eq('owner_contact_id', ownerContactId).maybeSingle()
+      const { data, error } = await sb().from('portal_team_document_shares').select('team_member_id').eq('team_member_id', teamMemberId).eq('owner_contact_id', ownerContactId).maybeSingle()
+      if (error) throw new Error(error.message)
       return !!data
     },
     addShare: async (row) => {
@@ -36,6 +38,30 @@ export function shareDeps(): ShareDeps {
     recordEvent: (input) => recordTeamEvent(sb(), input),
     recordEventBestEffort: (input) => recordTeamEventBestEffort(sb(), input),
   }
+}
+
+export type ShareEndReason = 'switched_off' | 'switched_on' | 'removed'
+
+/**
+ * ENDS every share of one team login (an owner's personal documents shared with it) — used when the login is switched off, switched back on, or
+ * removed, so a share never outlives the stretch of time the login was continuously active and never comes back by itself.
+ * THROWS when the shares cannot be deleted (the caller decides what that means). Each ended share leaves a "Stopped sharing" line in the team
+ * record (best effort) so staff see it in the history. Returns how many shares were ended.
+ */
+export async function endSharesOfLogin(teamMemberId: string, accountId: string, actor: TeamActor, because: ShareEndReason): Promise<number> {
+  const { data, error } = await sb().from('portal_team_document_shares').delete().eq('team_member_id', teamMemberId).select('owner_contact_id')
+  if (error) throw new Error(error.message)
+  const owners = ((data ?? []) as { owner_contact_id: string }[]).map((r) => r.owner_contact_id)
+  for (const ownerContactId of owners) {
+    await recordTeamEventBestEffort(sb(), {
+      teamMemberId,
+      accountId,
+      event: 'powers_changed',
+      actor,
+      detail: { personal_documents: false, owner_contact_id: ownerContactId, ended_because: because },
+    })
+  }
+  return owners.length
 }
 
 /** Which team logins of this company has THIS owner shared their personal documents with (for the Team screen). */
