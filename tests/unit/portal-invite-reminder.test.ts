@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { buildPortalInviteReminder } from '@/lib/jobs/portal-invite-reminder'
+import { buildPortalInviteReminder, leftOutNote, reminderInsertOutcome } from '@/lib/jobs/portal-invite-reminder'
 import { extractMembersFromWizardData, type NormalizedMember } from '@/lib/utils/wizard-members'
 
 const person = (first: string, last: string, email: string | null, access: boolean | null): NormalizedMember => ({
@@ -87,11 +87,42 @@ describe('buildPortalInviteReminder', () => {
   })
 })
 
+describe('reminderInsertOutcome / leftOutNote', () => {
+  const two = buildPortalInviteReminder([person('Cal', 'One', 'cal@x.com', true), person('Dee', 'Two', 'dee@x.com', false)])
+
+  it('reads "created" only when the to-do was really saved', () => {
+    const o = reminderInsertOutcome(null, two)
+    expect(o.status).toBe('ok')
+    expect(o.detail).toBe('Portal invite reminder created for 1 member(s): Cal One (left out, portal access unticked in the form: Dee Two)')
+  })
+
+  it('reads as an ERROR, naming who nobody was reminded about, when the save failed', () => {
+    const o = reminderInsertOutcome('permission denied for table tasks', two)
+    expect(o.status).toBe('error')
+    expect(o.detail).toContain('could NOT be created')
+    expect(o.detail).toContain('permission denied for table tasks')
+    expect(o.detail).toContain('Cal One')
+    expect(o.detail).toContain('Dee Two')
+    expect(o.detail).not.toContain('created for')
+  })
+
+  it('an empty error message counts as no error only when it is null/undefined', () => {
+    expect(reminderInsertOutcome(undefined, two).status).toBe('ok')
+    expect(reminderInsertOutcome('', two).status).toBe('ok')
+  })
+
+  it('leftOutNote is empty when nobody was left out', () => {
+    expect(leftOutNote(buildPortalInviteReminder([person('Cal', 'One', 'cal@x.com', true)]))).toBe('')
+    expect(leftOutNote(two)).toBe(' (left out, portal access unticked in the form: Dee Two)')
+  })
+})
+
 describe('onboarding-setup wiring', () => {
   it('builds the staff reminder through the helper, never from the raw member list', () => {
     const src = readFileSync(join(process.cwd(), 'lib/jobs/handlers/onboarding-setup.ts'), 'utf8')
     expect(src).toContain('buildPortalInviteReminder(additionalMembers)')
     expect(src).toContain('description: reminder.description')
+    expect(src).toContain('reminderInsertOutcome(inviteTaskErr?.message, reminder)')
     expect(src).not.toMatch(/Create portal accounts for:\\n\$\{additionalMembers/)
   })
 })

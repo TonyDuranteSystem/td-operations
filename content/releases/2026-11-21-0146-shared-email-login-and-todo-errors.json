@@ -1,0 +1,10 @@
+{
+  "title": "Behind the scenes: shared-email logins go to the right owner, and a failed to-do shows as an error",
+  "tag": "behind-the-scenes",
+  "text": "Two fixes found while testing the portal access tick. First: when two owners of one company share one email, the new portal login now belongs to the owner it is made for, not to the oldest contact on that email. Before, a ticked owner could log in and find no company because the login pointed at the unticked one. Second: when the to-do \"Create portal accounts for MMLLC members after LLC confirmation\" cannot be saved, the setup job now shows an error naming who nobody was reminded about, instead of saying it was created. It only matters once the portal access tick is switched on, so nothing changes today.",
+  "points": [
+    "A login for a shared email follows the owner it is made for",
+    "Logins that already exist are not moved",
+    "A failed to-do shows as an error in the job steps and raises a system alert"
+  ]
+}
