@@ -5,8 +5,9 @@ import {
   ACCOUNT_MAX_FAILURES, IP_MAX_FAILURES, INVALID_LOGIN_MESSAGE, canonicalTeamUsername, teamLoginKeys,
 } from '@/lib/portal/team/login-guard'
 import { teamLoginAttempt, type TeamLoginDeps } from '@/lib/portal/team/login-flow'
+import { memoryLoginLimiter } from '@/lib/portal/login-limiter'
 import {
-  LOGIN_MAX_FAILURES, checkLoginRateLimit, clearLoginFailures, recordLoginFailure, releaseLoginAttempt,
+  LOGIN_MAX_FAILURES, checkLoginRateLimit, recordLoginFailure, releaseLoginAttempt,
 } from '@/lib/portal/rate-limit'
 
 const read = (p: string) => readFileSync(path.join(process.cwd(), p), 'utf8')
@@ -20,10 +21,7 @@ function harness(opts: { password?: string; users?: Record<string, { id: string;
   const right = opts.password ?? 'correct-horse'
   const calls = { resolve: 0, signIn: 0 }
   const deps: TeamLoginDeps = {
-    checkLimit: checkLoginRateLimit,
-    recordFailure: recordLoginFailure,
-    release: releaseLoginAttempt,
-    clear: clearLoginFailures,
+    limiter: memoryLoginLimiter(),
     resolve: async (name) => { calls.resolve++; await sleep(3); const u = users[name]; return u ? { teamMemberId: u.id, email: u.email } : null },
     signIn: async (_email, pw) => { calls.signIn++; await sleep(3); return pw === right },
   }
@@ -196,6 +194,7 @@ describe('the wiring', () => {
     const src = read('app/portal/login/actions.ts')
     expect(src).toMatch(/teamLoginAttempt\(deps,/)
     expect(src).toMatch(/resolve: resolveTeamLoginByUsername/)
+    expect(src).toMatch(/limiter: defaultLoginLimiter\(\)/)
     expect(src).not.toMatch(/\.toLowerCase\(\)\.trim\(\)/)
     expect(src).not.toMatch(/resolveAuthEmailForUsername/)
   })

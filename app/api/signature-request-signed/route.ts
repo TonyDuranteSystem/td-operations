@@ -157,32 +157,9 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 2. Send email notification to support@
-    try {
-      const { gmailPost } = await import("@/lib/gmail")
-      const subject = `Document Signed: ${sigReq.document_name} — ${account?.company_name || "Unknown"}`
-      const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
-      const body = [
-        `${contact?.full_name || "Client"} has signed: ${sigReq.document_name}`,
-        `Company: ${account?.company_name || "Unknown"}`,
-        `Signed at: ${new Date().toISOString()}`,
-        ``,
-        switched ? `The signed document has been saved in the client's new storage.` : `The signed document is NOT filed in the CRM storage (this company has no document storage). It is kept in the signing bucket — add it by hand where it belongs.`,
-      ].join("\r\n")
-      const rawEmail = [
-        `From: support@tonydurante.us`,
-        `To: support@tonydurante.us`,
-        `Subject: ${encodedSubject}`,
-        `Content-Type: text/plain; charset=UTF-8`,
-        ``,
-        body,
-      ].join("\r\n")
-      const encodedRaw = Buffer.from(rawEmail).toString("base64url")
-      await gmailPost("/messages/send", { raw: encodedRaw })
-      results.push("notification_email: ok")
-    } catch (err) {
-      results.push(`notification_email: error - ${err instanceof Error ? err.message : "unknown"}`)
-    }
+    // 2. (No email) Nothing is emailed to support@ when a document is signed
+    //    (Antonio, 2026-11-21) — the task below is the staff signal. A document that
+    //    could not be filed is spelled out in that task instead of an email.
 
     // 3. Create task
     try {
@@ -193,7 +170,9 @@ export async function POST(req: NextRequest) {
         status: "To Do",
         priority: "Normal",
         category: "Document",
-        description: `${contact?.full_name} signed "${sigReq.document_name}". Review and process as needed.`,
+        description: `${contact?.full_name} signed "${sigReq.document_name}". Review and process as needed.${
+          switched ? "" : " The signed document is NOT filed in the CRM storage (this company has no document storage). It is kept in the signing bucket — add it by hand where it belongs."
+        }`,
         account_id: sigReq.account_id,
       })
       results.push("task: ok")

@@ -59,15 +59,18 @@ beforeEach(() => {
 })
 
 describe("staff emails never claim a Drive folder", () => {
-  it("signature-request-signed, company with no storage: says it is NOT filed and where the file is", async () => {
+  it("signature-request-signed, company with no storage: sends NO email; the Luca task says it is NOT filed and where the file is", async () => {
     st.rows.signature_requests = { id: "s1", token: "t", document_name: "Services Agreement", account_id: "acc-1", contact_id: "c1", signed_pdf_path: "s1/signed.pdf", service_delivery_id: null }
     st.rows.contacts = { full_name: "A B", email: "a@b.co" }
     const { POST } = await import("@/app/api/signature-request-signed/route")
     await POST(post("/api/signature-request-signed", { signature_request_id: "s1", token: "t" }))
-    const mail = st.mails.join("\n")
-    expect(mail).toContain("NOT filed")
-    expect(mail).toContain("signing bucket")
-    expect(mail).not.toMatch(/Drive folder/)
+    // nothing is emailed to support@ (Antonio, 2026-11-21) — the staff signal is the task, which must still carry the warning
+    expect(st.mails).toEqual([])
+    const task = st.recorded.find((r) => r.table === "tasks" && r.op === "insert")
+    const text = JSON.stringify(task?.payload ?? "")
+    expect(text).toContain("NOT filed")
+    expect(text).toContain("signing bucket")
+    expect(text).not.toMatch(/Drive folder/)
   })
 
   it("8832-signed, signed PDF not attached: says it is NOT filed and where the file is", async () => {

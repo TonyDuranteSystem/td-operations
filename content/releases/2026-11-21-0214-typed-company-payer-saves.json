@@ -1,0 +1,6 @@
+{
+  "title": "An offer invoiced to a company outside the CRM no longer loses its invoice",
+  "tag": "behind-the-scenes",
+  "text": "When an offer says \"Invoice to\" a company that is not in the CRM yet, the company is saved as the payer and put on the invoice. The live database was refusing that save, so a client signing such an offer would have had a signed contract and no invoice. It is now accepted. If an invoice ever cannot be created at signing, it also shows in System Health instead of only in a log. Offers invoiced to a person or to a company already in the CRM are unchanged.",
+  "points": []
+}
