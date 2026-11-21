@@ -310,7 +310,6 @@ export const UNAUDITED_BASELINE = new Set([
   "banking_submissions_language_check",
   "banking_submissions_status_check",
   "billing_entities_currency_check",
-  "billing_entities_entity_type_check",
   "catalog_decision_log_action_check",
   "catalog_decision_log_actor_kind_check",
   "catalog_entries_status_check",
