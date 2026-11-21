@@ -35,6 +35,8 @@ export interface MemberLoginCounts {
   existing: number
   errors: number
   emailed: number
+  /** Logins that were created but whose welcome email could not be sent: the person has a password nobody has told them. */
+  emailFailures: Array<{ name: string; email: string; reason: string }>
 }
 
 /** The default dependencies: the real database and the real login / email helpers. */
@@ -67,7 +69,7 @@ export async function createLoginsForLinkedMembers(
   p: { accountId: string; tier: PortalTier; welcomeEmailOn: boolean },
   deps: MemberLoginDeps = realMemberLoginDeps(),
 ): Promise<MemberLoginCounts> {
-  const counts: MemberLoginCounts = { created: 0, existing: 0, errors: 0, emailed: 0 }
+  const counts: MemberLoginCounts = { created: 0, existing: 0, errors: 0, emailed: 0, emailFailures: [] }
   const contactIds = await deps.listOpenLinks(p.accountId)
 
   for (const contactId of contactIds) {
@@ -93,7 +95,16 @@ export async function createLoginsForLinkedMembers(
           language,
         })
         if (mail.success) counts.emailed++
-        else console.warn('[welcome-package] welcome email failed:', mail.error)
+        else {
+          // The login exists but its password never reached the person. Counted, not swallowed: the job step turns red and names them
+          // (before, this was only a console line and the step said "ok" — QA 21 Nov 2026, dev job beb43385).
+          console.warn('[welcome-package] welcome email failed:', mail.error)
+          counts.emailFailures.push({ name: info.fullName || pr.email, email: pr.email, reason: mail.error || 'unknown error' })
+        }
+      } else if (p.welcomeEmailOn) {
+        // A login was created but there is no address or password to send the welcome email with.
+        const info = await deps.contactInfo(contactId)
+        counts.emailFailures.push({ name: info.fullName || pr.email || contactId, email: pr.email ?? '(no email)', reason: pr.tempPassword ? 'no email address' : 'no temporary password was returned' })
       }
     } catch (memberErr) {
       counts.errors++

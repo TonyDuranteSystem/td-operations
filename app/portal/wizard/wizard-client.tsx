@@ -460,26 +460,30 @@ export function WizardClient({
       const next = { ...prev }
       next.owner_is_signer = index === -1
       for (let i = 0; i < memberCount; i++) next[`member_${i}_is_signer`] = index === i
+      // The SS-4 Responsible Party signs the SS-4 IN THE PORTAL, so they keep portal access: the tick is put back on (QA 21 Nov 2026).
+      if (memberTickOn && index >= 0) next[`member_${index}_member_portal_access`] = true
       return next
     })
-  }, [memberCount])
+  }, [memberCount, memberTickOn])
 
   // The "portal access" tick starts ticked: every member row that has no answer yet is stamped true, so the answer is saved
   // with the rest of the form (an unticked box is stored as false). Only while the switch is on (dev job beb43385).
+  // The member chosen as the SS-4 signer is always stamped true, even if an earlier draft had it unticked.
   useEffect(() => {
     if (!memberTickOn || !isMMLLC) return
     setFormData(prev => {
       let next: typeof prev | null = null
       for (let i = 0; i < memberCount; i++) {
         const k = `member_${i}_member_portal_access`
-        if (prev[k] === undefined || prev[k] === '' || prev[k] === null) {
+        const mustStayOn = requiresSs4Signer && signerIndex === i
+        if (prev[k] === undefined || prev[k] === '' || prev[k] === null || (mustStayOn && prev[k] !== true && prev[k] !== 'true')) {
           next = next ?? { ...prev }
           next[k] = true
         }
       }
       return next ?? prev
     })
-  }, [memberTickOn, isMMLLC, memberCount])
+  }, [memberTickOn, isMMLLC, memberCount, requiresSs4Signer, signerIndex])
   // Track row counts for inline repeater fields (e.g., related_party_transactions)
   const [repeaterCounts, setRepeaterCounts] = useState<Record<string, number>>(() => {
     const counts: Record<string, number> = {}
@@ -1681,25 +1685,38 @@ export function WizardClient({
                       : String(memberTypeVal)
                     return resolved === field.conditional.value
                   })
-                  .map(field => (
-                    <div key={`${idx}_${field.name}`} data-field-key={`member_${idx}_${field.name}`} className={`${field.type === 'select' || field.type === 'textarea' || field.type === 'file' ? 'md:col-span-2' : ''} ${noteFor(`member_${idx}_${field.name}`) ? FLAGGED_FIELD_CLASS : ''}`}>
+                  .map(field => {
+                    // The member chosen as the SS-4 Responsible Party signs the SS-4 in the portal, so their tick is fixed on
+                    // (QA 21 Nov 2026). The control is drawn locked, with the reason in its hint, and ignores clicks.
+                    const lockedSigner = memberTickOn && requiresSs4Signer && signerIndex === idx && field.name === MEMBER_PORTAL_ACCESS_FIELD.name
+                    const shownField = lockedSigner
+                      ? {
+                          ...field,
+                          hint: 'Required: this member signs the SS-4 in the client portal, so they keep portal access. Choose another SS-4 signer if this member should not use the portal.',
+                          hintIt: 'Obbligatorio: questo membro firma il modulo SS-4 nel portale cliente, quindi mantiene l’accesso. Scegli un altro firmatario SS-4 se questo membro non deve usare il portale.',
+                        }
+                      : field
+                    return (
+                    <div key={`${idx}_${field.name}`} data-field-key={`member_${idx}_${field.name}`} data-locked-signer-tick={lockedSigner ? 'true' : undefined} aria-disabled={lockedSigner ? true : undefined} className={`${field.type === 'select' || field.type === 'textarea' || field.type === 'file' ? 'md:col-span-2' : ''} ${noteFor(`member_${idx}_${field.name}`) ? FLAGGED_FIELD_CLASS : ''} ${lockedSigner ? 'pointer-events-none opacity-70' : ''}`}>
                       <WizardField
-                        field={field}
+                        field={shownField}
                         value={field.name === MEMBER_PORTAL_ACCESS_FIELD.name
                           ? (() => {
+                              if (lockedSigner) return true
                               // Starts ticked: no answer yet reads as ticked; a saved "false" stays unticked.
                               const v = formData[`member_${idx}_${field.name}`]
                               return v === undefined || v === null || v === '' ? true : v === true || v === 'true'
                             })()
                           : formData[`member_${idx}_${field.name}`] ?? ''}
-                        onChange={(name, value) => handleFieldChange(`member_${idx}_${name}`, value)}
+                        onChange={(name, value) => { if (lockedSigner) return; handleFieldChange(`member_${idx}_${name}`, value) }}
                         onFileUpload={(name, file, onProgress) => handleFileUpload(`member_${idx}_${name}`, file, onProgress)}
                         locale={locale}
                         error={errorFor(`member_${idx}_${field.name}`)}
                       />
                       {noteFor(`member_${idx}_${field.name}`) && <ReviewNote note={noteFor(`member_${idx}_${field.name}`)!} heading={noteHeading} />}
                     </div>
-                  ))}
+                    )
+                  })}
               </div>
               {/* MMLLC: this member can be the SS-4 Responsible Party. Hidden
                   on tax — the EIN already exists by then and nothing in the tax

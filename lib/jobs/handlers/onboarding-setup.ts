@@ -618,6 +618,8 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
       if (skippedMemberIdx.has(i)) continue
       const m = additionalMembers[i]
       const isPrimary = primaryMemberIndex === i + 1
+      // The member chosen as the SS-4 Responsible Party in the form keeps portal access (they sign the SS-4 in the portal).
+      const isSs4SignerFlag = (submitted as Record<string, unknown>)[`member_${i}_is_signer`] === true || (submitted as Record<string, unknown>)[`member_${i}_is_signer`] === 'true'
       const ownershipPct = m.member_ownership_pct
 
       try {
@@ -666,7 +668,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
               )
               result.steps.push(step(`member_${i + 1}_link`, 'ok', `${companyName} (rep: ${repName ?? repEmail})`))
               // The "portal access" tick in the form (dev job beb43385): unticked puts the no-access mark on this link.
-              const repAccess = await applyFormPortalAccess({ accountId: account_id, contactId: repContactId, ownerContactId: contact_id, ticked: m.member_portal_access })
+              const repAccess = await applyFormPortalAccess({ accountId: account_id, contactId: repContactId, ownerContactId: contact_id, isSs4Signer: isSs4SignerFlag, ticked: m.member_portal_access })
               if (repAccess.error) result.steps.push(step(`member_${i + 1}_portal_access`, 'error', `${companyName} — portal access mark could not be written: ${repAccess.error}`))
               else if (repAccess.action === 'mark') result.steps.push(step(`member_${i + 1}_portal_access`, 'ok', `${companyName} — no portal access (unticked in the form); still an owner`))
             } else {
@@ -711,7 +713,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
             } else {
               result.steps.push(step(`member_${i + 1}_link`, 'ok', `${memberName}${isPrimary ? ' [PRIMARY]' : ''}`))
               // The "portal access" tick in the form (dev job beb43385): unticked puts the no-access mark on this link.
-              const memberAccess = await applyFormPortalAccess({ accountId: account_id, contactId: membContactId, ownerContactId: contact_id, ticked: m.member_portal_access })
+              const memberAccess = await applyFormPortalAccess({ accountId: account_id, contactId: membContactId, ownerContactId: contact_id, isSs4Signer: isSs4SignerFlag, ticked: m.member_portal_access })
               if (memberAccess.error) result.steps.push(step(`member_${i + 1}_portal_access`, 'error', `${memberName} — portal access mark could not be written: ${memberAccess.error}`))
               else if (memberAccess.action === 'mark') result.steps.push(step(`member_${i + 1}_portal_access`, 'ok', `${memberName} — no portal access (unticked in the form); still an owner`))
             }

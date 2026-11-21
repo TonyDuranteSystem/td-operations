@@ -153,10 +153,15 @@ export async function handleWelcomePackagePrepare(job: Job): Promise<JobResult> 
     const welcomeEmailOn = await memberPortalAccessOn({ accountId: p.account_id })
     const counts = await createLoginsForLinkedMembers({ accountId: p.account_id, tier: memberTier, welcomeEmailOn })
 
+    // A welcome email that could not be sent turns this step red and names each person: their login exists but nobody has told them the
+    // password. Before, it was only a console line and the step said "ok" (QA 21 Nov 2026, dev job beb43385).
+    const emailFailureText = counts.emailFailures.length > 0
+      ? ` — ${counts.emailFailures.length} welcome email(s) FAILED, send each person a new password from their Contact page: ${counts.emailFailures.map(f => `${f.name} <${f.email}> (${f.reason})`).join("; ")}`
+      : ""
     result.steps.push(step(
       "portal_members",
-      counts.errors > 0 ? "error" : "ok",
-      `${counts.created} created, ${counts.existing} existing, ${counts.errors} errors${welcomeEmailOn ? `, ${counts.emailed} welcome email(s) sent` : ""}`
+      counts.errors > 0 || counts.emailFailures.length > 0 ? "error" : "ok",
+      `${counts.created} created, ${counts.existing} existing, ${counts.errors} errors${welcomeEmailOn ? `, ${counts.emailed} welcome email(s) sent` : ""}${emailFailureText}`
     ))
   } catch (e) {
     result.steps.push(step("portal_members", "error", e instanceof Error ? e.message : String(e)))

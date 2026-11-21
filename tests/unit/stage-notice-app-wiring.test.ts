@@ -19,7 +19,8 @@ describe('service-delivery step 8 — the stage-move notice skips the digest ema
   })
   it('asks the shared per-person/per-company rule, with the case\'s contact AND company', () => {
     expect(step8).toContain('stageNoticeRecipientHasApp')
-    expect(step8).toMatch(/stageNoticeRecipientHasApp\(\{\s*contactId: delivery\.contact_id \?\? null,\s*accountId: delivery\.account_id \?\? null\s*\}\)/)
+    // The contact is the SD's contact unless that person's link carries the "no portal access" mark — then the notice goes to the company (dev job beb43385).
+    expect(step8).toMatch(/stageNoticeRecipientHasApp\(\{\s*contactId: stageContactId,\s*accountId: delivery\.account_id \?\? null\s*\}\)/)
   })
   it('hands the answer to the notice as suppressDigestEmail (the bell row and the push are still created)', () => {
     expect(step8).toContain('suppressDigestEmail: hasApp')

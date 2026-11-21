@@ -50,14 +50,14 @@ describe("createLoginsForLinkedMembers", () => {
     const counts = await createLoginsForLinkedMembers({ accountId: "acc", tier: "active", welcomeEmailOn: false }, d)
     expect(created).toEqual(["a", "b"])
     expect(sent).toEqual([])
-    expect(counts).toEqual({ created: 1, existing: 1, errors: 0, emailed: 0 })
+    expect(counts).toEqual({ created: 1, existing: 1, errors: 0, emailed: 0, emailFailures: [] })
   })
 
   it("switch on: a login created now is followed by the welcome email, an existing login is not", async () => {
     const { d, sent } = deps({ a: fresh("a@x.com"), b: existing }, ["a", "b"])
     const counts = await createLoginsForLinkedMembers({ accountId: "acc", tier: "active", welcomeEmailOn: true }, d)
     expect(sent).toEqual([{ email: "a@x.com", fullName: "Name a", tempPassword: "pw-a@x.com", language: "en" }])
-    expect(counts).toEqual({ created: 1, existing: 1, errors: 0, emailed: 1 })
+    expect(counts).toEqual({ created: 1, existing: 1, errors: 0, emailed: 1, emailFailures: [] })
   })
 
   it("switch on: the email goes out in the member's own language", async () => {
@@ -81,13 +81,36 @@ describe("createLoginsForLinkedMembers", () => {
     }
     const counts = await createLoginsForLinkedMembers({ accountId: "acc", tier: "onboarding", welcomeEmailOn: false }, d)
     expect(created).toEqual(["a", "boom", "c"])
-    expect(counts).toEqual({ created: 1, existing: 0, errors: 2, emailed: 0 })
+    expect(counts).toEqual({ created: 1, existing: 0, errors: 2, emailed: 0, emailFailures: [] })
   })
 
   it("a failed welcome email does not count as sent and does not undo the login", async () => {
     const { d } = deps({ a: fresh("a@x.com") }, ["a"])
     d.sendWelcome = async () => ({ success: false, error: "gmail down" })
     const counts = await createLoginsForLinkedMembers({ accountId: "acc", tier: "active", welcomeEmailOn: true }, d)
-    expect(counts).toEqual({ created: 1, existing: 0, errors: 0, emailed: 0 })
+    // The login stays, nothing was sent — and the failure is NAMED, not swallowed (QA 21 Nov 2026): the job step turns red from it.
+    expect(counts).toEqual({ created: 1, existing: 0, errors: 0, emailed: 0, emailFailures: [{ name: "Name a", email: "a@x.com", reason: "gmail down" }] })
+  })
+
+  it("a failed email is named for every person it failed for, and the others still get theirs", async () => {
+    const { d, sent } = deps({ a: fresh("a@x.com"), b: fresh("b@x.com") }, ["a", "b"])
+    d.sendWelcome = async (p) => { if (p.email === "a@x.com") return { success: false } ; sent.push(p); return { success: true } }
+    const counts = await createLoginsForLinkedMembers({ accountId: "acc", tier: "active", welcomeEmailOn: true }, d)
+    expect(counts.emailed).toBe(1)
+    expect(counts.emailFailures).toEqual([{ name: "Name a", email: "a@x.com", reason: "unknown error" }])
+    expect(sent.map(x => x.email)).toEqual(["b@x.com"])
+  })
+
+  it("a login created with no email address or password to send is reported, not silently skipped", async () => {
+    const { d } = deps({ a: { success: true, alreadyExists: false, email: "a@x.com" } }, ["a"])
+    const counts = await createLoginsForLinkedMembers({ accountId: "acc", tier: "active", welcomeEmailOn: true }, d)
+    expect(counts.created).toBe(1)
+    expect(counts.emailFailures).toEqual([{ name: "Name a", email: "a@x.com", reason: "no temporary password was returned" }])
+  })
+
+  it("switch off: a missing password is not a failure (nothing was going to be emailed)", async () => {
+    const { d } = deps({ a: { success: true, alreadyExists: false, email: "a@x.com" } }, ["a"])
+    const counts = await createLoginsForLinkedMembers({ accountId: "acc", tier: "active", welcomeEmailOn: false }, d)
+    expect(counts.emailFailures).toEqual([])
   })
 })

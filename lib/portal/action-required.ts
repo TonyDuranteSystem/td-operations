@@ -40,6 +40,7 @@ import { PORTAL_BASE_URL } from '@/lib/config'
 import { localeFromLanguage, type Locale } from '@/lib/locale'
 import { createPortalNotification } from './notifications'
 import { logAction } from '@/lib/mcp/action-log'
+import { isMarkedOnCompany } from '@/lib/members/marked-on-company'
 
 /** Same stable system-admin sender the ITIN advance + activation welcome use
  * (portal_messages.sender_id is NOT NULL, no FK). */
@@ -227,6 +228,20 @@ export async function notifyClientActionRequired(params: ActionRequiredParams): 
       return result
     }
 
+    // A request addressed to one named person about a company whose link to it carries the "no portal access" mark: they cannot open the
+    // company, so the chat message and the bell (both company-scoped) are never sent, and neither is the email — UNLESS the caller passes
+    // `emailLink`, a personal link that works WITHOUT a login (an Operating Agreement co-signer's own signing link). A member who was left
+    // out of the portal is still an owner and must still be able to sign, and that email is their only way to the document, so it still
+    // goes (QA 21 Nov 2026, dev job beb43385 — the "Sign your SS-4" alert reached an unticked signer; the first fix also silenced the
+    // co-signer email, caught by the Bug Hunter).
+    const markedNamed = Boolean(params.contact_id && params.account_id && await isMarkedOnCompany(params.account_id, params.contact_id))
+    if (markedNamed && !params.emailLink) {
+      const msg = 'skipped: this person has no portal access to the company'
+      result.chat = result.notification = result.email = msg
+      return result
+    }
+    const companyChannelsOff = 'skipped: this person has no portal access to the company (their personal signing link is emailed)'
+
     // ── Dedup guard ─────────────────────────────────────────────────────
     const windowStart = new Date(Date.now() - DEDUP_WINDOW_MS).toISOString()
     const bellType = params.bellType ?? ACTION_REQUIRED_TYPE
@@ -261,7 +276,9 @@ export async function notifyClientActionRequired(params: ActionRequiredParams): 
     const emailUrl = toAbsolute(params.emailLink ?? params.link)
 
     // ── 1. Portal chat message (clickable) ──────────────────────────────
-    try {
+    if (markedNamed) {
+      result.chat = companyChannelsOff
+    } else try {
       const chatAccountTag = await resolveChatAccountTag(params.account_id)
       const chatBody = `${params.message[primaryLocale]}\n\n${absoluteUrl}`
       // service_delivery_id is not in the generated portal_messages Insert
@@ -283,7 +300,9 @@ export async function notifyClientActionRequired(params: ActionRequiredParams): 
     }
 
     // ── 2. Bell + push (digest email suppressed — we email directly) ────
-    try {
+    if (markedNamed) {
+      result.notification = companyChannelsOff
+    } else try {
       const bell = await createPortalNotification({
         account_id: params.account_id ?? undefined,
         contact_id: params.contact_id ?? undefined,

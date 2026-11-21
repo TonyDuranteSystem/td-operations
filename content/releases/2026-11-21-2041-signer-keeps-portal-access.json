@@ -1,0 +1,11 @@
+{
+  "title": "The SS-4 signer keeps portal access, and staff cannot leave a company with no one able to open it",
+  "tag": "fixed",
+  "text": "On the formation form, the member chosen as the SS-4 signer now keeps client portal access: their tick is switched on and locked, with a line saying why. The signer signs the SS-4 in the portal, so without access the EIN would stall. To give someone no portal access, choose another signer. Staff can no longer take access away from the SS-4 signer, or from the last person who can open the company. \"Give access\" is no longer undone when the form is processed again. Someone without access no longer gets alerts about that company.",
+  "points": [
+    "Formation form: the SS-4 signer's portal-access tick is locked on",
+    "Company page: Take away access refuses when nobody left could open the company",
+    "Give access now sticks, and people without access get no alerts about the company"
+  ],
+  "screenshot": "signer-keeps-portal-access.png"
+}
