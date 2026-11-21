@@ -15210,6 +15210,7 @@ export type Database = {
           account_id: string | null
           contact_id: string | null
           id: string
+          kind: string
           last_reminder_at: string | null
           marked_at: string
           marked_by: string | null
@@ -15219,6 +15220,7 @@ export type Database = {
           account_id?: string | null
           contact_id?: string | null
           id?: string
+          kind?: string
           last_reminder_at?: string | null
           marked_at?: string
           marked_by?: string | null
@@ -15228,6 +15230,7 @@ export type Database = {
           account_id?: string | null
           contact_id?: string | null
           id?: string
+          kind?: string
           last_reminder_at?: string | null
           marked_at?: string
           marked_by?: string | null
