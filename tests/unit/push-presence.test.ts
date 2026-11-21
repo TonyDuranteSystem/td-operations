@@ -8,7 +8,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const fx = vi.hoisted(() => ({
   /** devices: who each is stamped with (a person, a company, or both; a teammate's device has no person) */
-  subs: [] as Array<{ contact_id?: string; account_id?: string }>,
+  subs: [] as Array<{ contact_id?: string; account_id?: string; user_id?: string }>,
+  /** the company's team logins (portal_team_members): the sign-in ids of every login, whatever its status */
+  teamLogins: [] as Array<{ account_id: string; auth_user_id: string }>,
+  teamLookupFails: false,
   /** the company's linked contacts (account_contacts) */
   links: [] as Array<{ contact_id: string | null; contacts: { email: string | null } | null }>,
   companyEmail: null as string | null,
@@ -31,7 +34,21 @@ vi.mock('@/lib/supabase-admin', () => ({
           then: (resolve: (v: unknown) => unknown) => {
             fx.queries.push({ ...filters })
             if (fx.fail) return resolve({ count: null, error: { message: 'boom' } })
-            return resolve({ count: fx.subs.filter((d) => Object.entries(filters).every(([k, v]) => (d as Record<string, string | undefined>)[k] === v)).length, error: null })
+            const rows = fx.subs.filter((d) => Object.entries(filters).every(([k, v]) => (d as Record<string, string | undefined>)[k] === v))
+            return resolve({ count: rows.length, data: rows, error: null })
+          },
+        }
+        return b
+      }
+      if (table === 'portal_team_members') {
+        const filters: Record<string, string> = {}
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const b: any = {
+          select: () => b,
+          eq: (col: string, val: string) => { filters[col] = val; return b },
+          then: (resolve: (v: unknown) => unknown) => {
+            if (fx.teamLookupFails) return resolve({ data: null, error: { message: 'boom' } })
+            return resolve({ data: fx.teamLogins.filter((t) => Object.entries(filters).every(([k, v]) => (t as Record<string, string>)[k] === v)), error: null })
           },
         }
         return b
@@ -49,7 +66,7 @@ vi.mock('@/lib/supabase-admin', () => ({
 import { personHasPush, personHasCompanyPush, companyEmailRecipientContactId, stageNoticeRecipientHasApp, recipientHasPush } from '@/lib/portal/push-presence'
 
 beforeEach(() => {
-  fx.subs = []; fx.links = []; fx.companyEmail = null; fx.queries = []; fx.fail = false; fx.emailLookupThrows = false
+  fx.subs = []; fx.teamLogins = []; fx.teamLookupFails = false; fx.links = []; fx.companyEmail = null; fx.queries = []; fx.fail = false; fx.emailLookupThrows = false
 })
 
 describe('personHasPush / personHasCompanyPush', () => {
@@ -169,5 +186,53 @@ describe('recipientHasPush — the chat "unread message" nudge rule (unchanged b
   it('a lookup error counts as "no app": the client is emailed rather than silenced', async () => {
     fx.fail = true
     expect(await recipientHasPush({ contactId: 'c1', accountId: 'a1', singleRecipient: true })).toBe(false)
+  })
+})
+
+describe('recipientHasPush — a team login\'s device is NOT the owner\'s app (team-login device bug, dev job e59dd470)', () => {
+  it('only a team login has a device -> false: the owner still gets the email', async () => {
+    fx.subs = [{ account_id: 'a1', user_id: 'team-user-1' }]
+    fx.teamLogins = [{ account_id: 'a1', auth_user_id: 'team-user-1' }]
+    expect(await recipientHasPush({ contactId: 'owner', accountId: 'a1', singleRecipient: true })).toBe(false)
+  })
+  it('a REMOVED or switched-off login\'s device (still registered) does not count either', async () => {
+    fx.subs = [{ account_id: 'a1', user_id: 'gone-user' }]
+    fx.teamLogins = [{ account_id: 'a1', auth_user_id: 'gone-user' }]
+    expect(await recipientHasPush({ contactId: 'owner', accountId: 'a1', singleRecipient: true })).toBe(false)
+  })
+  it('the recipient IS a team login: its own device counts as theirs, another login\'s does not', async () => {
+    fx.subs = [{ account_id: 'a1', user_id: 'team-user-1' }]
+    fx.teamLogins = [{ account_id: 'a1', auth_user_id: 'team-user-1' }, { account_id: 'a1', auth_user_id: 'team-user-2' }]
+    expect(await recipientHasPush({ contactId: null, accountId: 'a1', singleRecipient: true, ownLoginId: 'team-user-1' })).toBe(true)
+    expect(await recipientHasPush({ contactId: null, accountId: 'a1', singleRecipient: true, ownLoginId: 'team-user-2' })).toBe(false)
+  })
+  it('a team login\'s device AND a device that is not a team login\'s -> true (the company-level device still counts)', async () => {
+    fx.subs = [{ account_id: 'a1', user_id: 'team-user-1' }, { account_id: 'a1', user_id: 'legacy-owner-user' }]
+    fx.teamLogins = [{ account_id: 'a1', auth_user_id: 'team-user-1' }]
+    expect(await recipientHasPush({ contactId: 'owner', accountId: 'a1', singleRecipient: true })).toBe(true)
+  })
+  it('a team login of ANOTHER company does not change the answer', async () => {
+    fx.subs = [{ account_id: 'a1', user_id: 'u1' }]
+    fx.teamLogins = [{ account_id: 'a2', auth_user_id: 'u1' }]
+    expect(await recipientHasPush({ contactId: 'owner', accountId: 'a1', singleRecipient: true })).toBe(true)
+  })
+  it('the owner\'s own device still wins, even when a team login has one too', async () => {
+    fx.subs = [{ contact_id: 'owner', account_id: 'a1', user_id: 'owner-user' }, { account_id: 'a1', user_id: 'team-user-1' }]
+    fx.teamLogins = [{ account_id: 'a1', auth_user_id: 'team-user-1' }]
+    expect(await recipientHasPush({ contactId: 'owner', accountId: 'a1', singleRecipient: true })).toBe(true)
+  })
+  it('a device with no sign-in id cannot be shown to be a team login\'s -> counts (unchanged legacy behaviour)', async () => {
+    fx.subs = [{ account_id: 'a1' }]
+    fx.teamLogins = [{ account_id: 'a1', auth_user_id: 'team-user-1' }]
+    expect(await recipientHasPush({ contactId: 'owner', accountId: 'a1', singleRecipient: true })).toBe(true)
+  })
+  it('the team lookup failing answers "no app": the owner is emailed rather than silenced', async () => {
+    fx.subs = [{ account_id: 'a1', user_id: 'legacy-owner-user' }]
+    fx.teamLookupFails = true
+    expect(await recipientHasPush({ contactId: 'owner', accountId: 'a1', singleRecipient: true })).toBe(false)
+  })
+  it('with more than one person to reach, a company device never counts (unchanged)', async () => {
+    fx.subs = [{ account_id: 'a1', user_id: 'legacy-owner-user' }]
+    expect(await recipientHasPush({ contactId: 'owner', accountId: 'a1', singleRecipient: false })).toBe(false)
   })
 })
