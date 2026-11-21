@@ -23902,13 +23902,7 @@ export type Database = {
         }[]
       }
       merge_contacts: {
-        Args: {
-          p_document_ids?: string[]
-          p_field_choices?: Json
-          p_loser: string
-          p_merged_by?: string
-          p_winner: string
-        }
+        Args: { p_loser: string; p_merged_by?: string; p_winner: string }
         Returns: Json
       }
       onboarding_phase1: {

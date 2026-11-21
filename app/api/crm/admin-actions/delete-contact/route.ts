@@ -195,7 +195,13 @@ export async function POST(request: Request) {
       const { memberRowsOf } = await import("@/lib/operations/contact-name-follow")
       const loserMemberIds = (await memberRowsOf(contact_id).catch(() => [])).map((m) => m.id)
 
-      const { data: mergeResult, error: mergeErr } = await supabaseAdmin.rpc("merge_contacts", {
+      // The generated types come from PRODUCTION, which has the 3-argument function until migration 20261117-2000 is applied there;
+      // the two new arguments are passed through a widened call type. Remove the cast once the types are regenerated after that migration.
+      const mergeRpc = supabaseAdmin.rpc as unknown as (
+        fn: "merge_contacts",
+        args: { p_loser: string; p_winner: string; p_merged_by: string; p_field_choices: Record<string, string>; p_document_ids: string[] },
+      ) => ReturnType<typeof supabaseAdmin.rpc>
+      const { data: mergeResult, error: mergeErr } = await mergeRpc.call(supabaseAdmin, "merge_contacts", {
         p_loser: contact_id,
         p_winner: merge_into_contact_id,
         p_merged_by: actor,
