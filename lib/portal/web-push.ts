@@ -4,6 +4,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import type { StaffAlertKind } from '@/lib/push/alert-kinds'
 import { startPhoneLeg, waitForPhoneLeg } from '@/lib/app/phone-leg'
 import { startClientPhoneLeg } from '@/lib/portal-app/client-phone-leg'
+import { markedContactIds } from '@/lib/members/marked-on-company'
 
 // Status codes that mean the push subscription is permanently dead and
 // must be removed. Excludes 408 (timeout) and 429 (rate-limit) — those
@@ -140,12 +141,20 @@ async function sendAccountWeb(accountId: string, clientPayload: ClientPushPayloa
     return { sent: 0, failed: 0 }
   }
 
-  const { data: subscriptions } = await supabaseAdmin
+  const { data: allSubscriptions } = await supabaseAdmin
     .from('push_subscriptions')
-    .select('id, endpoint, p256dh, auth_key')
+    .select('id, endpoint, p256dh, auth_key, contact_id')
     .eq('account_id', accountId)
 
-  if (!subscriptions?.length) return { sent: 0, failed: 0 }
+  if (!allSubscriptions?.length) return { sent: 0, failed: 0 }
+
+  // A phone of a person whose link to this company carries the "no portal access" mark never gets this company's alert, even if
+  // the subscription was made while they still had access (QA 21 Nov 2026). A subscription with no person stays as before.
+  const marked = await markedContactIds(accountId)
+  const subscriptions = marked.size === 0
+    ? allSubscriptions
+    : allSubscriptions.filter(s => !s.contact_id || !marked.has(s.contact_id as string))
+  if (subscriptions.length === 0) return { sent: 0, failed: 0 }
 
   return deliverPushBatch('push_subscriptions', subscriptions, payload, `account:${accountId}`)
 }

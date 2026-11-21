@@ -139,9 +139,12 @@ export async function GET(request: NextRequest) {
         contactEmail = companyEmail
 
         // Still need contact details for greeting personalization
+        // The greeting names the first person who can open the company — never one whose link carries the "no portal access" mark
+        // (dev job beb43385).
         const { data: links } = await supabaseAdmin
           .from('account_contacts')
           .select('contact_id')
+          .is('access_revoked_at', null)
           .eq('account_id', id)
           .limit(1)
 

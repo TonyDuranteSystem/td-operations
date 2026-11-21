@@ -42,6 +42,7 @@ import { formatCountyAndState, companyOfficialRow, isTdLargoAddressRow } from "@
 import { checkAgentInCompanyState } from "@/lib/formation/registered-agent-state"
 import { CLIENT_ADDRESS_FALLBACK } from "@/lib/td-address"
 import { localeFromLanguage } from "@/lib/locale"
+import { isMarkedOnCompany } from "@/lib/members/marked-on-company"
 import {
   decideSs4Signer,
   ss4SignerAlertMessage,
@@ -324,6 +325,7 @@ export type Ss4RefreshOutcome =
   | "needs_signer"  // MMLLC with ≠1 flagged signer — row untouched, staff alert in `message`
   | "orphaned_signer" // party was member-derived but the member is gone/repointed — link revoked, staff alert in `message`
   | "no_signer_contact" // decided signer has no resolvable contact — row untouched
+  | "signer_no_portal_access" // the flagged signer's link carries the "no portal access" mark — row untouched
   | "unchanged"     // recomputed values identical — no write
   | "refreshed"     // row updated in place (same token/link)
   | "error"
@@ -532,6 +534,20 @@ export async function refreshSS4(args: {
           summary: `SS-4 refresh SKIPPED (${source}): flagged signer has no resolvable contact`,
         })
         return { ok: false, outcome: "no_signer_contact", message, ss4: identity(row) }
+      }
+      // A signer CHANGE to a person whose link carries the "no portal access" mark is refused: the signer signs IN THE PORTAL, so the SS-4
+      // (and its alert) would wait for someone who cannot open the company. An unchanged signer is never blocked — an address or name
+      // refresh must still go through. (Bug Hunter, QA 21 Nov 2026, dev job beb43385.)
+      if (signerContactId !== row.contact_id && await isMarkedOnCompany(account_id, signerContactId)) {
+        const message = "Cannot switch the SS-4 signer: that member has no portal access to this company, so they could not sign it there. Give them portal access first, or flag another member as the signer."
+        await logAction({
+          action_type: "update",
+          table_name: "ss4_applications",
+          record_id: row.id,
+          account_id,
+          summary: `SS-4 refresh SKIPPED (${source}): flagged signer has no portal access`,
+        })
+        return { ok: false, outcome: "signer_no_portal_access", message, ss4: identity(row) }
       }
       const { data: contact } = await supabaseAdmin
         .from("contacts")

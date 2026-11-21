@@ -920,7 +920,7 @@ export async function materializeFormationCompany(
                 )
                 steps.push({ step: `member_${i + 1}_link`, status: "ok", detail: `${memberCompanyName} (rep: ${repName ?? repEmail})` })
                 // The "portal access" tick in the form (dev job beb43385): unticked puts the no-access mark on this link.
-                const repAccess = await applyFormPortalAccess({ accountId, contactId: repContactId, ownerContactId: params.contact_id, ticked: m.member_portal_access })
+                const repAccess = await applyFormPortalAccess({ accountId, contactId: repContactId, ownerContactId: params.contact_id, isSs4Signer: m.is_signer === true, ticked: m.member_portal_access })
                 if (repAccess.error) steps.push({ step: `member_${i + 1}_portal_access`, status: "error", detail: `${memberCompanyName} — portal access mark could not be written: ${repAccess.error}` })
                 else if (repAccess.action === "mark") steps.push({ step: `member_${i + 1}_portal_access`, status: "ok", detail: `${memberCompanyName} — no portal access (unticked in the form); still an owner` })
               } else {
@@ -1020,7 +1020,7 @@ export async function materializeFormationCompany(
 
               steps.push({ step: `member_${i + 1}_link`, status: "ok", detail: `${memberName}${isPrimary ? " [PRIMARY]" : ""}` })
               // The "portal access" tick in the form (dev job beb43385): unticked puts the no-access mark on this link.
-              const memberAccess = await applyFormPortalAccess({ accountId, contactId: membContactId, ownerContactId: params.contact_id, ticked: m.member_portal_access })
+              const memberAccess = await applyFormPortalAccess({ accountId, contactId: membContactId, ownerContactId: params.contact_id, isSs4Signer: m.is_signer === true, ticked: m.member_portal_access })
               if (memberAccess.error) steps.push({ step: `member_${i + 1}_portal_access`, status: "error", detail: `${memberName} — portal access mark could not be written: ${memberAccess.error}` })
               else if (memberAccess.action === "mark") steps.push({ step: `member_${i + 1}_portal_access`, status: "ok", detail: `${memberName} — no portal access (unticked in the form); still an owner` })
 
