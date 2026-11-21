@@ -1,0 +1,6 @@
+{
+  "title": "Harder to guess a team login's password",
+  "tag": "behind-the-scenes",
+  "text": "A colleague added as a team login signs in with a username and a password. The lockout after wrong passwords could be sidestepped: a username typed with a star in it still found the same person but counted as a new name with fresh tries, and a burst of guesses sent at the same moment all got through before the first was counted. Now a username has one exact spelling, every try is counted before it is checked, and there is also a total limit per address and per login. Normal sign-ins are not affected, and colleagues in the same office do not lock each other out.",
+  "points": []
+}
