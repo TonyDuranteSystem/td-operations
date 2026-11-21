@@ -12,7 +12,6 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { APP_BASE_URL } from "@/lib/config"
 
 export async function POST(req: NextRequest) {
   try {
@@ -50,41 +49,10 @@ export async function POST(req: NextRequest) {
 
     const results: { step: string; status: string; detail?: string }[] = []
 
-    // ─── 1. EMAIL NOTIFICATION TO SUPPORT ───
-    try {
-      const { gmailPost } = await import("@/lib/gmail")
-
-      const subject = `Lease Signed: ${lease.tenant_company} (Suite ${lease.suite_number})`
-      const emailBody = [
-        `The Lease Agreement for ${lease.tenant_company} has been signed.`,
-        ``,
-        `Suite: ${lease.suite_number}`,
-        `Token: ${lease.token}`,
-        ``,
-        `Admin Preview: ${APP_BASE_URL}/lease/${lease.token}?preview=td`,
-        ``,
-        `Next steps:`,
-        `- Upload signed PDF to Drive (Company folder → 1. Company)`,
-        ...(((lease as { template_version?: number }).template_version ?? 1) === 2 ? [] : [`- Confirm security deposit payment`]),
-      ].join("\n")
-
-      const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
-      const mimeHeaders = [
-        `From: Tony Durante LLC <support@tonydurante.us>`,
-        `To: support@tonydurante.us`,
-        `Subject: ${encodedSubject}`,
-        "MIME-Version: 1.0",
-        `Content-Type: text/plain; charset=utf-8`,
-        "Content-Transfer-Encoding: base64",
-      ]
-      const rawEmail = [...mimeHeaders, "", Buffer.from(emailBody).toString("base64")].join("\r\n")
-      const encodedRaw = Buffer.from(rawEmail).toString("base64url")
-
-      await gmailPost("/messages/send", { raw: encodedRaw })
-      results.push({ step: "email_notification", status: "ok", detail: "Notified support@" })
-    } catch (e) {
-      results.push({ step: "email_notification", status: "error", detail: e instanceof Error ? e.message : String(e) })
-    }
+    // ─── 1. (NO EMAIL) ───
+    // Nothing is emailed to support@ when a lease is signed (Antonio, 2026-11-21).
+    // Staff see it through the What's New chat event below, the Form 1583 task and
+    // the service-delivery history.
 
     // ─── 1.5. WHAT'S NEW CHAT EVENT (dev job c3efa6cb) ───
     // Found during a full audit of client-action notifications: signing the

@@ -21,7 +21,6 @@
 
 import { NextRequest, NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
-import { CRM_BASE_URL } from "@/lib/config"
 import { resolveSignedPdfPath, signedPdfPathProblem } from "@/lib/oa/signed-pdf-path"
 import { reportSystemError } from "@/lib/system-errors"
 import { normalizeEntityType } from "@/lib/portal/entity-type"
@@ -36,7 +35,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json()
-    const { oa_id, token, member_index } = body as { oa_id?: string; token?: string; member_index?: number }
+    const { oa_id, token } = body as { oa_id?: string; token?: string; member_index?: number }
 
     if (!oa_id || !token) {
       return NextResponse.json({ error: "oa_id and token required" }, { status: 400 })
@@ -54,86 +53,19 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "OA not found" }, { status: 404 })
     }
 
-    // Preview from the CRM, not an embedded client-host link. The bare ?preview=td
-    // flag no longer skips the email gate or view-tracking on the client-facing
-    // host (a staff session cookie doesn't reach it), so a link here would ask
-    // staff for the client's email AND register a false "client viewed" on a legal
-    // document. The CRM account's Documents panel has a "View" that mints a proper
-    // staff-preview pass — that is now the one staff preview path.
-    const previewUrl = oa.account_id
-      ? `${CRM_BASE_URL}/accounts/${oa.account_id}`
-      : null
-
     const results: { step: string; status: string; detail?: string }[] = []
     // Normalize: production still holds legacy long-form values ("Multi Member LLC",
     // 1 row as of 2026-07-22). A raw compare treats those as single-member, so a
-    // PARTIAL sign would take neither branch below and email support the
-    // FULLY-SIGNED wording — a false "signed" alert on a legal document.
+    // PARTIAL sign would take neither branch below and be logged with the
+    // FULLY-SIGNED wording — a false "signed" record on a legal document.
     const isMMLC = (normalizeEntityType(oa.entity_type) === "MMLLC") && (oa.total_signers || 1) > 1
     const isFullySigned = oa.status === "signed"
     const isPartial = isMMLC && !isFullySigned
 
-    // Get signer name for notifications
-    let signerName = "Member"
-    if (typeof member_index === "number" && isMMLC) {
-      const { data: sig } = await supabaseAdmin
-        .from("oa_signatures")
-        .select("member_name")
-        .eq("oa_id", oa.id)
-        .eq("member_index", member_index)
-        .single()
-      if (sig) signerName = sig.member_name
-    }
-
-    // ─── 1. EMAIL NOTIFICATION TO SUPPORT ───
-    try {
-      const { gmailPost } = await import("@/lib/gmail")
-
-      const subject = isPartial
-        ? `OA Partial Sign: ${oa.company_name} (${oa.signed_count}/${oa.total_signers})`
-        : `OA Signed: ${oa.company_name}`
-
-      const bodyLines = isPartial
-        ? [
-            `${signerName} has signed the Operating Agreement for ${oa.company_name}.`,
-            ``,
-            `Progress: ${oa.signed_count}/${oa.total_signers} members signed`,
-            `Entity Type: ${oa.entity_type || "SMLLC"}`,
-            `Token: ${oa.token}`,
-            ``,
-            `The agreement is NOT yet fully executed. Remaining members must still sign.`,
-            ``,
-            previewUrl ? `View in CRM: ${previewUrl}` : null,
-          ].filter(Boolean)
-        : [
-            `The Operating Agreement for ${oa.company_name} has been ${isMMLC ? "fully " : ""}signed.`,
-            ``,
-            `Entity Type: ${oa.entity_type || "SMLLC"}`,
-            `Manager: ${oa.manager_name || "N/A"}`,
-            isMMLC ? `All ${oa.total_signers} members have signed.` : null,
-            `Token: ${oa.token}`,
-            ``,
-            previewUrl ? `View in CRM: ${previewUrl}` : null,
-          ].filter(Boolean)
-
-      const emailBody = bodyLines.join("\n")
-      const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
-      const mimeHeaders = [
-        `From: Tony Durante LLC <support@tonydurante.us>`,
-        `To: support@tonydurante.us`,
-        `Subject: ${encodedSubject}`,
-        "MIME-Version: 1.0",
-        `Content-Type: text/plain; charset=utf-8`,
-        "Content-Transfer-Encoding: base64",
-      ]
-      const rawEmail = [...mimeHeaders, "", Buffer.from(emailBody).toString("base64")].join("\r\n")
-      const encodedRaw = Buffer.from(rawEmail).toString("base64url")
-
-      await gmailPost("/messages/send", { raw: encodedRaw })
-      results.push({ step: "email_notification", status: "ok", detail: isPartial ? `Partial sign (${signerName})` : "Notified support@" })
-    } catch (e) {
-      results.push({ step: "email_notification", status: "error", detail: e instanceof Error ? e.message : String(e) })
-    }
+    // ─── (NO EMAIL) ───
+    // Nothing is emailed to support@ when an Operating Agreement is signed, fully or
+    // partly (Antonio, 2026-11-21). The signing progress is on the agreement itself,
+    // the job moves forward below, and the action log records every signature.
 
     // ─── ONLY DO DRIVE UPLOAD + SD HISTORY WHEN FULLY SIGNED ───
     if (isFullySigned && oa.account_id) {

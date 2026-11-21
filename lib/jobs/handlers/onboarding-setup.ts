@@ -1549,8 +1549,12 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
             ? `Thanks — we've received everything for ${company_name}. Our team is reviewing your submission and will activate your services shortly (typically 1–2 business days).`
             : "Thanks — we've received your onboarding data. Our team is reviewing your submission and will activate your services shortly (typically 1–2 business days).",
           link: "/portal",
+          // The owner is told in the portal (bell, phone push, and the welcome chat
+          // below) — NOT by the "1 new update in your portal" digest email
+          // (Antonio, 2026-11-21).
+          suppressDigestEmail: true,
         })
-        result.steps.push(step("portal_notification", "ok", "Contact notified in portal"))
+        result.steps.push(step("portal_notification", "ok", "Contact notified in portal (no digest email)"))
       }
     } catch (e) {
       result.steps.push(step("portal_notification", "error", e instanceof Error ? e.message : String(e)))
@@ -1658,6 +1662,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
       : token
 
     // Create task for staff review
+    const failedSteps = result.steps.filter(x => x.status === "error").map(x => `${x.name}: ${x.detail || "no detail"}`)
     const existingTaskTitle = `Portal Wizard: Onboarding data submitted — ${clientName}${company_name ? ` (${company_name})` : ""}`
     const { data: existingTask } = await supabaseAdmin
       .from("tasks")
@@ -1673,7 +1678,12 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
           `Auto-chain completed for ${p.entity_type || "SMLLC"} onboarding via ${p.source === "portal_wizard" ? "portal wizard" : "MCP review"}.`,
           token ? `Review: onboarding_form_review(token="${token}")` : "",
           account_id ? `Account: ${account_id}` : "No account created (check errors)",
-        ].filter(Boolean).join("\n"),
+          // The summary email to support@ is gone (Antonio, 2026-11-21), so a step that
+          // failed is named here — this task is now the only place staff are told.
+          ...(failedSteps.length > 0
+            ? [``, `${failedSteps.length} step(s) FAILED — open the job result to see why:`, ...failedSteps.map(f => `  ✗ ${f}`)]
+            : []),
+        ].filter(x => x !== "").join("\n"),
         status: "To Do",
         priority: "High",
         category: "Client Response",
@@ -1683,34 +1693,7 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
       })
     }
 
-    // Email notification to support
-    const { gmailPost } = await import("@/lib/gmail")
-    const subject = `Onboarding Auto-Chain: ${clientName}${company_name ? ` — ${company_name}` : ""}`
-    const okSteps = result.steps.filter(s => s.status === "ok").length
-    const errSteps = result.steps.filter(s => s.status === "error").length
-    const body = [
-      `Auto-chain completed: ${okSteps} ok, ${errSteps} errors.`,
-      `Source: ${p.source === "portal_wizard" ? "Portal Wizard" : "MCP Magic Button"}`,
-      `Token: ${token}`,
-      account_id ? `Account ID: ${account_id}` : "No account created",
-      "",
-      "Steps:",
-      ...result.steps.map(s => `  ${s.status === "ok" ? "✓" : s.status === "error" ? "✗" : "○"} ${s.name}: ${s.detail || ""}`),
-    ].join("\n")
-
-    const encodedSubject = `=?utf-8?B?${Buffer.from(subject).toString("base64")}?=`
-    const mimeHeaders = [
-      "From: Tony Durante LLC <support@tonydurante.us>",
-      "To: support@tonydurante.us",
-      `Subject: ${encodedSubject}`,
-      "MIME-Version: 1.0",
-      "Content-Type: text/plain; charset=utf-8",
-      "Content-Transfer-Encoding: base64",
-    ]
-    const rawEmail = [...mimeHeaders, "", Buffer.from(body).toString("base64")].join("\r\n")
-    await gmailPost("/messages/send", { raw: Buffer.from(rawEmail).toString("base64url") })
-
-    result.steps.push(step("staff_notification", "ok", `Task + email sent for ${clientName}`))
+    result.steps.push(step("staff_notification", "ok", existingTask ? `Review task already existed for ${clientName}` : `Review task created for ${clientName} (no email to support@)`))
   } catch (e) {
     result.steps.push(step("staff_notification", "error", e instanceof Error ? e.message : String(e)))
   }
