@@ -49,7 +49,10 @@ export async function ensureBillingEntity(contactId: string, e: BillToEntityDeta
       country: e.country ?? null,
       vat_number: e.vat_number ?? null,
       fiscal_code: e.fiscal_code ?? null,
-      entity_type: "company",
+      // NO entity_type, on purpose (dev job 709ac868). Nothing reads a payer's type — the invoice prints the name,
+      // address and VAT only — and production's database used to refuse any word outside a short fixed list, so
+      // writing the label "company" here made every typed payer fail to save and the invoice vanish at signing.
+      // A type is a label, never a reason to lose an invoice: leave the column empty.
     })
     .select("id")
     .single()
