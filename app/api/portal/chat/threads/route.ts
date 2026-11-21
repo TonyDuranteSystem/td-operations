@@ -190,31 +190,35 @@ export async function GET() {
       (pinnedRows ?? []).map(r => r.contact_id).filter((x): x is string => !!x)
     )
 
-    // "Waiting for client" marks (staff, shared). A mark counts only while the client has NOT written since it was made —
-    // so the mark ends by itself. Failure here never blocks the list (the chip is simply empty).
+    // Waiting marks (staff, shared), two kinds: "client" = we wait for the client, "us" = the client waits for us.
+    // A mark counts only while the OTHER side has not written since it was made (client mark ends when the client writes,
+    // "us" mark ends when staff write) — so the mark ends by itself. Failure here never blocks the list (the chips are simply empty).
     const waitingSince = new Map<string, string>()
+    const waitingUsSince = new Map<string, string>()
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data: waitRows } = await (supabaseAdmin as any)
         .from('portal_chat_waiting_threads')
-        .select('account_id, contact_id, marked_at') as { data: { account_id: string | null; contact_id: string | null; marked_at: string }[] | null }
+        .select('account_id, contact_id, marked_at, kind') as { data: { account_id: string | null; contact_id: string | null; marked_at: string; kind: string | null }[] | null }
       const rows = waitRows ?? []
       if (rows.length > 0) {
         const keys = rows.map(r => (r.account_id ? r.account_id : r.contact_id) as string)
         const oldest = rows.reduce((m, r) => (r.marked_at < m ? r.marked_at : m), rows[0].marked_at)
-        const { data: clientMsgs } = await supabaseAdmin
+        const { data: sideMsgs } = await supabaseAdmin
           .from('portal_messages')
-          .select('account_id, contact_id, created_at')
-          .eq('sender_type', 'client')
+          .select('account_id, contact_id, created_at, sender_type')
+          .in('sender_type', ['client', 'admin'])
           .is('deleted_at', null)
           .gte('created_at', oldest)
           .or(`account_id.in.(${keys.join(',')}),contact_id.in.(${keys.join(',')})`)
         for (const r of rows) {
           const key = (r.account_id ? r.account_id : r.contact_id) as string
-          const times = (clientMsgs ?? [])
-            .filter(m => (r.account_id ? m.account_id === key : m.contact_id === key))
+          const waitingOnUs = r.kind === 'us'
+          const otherSide = waitingOnUs ? 'admin' : 'client'
+          const times = (sideMsgs ?? [])
+            .filter(m => m.sender_type === otherSide && (r.account_id ? m.account_id === key : m.contact_id === key))
             .map(m => m.created_at as string)
-          if (isStillWaiting(r.marked_at, times)) waitingSince.set(r.account_id ? `account:${key}` : `contact:${key}`, r.marked_at)
+          if (isStillWaiting(r.marked_at, times)) (waitingOnUs ? waitingUsSince : waitingSince).set(r.account_id ? `account:${key}` : `contact:${key}`, r.marked_at)
         }
       }
     } catch (e) {
@@ -259,6 +263,9 @@ export async function GET() {
       // Feeds the "Waiting" chip: when staff marked this conversation as waiting for the client and the client has not written since.
       waiting_since: (r.account_id ? waitingSince.get(`account:${r.account_id}`) : undefined)
         ?? (r.contact_id ? waitingSince.get(`contact:${r.contact_id}`) : undefined) ?? null,
+      // Feeds the "Waiting on us" chip: the client is waiting for the team and the team has not written since.
+      waiting_us_since: (r.account_id ? waitingUsSince.get(`account:${r.account_id}`) : undefined)
+        ?? (r.contact_id ? waitingUsSince.get(`contact:${r.contact_id}`) : undefined) ?? null,
       // Feeds the "Chats" chip: true when a client or a team member wrote in this conversation
       // (not only automatic notices). undefined = unknown (function unavailable) → chip keeps it.
       has_people_messages: peopleKeys ? threadHasPeopleMessages(r, peopleKeys) : undefined,

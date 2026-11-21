@@ -261,6 +261,12 @@ export const NOT_A_VOCABULARY = new Set([
   "td_books_accounts_account_type_check",
   "td_books_accounts_closing_source_check",
   "td_books_accounts_sign_convention_check",
+  // TEMPORARY (2026-11-21, CI "Lint + tests" red on PR 1181, dev job 954af5db): the Portal Chats waiting mark kind, `client` | `us`
+  // (written only by app/api/portal/chat/waiting-thread/route.ts; migration 20261121-1600-portal-chat-waiting-kind.sql, run in production
+  // by Antonio BEFORE the merge). A value list, not a shape rule, but it cannot be registered in CONSTRAINT_CONTRACTS yet: the committed
+  // PRODUCTION snapshot does not hold it until it is next fully regenerated. At the NEXT full `npm run snapshot:constraints`, MOVE it into
+  // CONSTRAINT_CONTRACTS with a code-side list and delete this line.
+  "portal_chat_waiting_threads_kind_check",
 ])
 
 /**

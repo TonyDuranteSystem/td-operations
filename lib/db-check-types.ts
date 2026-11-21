@@ -247,6 +247,9 @@ export type PnlWorkspacesStatus = "active" | "archived"
 /** portal_announcements.type — CHECK constraint */
 export type PortalAnnouncementsType = "info" | "warning" | "success"
 
+/** portal_chat_waiting_threads.kind — CHECK constraint */
+export type PortalChatWaitingThreadsKind = "client" | "us"
+
 /** portal_messages.sender_type — CHECK constraint */
 export type PortalMessagesSenderType = "client" | "admin" | "system"
 
