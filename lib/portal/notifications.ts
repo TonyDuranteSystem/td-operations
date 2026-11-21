@@ -277,7 +277,7 @@ export async function notifyClientOfAdminMessage({
 
   // Resolve all recipients. For contact_id: one recipient. For account_id: ALL
   // contacts on the account so every member of a Multi-Member LLC is notified.
-  type Recipient = { email: string; firstName: string | null; language: string; contactId: string | null }
+  type Recipient = { email: string; firstName: string | null; language: string; contactId: string | null; /** a team login's own sign-in id (its device is its own) */ loginId?: string | null }
   let recipients: Recipient[] = []
 
   if (contact_id) {
@@ -320,7 +320,7 @@ export async function notifyClientOfAdminMessage({
     // portal_team_members.email — so a non-null filter stays deliverable-safe.
     const { data: teammates } = await supabaseAdmin
       .from('portal_team_members')
-      .select('email, display_name, capabilities, status')
+      .select('email, display_name, capabilities, status, auth_user_id')
       .eq('account_id', account_id)
       .eq('status', 'active')
     const teammateRecipients: Recipient[] = (teammates ?? [])
@@ -330,6 +330,7 @@ export async function notifyClientOfAdminMessage({
         firstName: ((t.display_name as string | null) ?? '').split(' ')[0] || null,
         language: ownerLanguage, // teammates follow the account owner's language
         contactId: null, // teammates aren't contacts; covered by the account-level push check
+        loginId: (t.auth_user_id as string | null) ?? null, // their own device is theirs; another login's device is not (recipientHasPush)
       }))
 
     // Dedupe so a teammate sharing a contact's email isn't emailed twice.
@@ -362,7 +363,7 @@ export async function notifyClientOfAdminMessage({
     // notifications) — they'll get the push instead. Check contact-level first,
     // then account-level (some subscriptions are keyed by account, not contact).
     // (Account-level subscriptions are trusted only for a SINGLE recipient — see recipientHasPush.)
-    const hasPush = await recipientHasPush({ contactId: recipient.contactId, accountId: account_id, singleRecipient: recipients.length === 1 })
+    const hasPush = await recipientHasPush({ contactId: recipient.contactId, accountId: account_id, singleRecipient: recipients.length === 1, ownLoginId: recipient.loginId ?? null })
     if (hasPush) continue // has push — skip the redundant email
 
     // contacts.language is messy free text ("Italian", "Italiano", "it", …) —
