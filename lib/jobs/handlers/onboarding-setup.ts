@@ -30,7 +30,7 @@ import { validateOnboardingData, normalizeEIN } from "../validation"
 import { runOCRCrossCheck } from "../ocr-crosscheck"
 import { extractMembersFromWizardData } from "@/lib/utils/wizard-members"
 import { applyFormPortalAccess } from "@/lib/members/apply-form-portal-access"
-import { buildPortalInviteReminder } from "@/lib/jobs/portal-invite-reminder"
+import { buildPortalInviteReminder, leftOutNote, reminderInsertOutcome } from "@/lib/jobs/portal-invite-reminder"
 import { resolveMemberContactId } from "@/lib/members/resolve-member-contact"
 import { upsertMemberRow } from "@/lib/members/write-member-row"
 import { normalizePersonName, normalizeEmail } from "@/lib/members/member-identity"
@@ -843,7 +843,6 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
     // Portal invite reminder for the members who are meant to get a portal account. A member whose "portal access" tick
     // was unticked in the form (dev job beb43385) is left out of it and named in a separate note (lib/jobs/portal-invite-reminder.ts).
     const reminder = buildPortalInviteReminder(additionalMembers)
-    const leftOutNote = reminder.leftOutNames.length > 0 ? ` (left out, portal access unticked in the form: ${reminder.leftOutNames.join(', ')})` : ''
     // Idempotency guard (LT Program runaway-loop fix 2026-06-16): if this
     // handler is ever re-invoked for the same account, do NOT create a second
     // identical "create portal accounts" task. A single open copy is enough.
@@ -859,16 +858,26 @@ export async function handleOnboardingSetup(job: Job): Promise<JobResult> {
       result.steps.push(step('portal_invite_task', 'skipped', `Open task already exists (${existingInviteTask.id}) — not duplicating`))
     } else if (reminder.description === null) {
       // Everyone was unticked: nobody needs a portal account, so there is nothing to remind anyone about.
-      result.steps.push(step('portal_invite_task', 'skipped', `No member is meant to get a portal account${leftOutNote} — no reminder created`))
+      result.steps.push(step('portal_invite_task', 'skipped', `No member is meant to get a portal account${leftOutNote(reminder)} — no reminder created`))
     } else {
       // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
-      await supabaseAdmin.from('tasks').insert({
+      const { error: inviteTaskErr } = await supabaseAdmin.from('tasks').insert({
         task_title: `Create portal accounts for MMLLC members after LLC confirmation`,
         description: reminder.description,
         assigned_to: 'Luca', priority: 'Low', category: 'Formation',
         status: 'To Do', account_id,
       })
-      result.steps.push(step('portal_invite_task', 'ok', `Portal invite reminder created for ${reminder.includedNames.length} member(s): ${reminder.includedNames.join(', ')}${leftOutNote}`))
+      // A failed save is an ERROR step (it used to read "created" whatever happened). The job's overall result is left as is on
+      // purpose: a retry re-runs the whole setup, and the to-do is reported loudly below instead.
+      const inviteOutcome = reminderInsertOutcome(inviteTaskErr?.message, reminder)
+      result.steps.push(step('portal_invite_task', inviteOutcome.status, inviteOutcome.detail))
+      if (inviteTaskErr) {
+        await reportSystemError({
+          source: 'server', route: 'jobs/onboarding-setup', method: 'INTERNAL',
+          message: `Portal invite to-do not created — ${company_name}`,
+          context: { account_id, error: inviteTaskErr.message },
+        }).catch(() => {})
+      }
     }
 
     await updateJobProgress(job.id, result)

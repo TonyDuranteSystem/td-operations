@@ -139,7 +139,7 @@ async function createFromEmail(
   tier: PortalTier,
   language?: string,
   autoCreated = true,
-  /** Caller-resolved contact_id — used to backfill auth metadata if missing */
+  /** Caller-resolved contact_id — used to backfill auth metadata if missing, and as the contact a NEW login belongs to */
   callerContactId?: string,
 ): Promise<AutoCreateResult> {
   // Check if user already exists — paginated via findAuthUserByEmail
@@ -219,7 +219,10 @@ async function createFromEmail(
   // Find or create contact so we can set contact_id in app_metadata.
   // Case-insensitive + alias-aware lookup so we never create a duplicate contact
   // for a case/alias variant of an existing person (Michele Cotti, 2026-06-10).
-  let portalContactId: string | undefined = (await findContactIdByEmail(email)) ?? undefined
+  // The caller's own contact comes first: two people can share one email (a couple's company), and the login must belong to the
+  // person we are making it FOR — the oldest contact on that email may be the one with no portal access for this company, which
+  // would leave the person who does have access logging in to an empty portal (dev job beb43385, shared-email case).
+  let portalContactId: string | undefined = callerContactId ?? (await findContactIdByEmail(email)) ?? undefined
 
   if (!portalContactId) {
     // Create contact from email + name

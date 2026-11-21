@@ -32,6 +32,24 @@ function reminderLine(m: NormalizedMember): string {
   return `• ${[m.member_first_name, m.member_last_name].filter(Boolean).join(' ')} — ${m.member_email ?? 'no email'}`
 }
 
+/** " (left out, portal access unticked in the form: A, B)" — or "" when nobody was left out. Used in the job's step texts. */
+export function leftOutNote(r: PortalInviteReminder): string {
+  return r.leftOutNames.length > 0 ? ` (left out, portal access unticked in the form: ${r.leftOutNames.join(', ')})` : ''
+}
+
+/**
+ * The job step for the moment the to-do is saved. A failed save must read as an ERROR in the step list (staff look there),
+ * never as "created": the to-do — and the "left out" note on it — is then the only place Luca would have learned who needs
+ * a portal account, so a silent failure means nobody is reminded.
+ */
+export function reminderInsertOutcome(insertError: string | null | undefined, r: PortalInviteReminder): { status: 'ok' | 'error'; detail: string } {
+  const names = r.includedNames.join(', ')
+  if (insertError) {
+    return { status: 'error', detail: `The to-do "Create portal accounts…" could NOT be created (${insertError}) — nobody was reminded to create the portal accounts for: ${names}${leftOutNote(r)}` }
+  }
+  return { status: 'ok', detail: `Portal invite reminder created for ${r.includedNames.length} member(s): ${names}${leftOutNote(r)}` }
+}
+
 export function buildPortalInviteReminder(members: NormalizedMember[]): PortalInviteReminder {
   const included: Array<{ m: NormalizedMember; i: number }> = []
   const leftOut: Array<{ m: NormalizedMember; i: number }> = []
