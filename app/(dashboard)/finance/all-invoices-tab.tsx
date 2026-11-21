@@ -18,6 +18,8 @@ import { ConfirmDestructiveDialog } from '@/components/ui/confirm-destructive-di
 import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { LegacyPaymentsPanel, type LegacyPaymentRecord } from './legacy-payments-panel'
 import { EditInvoiceItemsDialog } from './edit-invoice-items-dialog'
+import { BillToDialog } from './bill-to-dialog'
+import { BILL_TO_EDITABLE_STATUSES, lastBillToChangeWasByClient } from '@/lib/invoices/bill-to-change'
 import { KEEP_WHOLE, pinBodyCell, pinHeadCell } from '@/lib/ui/table-cells'
 
 const STATUS_COLORS: Record<string, string> = {
@@ -537,6 +539,11 @@ export function AllInvoicesTab({ invoices, legacyPayments = [], isAdmin = false 
                     Written Off
                   </span>
                 )}
+                {lastBillToChangeWasByClient(inv.notes) && (
+                  <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-sky-100 text-sky-700" title="The client named who pays, on the payment page. Check the Bill to.">
+                    Payer named by client
+                  </span>
+                )}
                 <InvoiceNoteDot note={inv.notes} />
               </div>
               <div className="flex items-center justify-between gap-2">
@@ -697,6 +704,11 @@ export function AllInvoicesTab({ invoices, legacyPayments = [], isAdmin = false 
                         Written Off
                       </span>
                     )}
+                    {lastBillToChangeWasByClient(inv.notes) && (
+                      <span className="ml-1 inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-sky-100 text-sky-700" title="The client named who pays, on the payment page. Check the Bill to.">
+                        Payer named by client
+                      </span>
+                    )}
                     <InvoiceNoteDot note={inv.notes} className="ml-1" />
                     {isPaused(inv) && (
                       <div
@@ -801,6 +813,7 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
   const [isPending, startTransition] = useTransition()
   const [editing, setEditing] = useState(false)
   const [editingItems, setEditingItems] = useState(false)
+  const [billToOpen, setBillToOpen] = useState(false)
   const [voidDialogOpen, setVoidDialogOpen] = useState(false)
   const [reactivateDialogOpen, setReactivateDialogOpen] = useState(false)
   const router = useRouter()
@@ -939,6 +952,9 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
         {status === 'Draft' && (
           <ActionButton onClick={() => setEditingItems(true)} label="Edit Items — change individual line items and the discount" icon={ListPlus} color="text-zinc-500" hoverBg="hover:bg-zinc-100" />
         )}
+        {(BILL_TO_EDITABLE_STATUSES as readonly string[]).includes(status) && (
+          <ActionButton onClick={() => setBillToOpen(true)} label="Bill to — change who this invoice is billed to (the email still goes to the client's own contact)" icon={Building2} color="text-zinc-500" hoverBg="hover:bg-zinc-100" />
+        )}
         {status === 'Paid' && (
           <ActionButton
             onClick={() => {
@@ -974,6 +990,9 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
       )}
       {editingItems && (
         <EditInvoiceItemsDialog invoice={invoice} onClose={() => setEditingItems(false)} />
+      )}
+      {billToOpen && (
+        <BillToDialog invoiceId={invoiceId} invoiceNumber={invoiceNumber} onClose={() => setBillToOpen(false)} />
       )}
       <ConfirmDestructiveDialog
         open={voidDialogOpen}

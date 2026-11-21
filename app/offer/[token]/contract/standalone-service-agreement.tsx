@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { isClientFacingError } from '@/lib/public-forms/signing-failures'
 import { uploadAndSignOffer, submitWireReceipt, type OfferCredential } from '@/lib/offers/offer-api-client'
+import { mountPayerBox } from '@/lib/offers/payer-box'
 import type { Offer } from '@/lib/types/offer'
 import { contractVersionLabel } from '@/lib/offers/contract-version'
 import { euroBankAddress } from '@/lib/offers/bank-address'
@@ -565,6 +566,7 @@ function StandaloneServiceAgreementPage({ offer, token, contractType = 'tax_retu
         let sh = '<div class="contract-success-panel"><div class="contract-success-icon">&#10004;</div>'
         sh += `<h2 style="color:var(--c-green);font-size:18pt;margin-bottom:8px">${multi ? 'Agreements Signed!' : 'Agreement Signed!'}</h2>`
         sh += '<p style="font-size:12pt;margin-bottom:28px;color:var(--c-muted)">Choose how you want to pay:</p>'
+        sh += '<div id="payer-box"></div>'
 
         sh += '<div id="payment-choice">'
         if (hasCard) {
@@ -621,6 +623,7 @@ function StandaloneServiceAgreementPage({ offer, token, contractType = 'tax_retu
         sh += '</div>'
         successEl.innerHTML = sh
         successEl.style.display = 'block'
+        { const payerEl = document.getElementById('payer-box'); if (payerEl) mountPayerBox(payerEl, cred, offer.language) }
 
         // Bank choice handler
         if (hasBank) {
