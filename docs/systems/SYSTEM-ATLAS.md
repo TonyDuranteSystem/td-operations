@@ -202,7 +202,7 @@ _Regenerated 2026-11-21. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
 - [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-11-06)_
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-11-10)_
-- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-11-20)_
+- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-11-21)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-11-21)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-11-12)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-11-20)_
@@ -220,7 +220,7 @@ _Regenerated 2026-11-21. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [payment-plans.md](payment-plans.md) — Payment plans (a setup fee paid in parts) and the Calendar's "Invoices to raise" _(verified 2026-11-20)_
 - [pnl-engine.md](pnl-engine.md) — P&L / Balance Sheet — Excel export engine _(verified 2026-08-27)_
 - [portal-chat-unread.md](portal-chat-unread.md) — Portal Chat — Read/Unread State _(verified 2026-11-19)_
-- [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-11-20)_
+- [portal-chats.md](portal-chats.md) — Portal Chats (staff composer) _(verified 2026-11-21)_
 - [portal-translation.md](portal-translation.md) — Portal Translation (any-language AI translation) _(verified 2026-09-23)_
 - [portal.md](portal.md) — Client Portal _(verified 2026-11-21)_
 - [pwa.md](pwa.md) — PWA (installable app shell — dashboard + portal) _(verified 2026-11-12)_

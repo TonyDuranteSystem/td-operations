@@ -18,6 +18,7 @@ import { accountScopeWithHistory, filterByHistoryCutoff, historyKeepClauses } fr
 import { getHistoryCutoffs, getHistoryView, getOpenedItemIds } from '@/lib/portal/history-cutoff'
 import { resolvePersonalNullInclusion } from '@/lib/portal/chat-scope-server'
 import { callerContactIdAllowed } from '@/lib/portal/chat-contact-param'
+import { hideCredentialLinks } from '@/lib/portal/credential-links'
 import { decideAdminSendScope, isContactLinkedToAccount, resolveAdminReplyContact } from '@/lib/portal/admin-send-scope'
 import { contactThreadOrFilter, multiMemberAccountIds } from '@/lib/portal/thread-scope'
 import { resolveAccountMembersForChat } from '@/lib/portal/addressed-to'
@@ -292,7 +293,10 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  return NextResponse.json({ messages, ...(unreadByTopic ? { unreadByTopic } : {}) })
+  // A team login (a client login with no person) must not read a link that works without a login — a member-info / contact-request form,
+  // an operating-agreement, SS-4, lease or offer page: with the link it could do through the public page what its locked powers forbid
+  // (sign, change the owners). It sees a neutral line instead (lib/portal/credential-links.ts). Owners, members and staff see the link.
+  return NextResponse.json({ messages: isClientUser && !authContactId ? hideCredentialLinks(messages) : messages, ...(unreadByTopic ? { unreadByTopic } : {}) })
 }
 
 export async function POST(request: NextRequest) {
