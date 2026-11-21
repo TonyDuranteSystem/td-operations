@@ -204,7 +204,7 @@ _Regenerated 2026-11-21. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-11-10)_
 - [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-11-21)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-11-21)_
-- [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-11-12)_
+- [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-11-21)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-11-20)_
 - [incoming-payments.md](incoming-payments.md) — Incoming payments (Stripe payments with no label — "Payments to confirm") _(verified 2026-11-15)_
 - [leads.md](leads.md) — Leads — the Leads list (a tab of the Booking page) and the lead page _(verified 2026-11-15)_
@@ -213,7 +213,7 @@ _Regenerated 2026-11-21. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-11-10)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-11-20)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-11-11)_
-- [offers.md](offers.md) — Offers & Contracts _(verified 2026-11-20)_
+- [offers.md](offers.md) — Offers & Contracts _(verified 2026-11-21)_
 - [onboarding.md](onboarding.md) — Onboarding _(verified 2026-11-21)_
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-22)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-11-19)_

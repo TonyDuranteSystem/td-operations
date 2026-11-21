@@ -225,7 +225,17 @@ describe("checksumDefs", () => {
     // That full refresh is still due and is deliberately NOT bundled into this surgical ship.
     // Previous pin 39916b7ce4711871c2416ae118985559 over the same 210.
     //   -> f45bd22b591a92e75fc031d748c8559c
-    expect(checksumDefs(prodConstraints())).toBe("f45bd22b591a92e75fc031d748c8559c")
+    //
+    // FULL REFRESH 2026-11-21 (dev job 709ac868): the file was re-taken from production with the real script
+    // (`npm run snapshot:constraints`) — 210 -> 319, the first full regeneration since the delta edits above.
+    // It is production's OWN digest again: production was made to compute it over its 319 check rules and the
+    // two values were identical (the script's own checksum, then this value from a SELECT on production):
+    //   -> 5f45daf4aa5054ef8f89f154650c7778
+    // The trigger was one rule removed on purpose (billing_entities_entity_type_check, the fixed list of payer
+    // types); a delta edit could no longer be verified against production's digest, so the whole file was
+    // refreshed instead. The ~110 other changes it picked up were hand-applied production DDL that had
+    // accumulated unrecorded since 2026-10-09; the contract check still reports "code and database agree".
+    expect(checksumDefs(prodConstraints())).toBe("5f45daf4aa5054ef8f89f154650c7778")
   })
 })
 
@@ -258,8 +268,10 @@ describe("the committed production snapshot", () => {
     // rather than added, so a full week of hand-applied production DDL accumulated NOTHING
     // unrecorded — which is again what made a delta refresh verified by digest legitimate
     // instead of requiring a full regeneration.
-    expect(prodSnapshotMeta().count).toBe(210)
-    expect(Object.keys(prodConstraints())).toHaveLength(210)
+    // 2026-11-21: 210 -> 319, a FULL regeneration from production (see the digest pin above). One rule fewer than
+    // production's 320 of the day before: the fixed list of payer types was dropped on purpose (dev job 709ac868).
+    expect(prodSnapshotMeta().count).toBe(319)
+    expect(Object.keys(prodConstraints())).toHaveLength(319)
   })
 
   it("PRODUCTION accepts every value the code can write", () => {

@@ -1,0 +1,6 @@
+{
+  "title": "The safety check now knows the payer-type list was removed on purpose",
+  "tag": "behind-the-scenes",
+  "text": "The automatic check that compares what the system expects of the database with what the database really has now has an up-to-date copy of production's rules. The fixed list of company types for payers was removed from production on purpose, and the check no longer treats that as missing. The copy had fallen about 110 rules behind. Nothing changes on any screen.",
+  "points": []
+}
