@@ -3,6 +3,7 @@ import { redirect, notFound } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, ArrowRight, MessageSquare, Layers, PenSquare } from 'lucide-react'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
+import { hideCredentialLinks } from '@/lib/portal/credential-links'
 import { isPersonalDocumentHiddenFrom } from '@/lib/documents/visibility-guard'
 import { isHiddenByHistoryCutoff } from '@/lib/documents/history-cutoff'
 import { getHistoryCutoff } from '@/lib/portal/history-cutoff'
@@ -264,9 +265,12 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
     .not('message', 'ilike', '%<!-- chat-event:%')
     .order('created_at', { ascending: true })
     .limit(100)
-  const messages = (msgData ?? []) as Array<{
+  // A team login (no person behind it) sees a neutral line where a link that works without a login sits (lib/portal/credential-links.ts).
+  const isTeamLogin = !contactId && (user.app_metadata as Record<string, unknown> | undefined)?.kind === 'team_member'
+  const allMessages = (msgData ?? []) as Array<{
     id: string; sender_type: string; sender_name: string | null; message: string; created_at: string | null
   }>
+  const messages = isTeamLogin ? hideCredentialLinks(allMessages) : allMessages
 
   // ── Client Decision Requests for this flow ──
   // Newest first; only the most recent pending one is actionable, the rest are
