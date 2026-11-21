@@ -153,6 +153,32 @@ export async function submitWireReceipt(cred: OfferCredential, file: File): Prom
   await post('/api/offers/wire-receipt', cred, { path })
 }
 
+export interface ClientPayerInput {
+  name: string
+  address?: string
+  country?: string
+  vat_number?: string
+}
+
+export interface ClientPayerView {
+  ok: true
+  /** False before the contract is signed. */
+  available: boolean
+  /** False once the invoice is paid. */
+  editable: boolean
+  payer: { name: string; address: string | null; country: string | null; vat_number: string | null } | null
+}
+
+/** "Someone else is paying" (dev job e62bc2b6): who the invoice is addressed to now. */
+export function fetchClientPayer(cred: OfferCredential): Promise<ClientPayerView> {
+  return post<ClientPayerView>('/api/offers/payer', cred, { action: 'get' })
+}
+
+/** Save the payer the client typed. The server's reason reaches the client on failure (R099). */
+export async function submitClientPayer(cred: OfferCredential, payer: ClientPayerInput): Promise<void> {
+  await post('/api/offers/payer', cred, { action: 'set', payer })
+}
+
 export function createOfferCheckout(cred: OfferCredential): Promise<{ checkoutUrl: string; label: string }> {
   return post('/api/offers/create-checkout', cred)
 }

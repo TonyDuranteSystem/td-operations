@@ -1975,3 +1975,37 @@ export async function unlinkPayment(
     summary: 'Invoice un-matched from its bank transaction — money reversed, state restored',
   })
 }
+
+/**
+ * Change who an invoice is BILLED TO from the Finance screen (dev job e62bc2b6, Antonio 2026-11-21).
+ * The four choices are the offer builder's "Invoice to" choices; the rules live in
+ * lib/invoices/bill-to-change.ts and the single write path in lib/operations/invoice-bill-to.ts.
+ * The invoice email recipient never changes here — it stays the invoice's own contact.
+ */
+export async function changeInvoiceBillTo(
+  paymentId: string,
+  billTo: unknown,
+): Promise<ActionResult<{ invoiceNumber: string | null; from: string; to: string; changed: boolean; accountChanged: boolean }>> {
+  // Staff only: a server action is reachable by id, so do not rely on the page door alone.
+  const { createClient } = await import('@/lib/supabase/server')
+  const { isDashboardUser } = await import('@/lib/auth')
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user || !isDashboardUser(user)) {
+    return { success: false, error: 'Staff access required' }
+  }
+
+  return safeAction(async () => {
+    const { changeInvoiceBillTo: run } = await import('@/lib/operations/invoice-bill-to')
+    const r = await run({ paymentId, billTo, by: 'by staff in Finance' })
+    revalidatePath('/finance')
+    revalidatePath('/accounts')
+    return { invoiceNumber: r.invoiceNumber, from: r.from, to: r.to, changed: r.changed, accountChanged: r.accountChanged }
+  }, {
+    action_type: 'update',
+    table_name: 'payments',
+    record_id: paymentId,
+    summary: 'Invoice "Bill to" changed from the Finance screen',
+    details: { requested: billTo as Record<string, unknown> },
+  })
+}

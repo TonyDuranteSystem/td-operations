@@ -1,0 +1,20 @@
+{
+  "title": "Change who an invoice is billed to in Finance, and let the client say who is paying",
+  "tag": "new",
+  "text": "Finance → All Invoices has a new Bill to button on every draft, sent and paid invoice. Choose the person, a company already in the CRM, one of the person's saved payers, or type a new payer. The invoice keeps its number and amounts, the email still goes to the client who signed, and the change is written in the invoice's internal notes. On the payment page, after signing, the client now sees an optional \"Is someone else paying?\" box: they type who pays and the invoice is addressed to that name. Finance marks it \"Payer named by client\".",
+  "points": [
+    "Finance → All Invoices → the building icon on a row opens Bill to",
+    "A company already in the CRM is found by name; the invoice then moves into that company's records",
+    "The client can only type a payer; only staff can link it to a company in the CRM",
+    "After the invoice is paid, only Finance can change the Bill to"
+  ],
+  "screenshot": "finance-bill-to-edit.png",
+  "stepsTitle": "When someone else pays",
+  "steps": [
+    { "name": "Client signs the offer", "detail": "The invoice is made as a draft", "flag": "auto" },
+    { "name": "Client sees \"Is someone else paying?\"", "detail": "Types who pays: a company, a relative or another client", "flag": "new" },
+    { "name": "The invoice shows that name", "detail": "The email still goes to the person who signed", "flag": "auto" },
+    { "name": "Finance sees \"Payer named by client\"", "detail": "Staff can link it to a company in the CRM", "flag": "new" },
+    { "name": "Finance → Bill to", "detail": "Change it any time, even on a paid invoice", "flag": "new" }
+  ]
+}
