@@ -8,7 +8,7 @@
  */
 
 import { addEntry, deprecateEntry, renameEntry, restoreEntry, type Actor } from "@/lib/catalog/framework"
-import { kindNameKey, kindNameTaken, parseKindRule } from "@/lib/booking/kinds"
+import { kindNameKey, kindNameTaken, kindOfferedToNewPerson, parseKindRule } from "@/lib/booking/kinds"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic service client
 type Db = any
@@ -22,6 +22,8 @@ export interface KindDto {
   /** false = the kind has no usable rule ("needs setup") and cannot be used for a link */
   ready: boolean
   sortOrder: number
+  /** false = not offered when the link is for someone new (Client, People); the maker hides it there and the server refuses it */
+  forNewPerson: boolean
 }
 
 const MAX_NAME = 40
@@ -66,7 +68,7 @@ export async function listKinds(db: Db): Promise<{ ok: true; kinds: KindDto[] } 
   const kinds = all.rows
     .map((r): KindDto => {
       const p = parseKindRule(r.metadata)
-      return { slug: r.slug, name: r.display_name, status: r.status === "active" ? "active" : "retired", ready: p.ok, sortOrder: p.ok ? p.sortOrder : 1000 }
+      return { slug: r.slug, name: r.display_name, status: r.status === "active" ? "active" : "retired", ready: p.ok, sortOrder: p.ok ? p.sortOrder : 1000, forNewPerson: kindOfferedToNewPerson(r.metadata) }
     })
     .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name))
   return { ok: true, kinds }
@@ -78,7 +80,7 @@ const actorOf = (userId: string | null): Actor => ({ kind: "admin_api", userId }
 
 function toDto(row: Row): KindDto {
   const p = parseKindRule(row.metadata)
-  return { slug: row.slug, name: row.display_name, status: row.status === "active" ? "active" : "retired", ready: p.ok, sortOrder: p.ok ? p.sortOrder : 1000 }
+  return { slug: row.slug, name: row.display_name, status: row.status === "active" ? "active" : "retired", ready: p.ok, sortOrder: p.ok ? p.sortOrder : 1000, forNewPerson: kindOfferedToNewPerson(row.metadata) }
 }
 
 export async function addKind(db: Db, input: { name: unknown; choice: unknown }, userId: string | null): Promise<KindResult> {

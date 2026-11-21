@@ -63,7 +63,7 @@ export function LinkMaker({
   /** the page is turned off: the whole maker is visibly inactive */
   off: boolean
 }) {
-  const [who, setWho] = useState<"old" | "new">("old")
+  const [who, setWho] = useState<"old" | "new" | "people">("old")
   const [query, setQuery] = useState("")
   const [hits, setHits] = useState<PersonHit[]>([])
   const [searchError, setSearchError] = useState<string | null>(null)
@@ -105,13 +105,28 @@ export function LinkMaker({
   const payment = useMemo(() => (paid ? { amount, currency, label: payLabel, confirmed } : null), [paid, amount, currency, payLabel, confirmed])
   const priceMissing = paid && amount.trim() === ""
 
-  const activeKinds = useMemo(() => (kinds ?? []).filter((k) => k.status === "active"), [kinds])
+  // "Someone new" cannot already be a Client (or a People contact): those kinds are hidden there, and the server refuses them too
+  const activeKinds = useMemo(() => (kinds ?? []).filter((k) => k.status === "active" && (who !== "new" || k.forNewPerson)), [kinds, who])
   const kindOk = activeKinds.some((k) => k.slug === kindSlug && k.ready)
 
   const personRef = useMemo(() => {
     if (who === "old") return picked ? { type: picked.type, id: picked.id } : null
+    if (who === "people") return newName.trim() && newEmail.trim() ? { type: "new_contact" as const, name: newName, email: newEmail } : null
     return { type: "new" as const, name: newName, email: newEmail }
   }, [who, picked, newName, newEmail])
+
+  const chooseWho = (next: "old" | "new" | "people") => {
+    setWho(next)
+    const all = (kinds ?? []).filter((k) => k.status === "active" && k.ready)
+    if (next === "people") {
+      const people = all.find((k) => k.slug === "people")
+      if (people) { setKindSlug(people.slug); setKindHint("People is just a contact: no lead and no company. The call is saved on their page.") }
+      else setKindHint("The People kind is not available here (retired, or not set up yet). Pick another kind that saves the call on their page.")
+    } else if (next === "new" && !all.some((k) => k.slug === kindSlug && k.forNewPerson)) {
+      setKindSlug("")
+      setKindHint("")
+    }
+  }
 
   // what each Calendly call type asks the booker, read from Calendly once when the maker opens
   useEffect(() => {
@@ -166,7 +181,8 @@ export function LinkMaker({
 
   const pickPerson = (h: PersonHit) => {
     setPicked({ type: h.type, id: h.id, name: h.name, sub: h.sub, badge: h.badge, suggestedKind: h.suggestedKind })
-    const suggestion = activeKinds.find((k) => k.slug === h.suggestedKind && k.ready)
+    // the People kind may not exist yet on this database: a bare contact is then offered Lead, as before
+    const suggestion = activeKinds.find((k) => k.slug === h.suggestedKind && k.ready) ?? (h.suggestedKind === "people" ? activeKinds.find((k) => k.slug === "lead" && k.ready) : undefined)
     if (suggestion) {
       setKindSlug(suggestion.slug)
       setKindHint(`Suggested from the record: ${h.name} is a ${h.badge.toLowerCase()}. Change it if this call is something else.`)
@@ -271,8 +287,8 @@ export function LinkMaker({
         <div>
           <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-zinc-500">Who is it for?</span>
           <div className="inline-flex overflow-hidden rounded-md border" role="group" aria-label="Who">
-            {([["old", "Someone in the system"], ["new", "Someone new"]] as const).map(([k, label]) => (
-              <button key={k} type="button" aria-pressed={who === k} onClick={() => setWho(k)} className={`px-3 py-1.5 text-sm font-medium ${who === k ? "bg-zinc-900 text-white" : "text-zinc-600 hover:bg-zinc-50"}`}>{label}</button>
+            {([["old", "Someone in the system"], ["new", "Someone new"], ["people", "People"]] as const).map(([k, label]) => (
+              <button key={k} type="button" aria-pressed={who === k} onClick={() => chooseWho(k)} className={`px-3 py-1.5 text-sm font-medium ${who === k ? "bg-zinc-900 text-white" : "text-zinc-600 hover:bg-zinc-50"}`}>{label}</button>
             ))}
           </div>
           {who === "old" ? (
@@ -289,16 +305,20 @@ export function LinkMaker({
                     <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${BADGE_CLASS[h.badge] ?? BADGE_CLASS.Contact}`}>{h.badge}</span>
                   </button>
                 ))}
-                {query.trim().length >= 2 && hits.length === 0 && !searchError && <p className="text-xs text-zinc-500">No one found. Use &quot;Someone new&quot; for a person who is not in the system.</p>}
+                {query.trim().length >= 2 && hits.length === 0 && !searchError && <p className="text-xs text-zinc-500">No one found. Use &quot;Someone new&quot; for a person who may become a lead, or &quot;People&quot; for a person who is just a contact.</p>}
               </div>
             </div>
           ) : (
             <div>
               <div className="mt-2 grid grid-cols-2 gap-2">
-                <input type="text" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Name (optional)" aria-label="Name" className="rounded-md border px-3 py-2 text-sm" data-testid="new-name" />
-                <input type="email" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} placeholder="Email (optional)" aria-label="Email" className="rounded-md border px-3 py-2 text-sm" data-testid="new-email" />
+                <input type="text" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder={who === "people" ? "Name" : "Name (optional)"} aria-label="Name" className="rounded-md border px-3 py-2 text-sm" data-testid="new-name" />
+                <input type="email" value={newEmail} onChange={(e) => setNewEmail(e.target.value)} placeholder={who === "people" ? "Email" : "Email (optional)"} aria-label="Email" className="rounded-md border px-3 py-2 text-sm" data-testid="new-email" />
               </div>
-              <p className="mt-1.5 text-xs text-zinc-500">Leave them empty and the person types their own details when they book.</p>
+              <p className="mt-1.5 text-xs text-zinc-500" data-testid="who-help">
+                {who === "people"
+                  ? "A person who is just a contact: no lead, no company. Write their name and email. When you make the link they are saved as a contact (or found, if they already are one) and the call is saved on their page."
+                  : "Leave them empty and the person types their own details when they book."}
+              </p>
             </div>
           )}
         </div>
