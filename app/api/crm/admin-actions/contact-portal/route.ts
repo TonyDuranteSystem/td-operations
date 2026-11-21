@@ -447,6 +447,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'account_id required for revoke_access' }, { status: 400 })
     }
 
+    // The last person who can open the company cannot be revoked while others on it carry "no portal access" (QA 21 Nov 2026).
+    const { wouldLeaveOnlyMarkedPeople, REMOVAL_LEAVES_ONLY_MARKED_MESSAGE } = await import('@/lib/members/removal-guard')
+    if (await wouldLeaveOnlyMarkedPeople(account_id, contact_id)) {
+      return NextResponse.json({ error: REMOVAL_LEAVES_ONLY_MARKED_MESSAGE }, { status: 409 })
+    }
+
     // Storage check / Calendar: remember who is leaving BEFORE the link goes (never blocks the revoke).
     try {
       const { recordPersonLeaving } = await import('@/lib/crm-store/storage-check')

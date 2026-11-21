@@ -393,9 +393,11 @@ export async function fileRenewal(
 
       // 8. Portal notification per SOP — only for portal-active clients
       if (account.portal_tier === "active") {
+        // First person who can open the company: a link carrying the "no portal access" mark is never picked (dev job beb43385).
         const { data: links } = await supabaseAdmin
           .from("account_contacts")
           .select("contact_id")
+          .is("access_revoked_at", null)
           .eq("account_id", account.id)
           .limit(1)
         const primaryContactId = links?.[0]?.contact_id ?? null

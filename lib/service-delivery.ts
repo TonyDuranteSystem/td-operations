@@ -825,6 +825,13 @@ export async function advanceServiceDelivery(
     }
   }
 
+  // A stage notice about a company never names a person whose link to it carries the "no portal access" mark (the company is hidden from
+  // their portal): it goes to the company's open members instead, so it is redirected, not lost (Bug Hunter, QA 21 Nov 2026, dev job beb43385).
+  const stageContactId: string | null =
+    delivery.contact_id && delivery.account_id && (await (await import("@/lib/members/marked-on-company")).isMarkedOnCompany(delivery.account_id, delivery.contact_id))
+      ? null
+      : (delivery.contact_id ?? null)
+
   // 8. Portal notification for client. Accept either account-scoped SDs or
   // contact-only SDs (Phase 1 ITIN rule, 2026-05-11) so ITIN advances notify
   // the client too. Suppressed when skip_notify (bulk reconcile/backfill).
@@ -849,10 +856,10 @@ export async function advanceServiceDelivery(
       // would email have a device" — for a company-only case that is the company's one email address, NOT "any device of the company"
       // (lib/portal/push-presence.ts). It never throws: any failure means "no app", and the bell + email go out as before.
       const { stageNoticeRecipientHasApp } = await import("@/lib/portal/push-presence")
-      const hasApp = await stageNoticeRecipientHasApp({ contactId: delivery.contact_id ?? null, accountId: delivery.account_id ?? null })
+      const hasApp = await stageNoticeRecipientHasApp({ contactId: stageContactId, accountId: delivery.account_id ?? null })
       await createPortalNotification({
         account_id: delivery.account_id ?? undefined,
-        contact_id: delivery.contact_id ?? undefined,
+        contact_id: stageContactId ?? undefined,
         type: "service",
         title,
         body,
@@ -917,7 +924,7 @@ export async function advanceServiceDelivery(
       const { notifyClientOfStageAdvance } = await import("@/lib/portal/notifications")
       const result = await notifyClientOfStageAdvance({
         account_id: delivery.account_id ?? undefined,
-        contact_id: delivery.contact_id ?? undefined,
+        contact_id: stageContactId ?? undefined,
         service_name: delivery.service_name || delivery.service_type,
         stage_name: usesClientStageWording(delivery.service_type)
           ? (await clientStageLabelFor(targetStage, delivery.contact_id ?? null)).label

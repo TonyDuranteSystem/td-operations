@@ -181,10 +181,12 @@ export async function onFirstInstallmentPaid(
     return { steps }
   }
 
-  // Get primary contact
+  // Get primary contact — the first person who can open the company; a link carrying the "no portal access" mark is never picked
+  // (dev job beb43385).
   const { data: contactLink } = await supabaseAdmin
     .from("account_contacts")
     .select("contact_id")
+    .is("access_revoked_at", null)
     .eq("account_id", accountId)
     .limit(1)
     .maybeSingle()

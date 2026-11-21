@@ -752,7 +752,7 @@ export async function giveMemberPortalAccess(accountId: string, contactId: strin
   if (!user || !isStaffUser(user)) return { success: false, error: 'Not allowed.' }
   if (!(await memberPortalAccessOn({ accountId }))) return { success: false, error: 'The portal-access tick is not switched on for this company.' }
   return safeAction(async () => {
-    const r = await givePortalAccess({ accountId, contactId, canCreateLogin: isAdmin(user) })
+    const r = await givePortalAccess({ accountId, contactId, canCreateLogin: isAdmin(user), staffUserId: user.id })
     if (!r.success) throw new Error(r.message)
     revalidatePath(`/accounts/${accountId}`)
     return r
@@ -864,6 +864,9 @@ export async function unlinkContactFromAccount(
 ): Promise<ActionResult> {
   return safeAction(async () => {
     const supabase = createClient()
+    // The last person who can open the company cannot be unlinked while others on it carry "no portal access" (QA 21 Nov 2026).
+    const { wouldLeaveOnlyMarkedPeople, REMOVAL_LEAVES_ONLY_MARKED_MESSAGE } = await import('@/lib/members/removal-guard')
+    if (await wouldLeaveOnlyMarkedPeople(accountId, contactId)) throw new Error(REMOVAL_LEAVES_ONLY_MARKED_MESSAGE)
     // Storage check: remember who is leaving BEFORE the link goes (afterwards nothing says who was there). Never blocks the unlink.
     try {
       const { data: who } = await supabaseAdmin.from('contacts').select('full_name').eq('id', contactId).maybeSingle()
