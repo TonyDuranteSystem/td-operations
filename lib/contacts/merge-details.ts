@@ -60,7 +60,7 @@ export function isEmptyValue(v: unknown): boolean {
 
 /** Two writings of the same value compare equal: case, spaces and punctuation are ignored (same rule as the database). */
 export function normalizeForCompare(v: unknown): string {
-  return String(v ?? "").trim().replace(/[^\p{L}\p{N}]/gu, "").toLowerCase()
+  return String(v ?? "").trim().replace(/[\s!-/:-@[-`{-~]/g, "")  // whitespace and ASCII punctuation (no unicode flag: the build target is ES5).toLowerCase()
 }
 
 function text(v: unknown): string | null {
