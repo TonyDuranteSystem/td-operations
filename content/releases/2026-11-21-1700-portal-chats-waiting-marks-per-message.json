@@ -1,0 +1,26 @@
+{
+  "title": "Portal Chats: Waiting marks now sit under every message, plus \"Waiting on us\"",
+  "tag": "improved",
+  "text": "The hourglass moved out of the message box. It now sits under every message, next to the small smiley, so you can mark a conversation \"Waiting for client\" at any moment, even long after you sent your message. A second button next to it marks the conversation \"Waiting on us\" when the client is waiting for your answer. Each has its own tab. Waiting on us ends by itself when the team writes; it never sends a reminder to the client.",
+  "points": [
+    "Hourglass under any message: Waiting for client (still reminds the client after 3 days)",
+    "New hand button beside it: Waiting on us, with its own tab",
+    "One mark per conversation: setting one replaces the other"
+  ],
+  "stepsTitle": "Marking a conversation",
+  "steps": [
+    {
+      "name": "Open a conversation",
+      "detail": "Look under any message, next to the small smiley."
+    },
+    {
+      "name": "Click the hourglass or the hand",
+      "detail": "Hourglass = waiting for the client. Hand = the client is waiting for us.",
+      "flag": "new"
+    },
+    {
+      "name": "Find it under its tab",
+      "detail": "Waiting or Waiting on us, longest wait first, with the days counted."
+    }
+  ]
+}

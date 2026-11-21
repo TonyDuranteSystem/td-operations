@@ -26,8 +26,8 @@ const thread = (over: Partial<FilterableThread> = {}): FilterableThread => ({
 
 describe('chips', () => {
   it('are in the order Antonio asked for', () => {
-    expect(LIST_FILTER_CHIPS.map(([, label]) => label)).toEqual(['All', 'Unread', "What's New", 'Chats', 'Pinned', 'Waiting'])
-    expect(LIST_FILTER_CHIPS.map(([key]) => key)).toEqual(['all', 'unread', 'whatsnew', 'chats', 'pinned', 'waiting'])
+    expect(LIST_FILTER_CHIPS.map(([, label]) => label)).toEqual(['All', 'Unread', "What's New", 'Chats', 'Pinned', 'Waiting', 'Waiting on us'])
+    expect(LIST_FILTER_CHIPS.map(([key]) => key)).toEqual(['all', 'unread', 'whatsnew', 'chats', 'pinned', 'waiting', 'waitingus'])
   })
 
   it('open on Chats, not All', () => {
@@ -223,5 +223,19 @@ describe('Waiting chip (2026-11-21)', () => {
     const w = thread({ waiting_since: '2026-11-18T10:00:00Z' })
     expect(matchesListFilter(w, 'all')).toBe(true)
     expect(matchesListFilter(w, 'chats')).toBe(true)
+  })
+})
+
+describe('Waiting on us chip (2026-11-21)', () => {
+  it('lists only conversations marked waiting on us, longest-waiting first, apart from the client-waiting chip', () => {
+    const a = thread({ account_id: 'a', waiting_us_since: '2026-11-18T10:00:00Z' })
+    const b = thread({ account_id: 'b', waiting_us_since: '2026-11-15T10:00:00Z' })
+    const c = thread({ account_id: 'c', waiting_since: '2026-11-16T10:00:00Z' })
+    const d = thread({ account_id: 'd' })
+    const list = [a, b, c, d]
+    const us = list.filter(x => matchesListFilter(x, 'waitingus'))
+    expect(us.map(x => x.account_id)).toEqual(['a', 'b'])
+    expect(orderThreadsForChip(us, 'waitingus').map(x => x.account_id)).toEqual(['b', 'a'])
+    expect(list.filter(x => matchesListFilter(x, 'waiting')).map(x => x.account_id)).toEqual(['c'])
   })
 })
