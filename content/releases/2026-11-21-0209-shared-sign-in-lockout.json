@@ -1,0 +1,6 @@
+{
+  "title": "Team login lockout now shared by all servers",
+  "tag": "behind-the-scenes",
+  "text": "The lockout for wrong passwords on a team login's sign-in used to be counted separately on each of our servers, so a burst of guesses sent at the same moment was only capped per server. The count now lives in one shared place in our database, so every server sees the same tries and the limits hold exactly, even for simultaneous guesses, and a lock also survives a server restart. If the shared count is ever unavailable, sign-in keeps working and falls back to the old per-server count. Colleagues who sign in normally notice nothing.",
+  "points": []
+}
