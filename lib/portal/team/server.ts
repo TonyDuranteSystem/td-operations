@@ -12,6 +12,7 @@ import { isAccountAdmin } from '@/lib/portal/team/account-admin'
 import { provisionTeammate, type TeammateInput, type ProvisionDeps } from '@/lib/portal/team/provision'
 import { normalizeCapabilities } from '@/lib/portal/team/capabilities'
 import { generatePassword, escapeLikePattern } from '@/lib/portal/team/credentials'
+import { canonicalTeamUsername } from '@/lib/portal/team/login-guard'
 import { recordTeamEvent, recordTeamEventBestEffort, powersGrew, type TeamActor } from '@/lib/portal/team/events'
 import { enqueueTeamNotices } from '@/lib/portal/team/notify'
 import type { Confirmation } from '@/lib/portal/team/confirm'
@@ -422,14 +423,24 @@ export async function resetTeammatePassword(id: string, accountId: string, actor
  * Returns null if not found (caller returns a generic error — don't reveal existence).
  */
 export async function resolveAuthEmailForUsername(username: string): Promise<string | null> {
-  const uname = (username ?? '').trim()
+  return (await resolveTeamLoginByUsername(username))?.email ?? null
+}
+
+/**
+ * The active team login with this EXACT username, and its hidden sign-in address. The username must be the one allowed form
+ * (login-guard.ts): anything else — a `*` or `%` that a pattern search would read as "anything", a space — finds nobody and never reaches the
+ * database, so one login can only ever be found by its own spelling (a lower-case match, nothing wider).
+ */
+export async function resolveTeamLoginByUsername(username: string): Promise<{ teamMemberId: string; email: string } | null> {
+  const uname = canonicalTeamUsername(username)
   if (!uname) return null
   const { data: row } = await sb()
     .from('portal_team_members')
-    .select('auth_user_id, status')
+    .select('id, auth_user_id, status')
     .ilike('username', escapeLikePattern(uname))
     .maybeSingle()
   if (!row || row.status !== 'active') return null
   const { data } = await supabaseAdmin.auth.admin.getUserById(row.auth_user_id)
-  return data?.user?.email ?? null
+  const email = data?.user?.email
+  return email ? { teamMemberId: row.id as string, email } : null
 }
