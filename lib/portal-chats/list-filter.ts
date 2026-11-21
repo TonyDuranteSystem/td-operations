@@ -1,7 +1,7 @@
 /**
  * Portal Chats conversation-list filter chips (staff CRM, left list).
  *
- * Chips, in order: All · Unread · What's New · Chats · Pinned. The list opens on "Chats".
+ * Chips, in order: All · Unread · What's New · Chats · Pinned · Waiting. The list opens on "Chats".
  *
  *   - All       every conversation.
  *   - Unread    the client wrote and nobody on the team has read it yet.
@@ -12,6 +12,8 @@
  *               notices (sender_type 'system') is left out. Pinned ones are also under Pinned and ones with an
  *               unhandled client action also under What's New.
  *   - Pinned    the manually pinned conversations (shared by all staff).
+ *   - Waiting   conversations staff marked "waiting for client" where the client has not written since (2026-11-21).
+ *               Longest-waiting first.
  *
  * "Chats" depends on a flag the threads route computes (`has_people_messages`). If that flag is
  * missing — an old API answer, or the database function is not installed yet — the chip keeps the
@@ -20,7 +22,7 @@
  */
 import { sortPortalThreads, whatsNewCountForThread, type SortableThread, type WhatsNewCounts } from "./sort-threads"
 
-export type ListFilter = "all" | "unread" | "whatsnew" | "chats" | "pinned"
+export type ListFilter = "all" | "unread" | "whatsnew" | "chats" | "pinned" | "waiting"
 
 /** The chip a fresh visit to the list opens on. */
 export const DEFAULT_LIST_FILTER: ListFilter = "chats"
@@ -32,11 +34,14 @@ export const LIST_FILTER_CHIPS: ReadonlyArray<readonly [ListFilter, string]> = [
   ["whatsnew", "What's New"],
   ["chats", "Chats"],
   ["pinned", "Pinned"],
+  ["waiting", "Waiting"],
 ]
 
 export interface FilterableThread extends SortableThread {
   /** True when at least one non-deleted message was written by the client or the team. Undefined = unknown. */
   has_people_messages?: boolean
+  /** When staff marked this conversation "waiting for client" and the client has not answered since (ISO). null/undefined = not waiting. */
+  waiting_since?: string | null
 }
 
 /** Does this conversation belong under the given chip? (Search is applied separately by the page.) */
@@ -58,6 +63,8 @@ export function matchesListFilter(
       return thread.has_people_messages !== false
     case "pinned":
       return thread.is_pinned === true
+    case "waiting":
+      return !!thread.waiting_since
     default:
       return true
   }
@@ -69,6 +76,8 @@ export function matchesListFilter(
  * the usual order (pinned first, then what needs a look, then newest first).
  */
 export function orderThreadsForChip<T extends FilterableThread>(threads: T[], filter: ListFilter, counts?: WhatsNewCounts | null): T[] {
+  // Waiting: the conversation that has waited LONGEST (oldest mark) first.
+  if (filter === "waiting") return [...threads].sort((a, b) => (a.waiting_since ?? "").localeCompare(b.waiting_since ?? ""))
   if (filter === "chats") return [...threads].sort((a, b) => (b.last_message_at ?? "").localeCompare(a.last_message_at ?? ""))
   return sortPortalThreads(threads, counts)
 }

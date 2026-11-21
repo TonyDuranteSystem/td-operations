@@ -225,6 +225,10 @@
       "schedule": "0 13 * * *"
     },
     {
+      "path": "/api/cron/waiting-for-client-reminders",
+      "schedule": "0 13 * * *"
+    },
+    {
       "path": "/api/cron/irs-fx-rates",
       "schedule": "0 7 2 * *"
     },

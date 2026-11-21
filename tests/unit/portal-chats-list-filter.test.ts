@@ -26,8 +26,8 @@ const thread = (over: Partial<FilterableThread> = {}): FilterableThread => ({
 
 describe('chips', () => {
   it('are in the order Antonio asked for', () => {
-    expect(LIST_FILTER_CHIPS.map(([, label]) => label)).toEqual(['All', 'Unread', "What's New", 'Chats', 'Pinned'])
-    expect(LIST_FILTER_CHIPS.map(([key]) => key)).toEqual(['all', 'unread', 'whatsnew', 'chats', 'pinned'])
+    expect(LIST_FILTER_CHIPS.map(([, label]) => label)).toEqual(['All', 'Unread', "What's New", 'Chats', 'Pinned', 'Waiting'])
+    expect(LIST_FILTER_CHIPS.map(([key]) => key)).toEqual(['all', 'unread', 'whatsnew', 'chats', 'pinned', 'waiting'])
   })
 
   it('open on Chats, not All', () => {
@@ -206,5 +206,22 @@ describe('wiring (source guards — the project has no jsdom)', () => {
   it('the migration has an UNDO file', () => {
     const undo = readFileSync('scripts/migrations/20261110-1200-portal-chat-people-thread-keys.UNDO.sql', 'utf8')
     expect(undo).toContain('DROP FUNCTION IF EXISTS public.get_portal_chat_people_thread_keys()')
+  })
+})
+
+describe('Waiting chip (2026-11-21)', () => {
+  it('lists only conversations marked waiting, longest-waiting first', () => {
+    const a = thread({ account_id: 'a', waiting_since: '2026-11-18T10:00:00Z' })
+    const b = thread({ account_id: 'b', waiting_since: '2026-11-15T10:00:00Z' })
+    const c = thread({ account_id: 'c', waiting_since: null })
+    const d = thread({ account_id: 'd' })
+    const list = [a, b, c, d]
+    expect(list.filter(x => matchesListFilter(x, 'waiting')).map(x => x.account_id)).toEqual(['a', 'b'])
+    expect(orderThreadsForChip(list.filter(x => matchesListFilter(x, 'waiting')), 'waiting').map(x => x.account_id)).toEqual(['b', 'a'])
+  })
+  it('a waiting conversation also stays in All and Chats', () => {
+    const w = thread({ waiting_since: '2026-11-18T10:00:00Z' })
+    expect(matchesListFilter(w, 'all')).toBe(true)
+    expect(matchesListFilter(w, 'chats')).toBe(true)
   })
 })
