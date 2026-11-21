@@ -37,6 +37,7 @@ export async function runWaitingReminderSweep(now: Date = new Date()): Promise<W
   const { data: rows, error } = await (supabaseAdmin as any)
     .from('portal_chat_waiting_threads')
     .select('id, account_id, contact_id, marked_at, reminders_sent, last_reminder_at')
+    .eq('kind', 'client') // "waiting on us" marks never remind the client — the move is ours
     .order('marked_at', { ascending: true })
     .limit(SWEEP_LIMIT) as { data: WaitRow[] | null; error: { message: string } | null }
   if (error) {

@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import { useSelectionHistory } from '@/lib/hooks/use-selection-history'
 import Link from 'next/link'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, Pencil, FileSignature, Landmark, Calculator, Home, XCircle, MessageCircle, ChevronDown, Pin, Mail, StickyNote, Link2, Languages, Lightbulb, FolderInput } from 'lucide-react'
+import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, Pencil, FileSignature, Landmark, Calculator, Home, XCircle, MessageCircle, ChevronDown, Pin, Mail, StickyNote, Link2, Languages, Lightbulb, FolderInput, HandHelping } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { cn } from '@/lib/utils'
 import { SwipeRow } from '@/components/portal-chats/swipe-row'
@@ -128,6 +128,8 @@ interface ChatThread {
   has_people_messages?: boolean
   /** Marked "waiting for client" by staff and the client has not written since (ISO of the mark). null = not waiting. */
   waiting_since?: string | null
+  /** Marked "waiting on us" (the client waits for the team) and the team has not written since (ISO). null = not. */
+  waiting_us_since?: string | null
   /** Active service deliveries for this account — sourced live from service_deliveries, fully dynamic */
   active_services: { service_type: string; stage: string | null }[]
   /** Overdue invoices owed to TD — account-level thread's account, or contact-direct invoices. */
@@ -437,8 +439,6 @@ export default function PortalChatsPage() {
   // SEND target: sends use selectedCompanyId (explicit only).
   const panelCompanyId = selectedCompanyId ?? selectedThreadCompanies.find(c => !c.closed)?.id ?? null
   const [replyText, setReplyText] = useState('')
-  // "Waiting for client" tick beside the emoji button: when on, the message goes out and the conversation is marked waiting.
-  const [markWaiting, setMarkWaiting] = useState(false)
   const [notificationsEnabled, setNotificationsEnabled] = useState(false)
   const [aiSuggestion, setAiSuggestion] = useState('')
   const [aiLoading, setAiLoading] = useState(false)
@@ -1677,13 +1677,14 @@ export default function PortalChatsPage() {
     },
   })
 
-  // Mark / clear "waiting for client" on a conversation (staff, shared; ends by itself when the client writes).
+  // Mark / clear "waiting for client" or "waiting on us" on a conversation (staff, shared; the first ends by itself when the client
+  // writes, the second when the team writes). One mark per conversation: a new mark replaces the old one.
   const waitingThreadMutation = useMutation({
-    mutationFn: async ({ account_id, contact_id, waiting }: { account_id: string | null; contact_id: string | null; waiting: boolean }) => {
+    mutationFn: async ({ account_id, contact_id, waiting, kind }: { account_id: string | null; contact_id: string | null; waiting: boolean; kind?: 'client' | 'us' }) => {
       const res = await fetch('/api/portal/chat/waiting-thread', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ account_id, contact_id, waiting }),
+        body: JSON.stringify({ account_id, contact_id, waiting, kind: kind ?? 'client' }),
       })
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
@@ -1691,9 +1692,15 @@ export default function PortalChatsPage() {
       }
       return res.json()
     },
-    onSuccess: (_d, vars) => {
+    onSuccess: (d, vars) => {
+      // Show the new mark at once (the list refetch below takes a few seconds): one mark per conversation, so the other kind is cleared.
+      const since: string | null = vars.waiting ? (d?.waiting_since ?? new Date().toISOString()) : null
+      queryClient.setQueryData<ChatThread[]>(['portal-chat-threads'], old => old?.map(t =>
+        (vars.account_id ? t.account_id === vars.account_id : t.contact_id === vars.contact_id)
+          ? { ...t, waiting_since: vars.kind === 'us' ? null : since, waiting_us_since: vars.kind === 'us' ? since : null }
+          : t))
       queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
-      toast.success(vars.waiting ? 'Marked: waiting for client' : 'No longer waiting for client')
+      toast.success(!vars.waiting ? 'Waiting mark cleared' : vars.kind === 'us' ? 'Marked: waiting on us' : 'Marked: waiting for client')
     },
     onError: (err) => {
       toast.error(err instanceof Error && err.message ? err.message : 'Failed to update "Waiting for client"')
@@ -2096,7 +2103,7 @@ export default function PortalChatsPage() {
     // from live component state — see the capture comment in handleSend for
     // why (an attachment upload is a real await; live state can point at a
     // different client/company/topic by the time this actually runs).
-    mutationFn: async ({ message, reply_to_id, attachments, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToMemberId, targetAddressedToCompany }: { message: string; reply_to_id?: string; attachments?: { url: string; name: string }[]; targetAccountId: string | null; targetContactId: string | null; targetCompanyId: string | null; targetTopic: string | null; targetAddressedToMemberId: string | null; targetAddressedToCompany: boolean; waiting?: boolean }) => {
+    mutationFn: async ({ message, reply_to_id, attachments, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToMemberId, targetAddressedToCompany }: { message: string; reply_to_id?: string; attachments?: { url: string; name: string }[]; targetAccountId: string | null; targetContactId: string | null; targetCompanyId: string | null; targetTopic: string | null; targetAddressedToMemberId: string | null; targetAddressedToCompany: boolean}) => {
       const res = await fetch('/api/portal/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2178,24 +2185,6 @@ export default function PortalChatsPage() {
           body: JSON.stringify(readBody),
         })
       } catch { /* non-fatal */ }
-      // The "Waiting for client" tick was on: mark this conversation now that the message is out. A failure is
-      // shown (the message itself did go), so staff can mark it by hand from the list.
-      if (variables.waiting) {
-        setMarkWaiting(false)
-        try {
-          const wr = await fetch('/api/portal/chat/waiting-thread', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ account_id: variables.targetAccountId, contact_id: variables.targetAccountId ? null : variables.targetContactId, waiting: true }),
-          })
-          if (!wr.ok) {
-            const d = await wr.json().catch(() => ({}))
-            throw new Error(d.error || 'unknown error')
-          }
-        } catch (e) {
-          toast.error(`Message sent, but it could not be marked "waiting for client": ${e instanceof Error ? e.message : 'please try again'}`)
-        }
-      }
       queryClient.invalidateQueries({ queryKey: ['portal-chat-messages', targetKey] })
       queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
     },
@@ -2210,9 +2199,6 @@ export default function PortalChatsPage() {
       toast.error(err instanceof Error && err.message ? err.message : 'Failed to send — please try again.')
     },
   })
-
-  // The "Waiting for client" tick belongs to the conversation it was ticked in — never carry it to another client.
-  useEffect(() => { setMarkWaiting(false) }, [selectedAccountId, selectedContactId])
 
   // Reset topic when thread changes. The very first run (page load / refresh) keeps the
   // topic restored from `?topic=`; only a REAL change of conversation resets it.
@@ -2563,7 +2549,7 @@ export default function PortalChatsPage() {
             contactId: targetAccountId ? undefined : targetContactId,
           })
         ))
-        sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, attachments: uploaded, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToMemberId, targetAddressedToCompany, waiting: markWaiting })
+        sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, attachments: uploaded, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToMemberId, targetAddressedToCompany })
       } catch (err) {
         toast.error(err instanceof Error && err.message ? err.message : 'Failed to upload file')
       } finally {
@@ -2571,7 +2557,7 @@ export default function PortalChatsPage() {
         if (adminFileRef.current) adminFileRef.current.value = ''
       }
     } else {
-      sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToMemberId, targetAddressedToCompany, waiting: markWaiting })
+      sendMutation.mutate({ message: replyText.trim(), reply_to_id: replyToMsg?.id, targetAccountId, targetContactId, targetCompanyId, targetTopic, targetAddressedToMemberId, targetAddressedToCompany })
     }
   }
 
@@ -2987,23 +2973,38 @@ export default function PortalChatsPage() {
                       </div>
                     </div>
                     <div className="flex items-center gap-1.5 ml-2 shrink-0">
-                      {/* Waiting for client (staff, shared): amber + days when waiting; click toggles. Ends by itself when the client writes. */}
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        onClick={e => {
-                          e.stopPropagation()
-                          waitingThreadMutation.mutate({ account_id: thread.account_id, contact_id: thread.contact_id, waiting: !thread.waiting_since })
-                        }}
-                        title={thread.waiting_since ? `Waiting for client — ${daysWaiting(thread.waiting_since, new Date())} day(s). Click to clear` : 'Mark as waiting for client'}
-                        className={cn(
-                          'shrink-0 rounded p-0.5 cursor-pointer hover:bg-zinc-200 inline-flex items-center gap-0.5',
-                          thread.waiting_since ? 'text-amber-600' : 'text-zinc-300 hover:text-zinc-500'
-                        )}
-                      >
-                        <Hourglass className="h-3.5 w-3.5" />
-                        {thread.waiting_since && <span className="text-[10px] font-medium">{daysWaiting(thread.waiting_since, new Date())}d</span>}
-                      </span>
+                      {/* Waiting marks (staff, shared): amber hourglass + days = waiting for the client; rose hand + days = waiting on us.
+                          Shown only while a mark is on; the marks themselves are set under each message. Click clears. */}
+                      {thread.waiting_since && (
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={e => {
+                            e.stopPropagation()
+                            waitingThreadMutation.mutate({ account_id: thread.account_id, contact_id: thread.contact_id, waiting: false })
+                          }}
+                          title={`Waiting for client — ${daysWaiting(thread.waiting_since, new Date())} day(s). Click to clear`}
+                          className="shrink-0 rounded p-0.5 cursor-pointer hover:bg-zinc-200 inline-flex items-center gap-0.5 text-amber-600"
+                        >
+                          <Hourglass className="h-3.5 w-3.5" />
+                          <span className="text-[10px] font-medium">{daysWaiting(thread.waiting_since, new Date())}d</span>
+                        </span>
+                      )}
+                      {thread.waiting_us_since && (
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={e => {
+                            e.stopPropagation()
+                            waitingThreadMutation.mutate({ account_id: thread.account_id, contact_id: thread.contact_id, waiting: false })
+                          }}
+                          title={`Waiting on us — ${daysWaiting(thread.waiting_us_since, new Date())} day(s). Click to clear`}
+                          className="shrink-0 rounded p-0.5 cursor-pointer hover:bg-zinc-200 inline-flex items-center gap-0.5 text-rose-600"
+                        >
+                          <HandHelping className="h-3.5 w-3.5" />
+                          <span className="text-[10px] font-medium">{daysWaiting(thread.waiting_us_since, new Date())}d</span>
+                        </span>
+                      )}
                       {/* Pin conversation (staff, shared) — pinned threads sort above everything */}
                       <span
                         role="button"
@@ -4710,7 +4711,7 @@ export default function PortalChatsPage() {
                       </div>
                       {!isAdmin && !selectMode && actionButton}
                       </div>
-                      <div className={cn('px-1', isAdmin ? 'self-end' : 'self-start')}>
+                      <div className={cn('px-1 flex items-center gap-1', isAdmin ? 'self-end flex-row-reverse' : 'self-start')}>
                         <MessageReactions
                           messageId={msg.id}
                           reactions={msg.reactions}
@@ -4718,6 +4719,39 @@ export default function PortalChatsPage() {
                           align={isAdmin ? 'right' : 'left'}
                           staffLabel="Team"
                         />
+                        {/* Waiting marks (staff, shared) — on ANY message, any time; they mark the whole conversation. One mark per conversation. */}
+                        {(selectedAccountId || selectedContactId) && !selectMode && (() => {
+                          const waitingClient = !!openThreadRow?.waiting_since
+                          const waitingUs = !!openThreadRow?.waiting_us_since
+                          const setMark = (kind: 'client' | 'us', on: boolean) =>
+                            waitingThreadMutation.mutate({ account_id: selectedAccountId, contact_id: selectedAccountId ? null : selectedContactId, waiting: on, kind })
+                          return (
+                            <span className="inline-flex items-center gap-0.5">
+                              <FastTooltip label={waitingClient ? `Waiting for client — ${daysWaiting(openThreadRow!.waiting_since as string, new Date())} day(s). Click to clear` : 'Waiting for client: mark this conversation'}>
+                                <button
+                                  type="button"
+                                  aria-label="Waiting for client"
+                                  aria-pressed={waitingClient}
+                                  onClick={() => setMark('client', !waitingClient)}
+                                  className={cn('inline-flex items-center justify-center rounded-full p-1 transition-colors', waitingClient ? 'text-amber-600 bg-amber-100 hover:bg-amber-200' : 'text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100')}
+                                >
+                                  <Hourglass className="h-3.5 w-3.5" />
+                                </button>
+                              </FastTooltip>
+                              <FastTooltip label={waitingUs ? `Waiting on us — ${daysWaiting(openThreadRow!.waiting_us_since as string, new Date())} day(s). Click to clear` : 'Waiting on us: the client is waiting for our answer'}>
+                                <button
+                                  type="button"
+                                  aria-label="Waiting on us"
+                                  aria-pressed={waitingUs}
+                                  onClick={() => setMark('us', !waitingUs)}
+                                  className={cn('inline-flex items-center justify-center rounded-full p-1 transition-colors', waitingUs ? 'text-rose-600 bg-rose-100 hover:bg-rose-200' : 'text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100')}
+                                >
+                                  <HandHelping className="h-3.5 w-3.5" />
+                                </button>
+                              </FastTooltip>
+                            </span>
+                          )
+                        })()}
                       </div>
                     </div>
                   )
@@ -5206,23 +5240,6 @@ export default function PortalChatsPage() {
                         />
                       </div>
                     )}
-                  </div>
-                  {/* Waiting for client — tick before Send: the message goes out and the conversation is marked "Waiting" */}
-                  <div className="app-hide relative shrink-0">
-                    <FastTooltip label={markWaiting ? 'Will be marked “waiting for client” when sent (click to undo)' : openThreadRow?.waiting_since ? 'Already waiting — tick to restart the wait with this message' : 'Waiting for client: mark this conversation when you send'}>
-                      <button
-                        type="button"
-                        onClick={() => setMarkWaiting(v => !v)}
-                        aria-pressed={markWaiting}
-                        aria-label="Waiting for client"
-                        className={cn(
-                          'p-2 rounded-full transition-colors',
-                          markWaiting ? 'text-amber-600 bg-amber-100 hover:bg-amber-200' : openThreadRow?.waiting_since ? 'text-amber-500 hover:bg-zinc-100' : 'text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100'
-                        )}
-                      >
-                        <Hourglass className="h-5 w-5" />
-                      </button>
-                    </FastTooltip>
                   </div>
                   {/* Paperclip */}
                   <div className="app-hide relative shrink-0">

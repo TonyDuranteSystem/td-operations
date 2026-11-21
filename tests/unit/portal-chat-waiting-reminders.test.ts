@@ -59,6 +59,22 @@ describe('runWaitingReminderSweep', () => {
     expect(state.updates).toEqual([{ id: 'w1', patch: { reminders_sent: 1, last_reminder_at: NOW.toISOString() } }])
   })
 
+  it('only reads "waiting for client" marks — a "waiting on us" mark never reminds the client', async () => {
+    const eqCalls: unknown[][] = []
+    state.rows = []
+    const { supabaseAdmin } = await import('@/lib/supabase-admin')
+    const realFrom = supabaseAdmin.from.bind(supabaseAdmin)
+    const spy = vi.spyOn(supabaseAdmin, 'from').mockImplementation(((t: string) => {
+      const q = realFrom(t) as unknown as Record<string, (...a: unknown[]) => unknown>
+      const origEq = q.eq
+      q.eq = (...a: unknown[]) => { eqCalls.push(a); return origEq(...a) }
+      return q
+    }) as never)
+    await runWaitingReminderSweep(NOW)
+    spy.mockRestore()
+    expect(eqCalls).toContainEqual(['kind', 'client'])
+  })
+
   it('does nothing before the 3 days are up', async () => {
     state.rows = [row({ marked_at: '2026-11-20T13:00:00Z' })]
     const r = await runWaitingReminderSweep(NOW)
