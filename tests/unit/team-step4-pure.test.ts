@@ -94,45 +94,67 @@ describe('the responsibility notice', () => {
 })
 
 describe('verifyOwnerPassword', () => {
-  const deps = (over: Partial<PasswordCheckDeps> = {}): PasswordCheckDeps & { fails: string[]; clears: string[] } => {
-    const fails: string[] = []; const clears: string[] = []
+  /** A fake counter that behaves like the real one: `reserve` checks AND counts in one synchronous step, refusing once `max` attempts are admitted. */
+  const fakeLimiter = (opts: { locked?: boolean; retryAfter?: number } = {}) => {
+    const reserved: Array<{ key: string; max: number }> = []; const clears: string[] = []
+    const counts = new Map<string, number>()
     return {
-      signIn: async (_e, p) => p === 'right',
-      checkLimit: () => ({ allowed: true }),
-      recordFailure: (k) => { fails.push(k) },
-      clearFailures: (k) => { clears.push(k) },
-      fails, clears, ...over,
+      reserved, clears,
+      reserve: async (key: string, max: number) => {
+        if (opts.locked) return { allowed: false, retryAfter: opts.retryAfter }
+        const n = (counts.get(key) ?? 0) + 1
+        if (n > max) return { allowed: false, retryAfter: 900 }
+        counts.set(key, n); reserved.push({ key, max })
+        return { allowed: true }
+      },
+      clear: async (key: string) => { clears.push(key); counts.delete(key) },
     }
+  }
+  const deps = (over: Partial<PasswordCheckDeps> = {}): PasswordCheckDeps & { limiter: ReturnType<typeof fakeLimiter> } => {
+    return { signIn: async (_e, p) => p === 'right', limiter: fakeLimiter(), ...over } as PasswordCheckDeps & { limiter: ReturnType<typeof fakeLimiter> }
   }
   const call = (password: unknown, d = deps(), email: string | null = 'owner@example.com') => verifyOwnerPassword({ userId: 'u1', email, password }, d)
 
   it('accepts the right password and clears the wrong-guess counter', async () => {
     const d = deps()
     expect(await call('right', d)).toEqual({ ok: true })
-    expect(d.clears).toEqual(['team-confirm:u1'])
+    expect(d.limiter.clears).toEqual(['team-confirm:u1'])
   })
-  it('refuses a wrong password and counts it', async () => {
+  it('counts every attempt BEFORE the password is checked (5 allowed), so a wrong one needs no later step', async () => {
     const d = deps()
     expect(await call('nope', d)).toMatchObject({ ok: false, status: 403 })
-    expect(d.fails).toEqual(['team-confirm:u1'])
+    expect(d.limiter.reserved).toEqual([{ key: 'team-confirm:u1', max: 5 }])
+    expect(d.limiter.clears).toEqual([])
   })
-  it('refuses an empty or non-text password without trying', async () => {
+  it('a BURST of guesses sent at the same moment is admitted only up to the limit (5), the rest are refused without being tried', async () => {
+    const signIn = vi.fn(async () => { await new Promise(r => setTimeout(r, 5)); return false })
+    const d = deps({ signIn })
+    const results = await Promise.all(Array.from({ length: 14 }, (_, i) => call(`guess-${i}`, d)))
+    expect(signIn).toHaveBeenCalledTimes(5)
+    expect(results.filter(r => !r.ok && r.status === 403)).toHaveLength(5)
+    expect(results.filter(r => !r.ok && r.status === 429)).toHaveLength(9)
+  })
+  it('refuses an empty or non-text password without trying or counting', async () => {
     const signIn = vi.fn()
-    expect(await call('', deps({ signIn }))).toMatchObject({ ok: false, status: 400 })
-    expect(await call(undefined, deps({ signIn }))).toMatchObject({ ok: false, status: 400 })
-    expect(await call(12345, deps({ signIn }))).toMatchObject({ ok: false, status: 400 })
+    const d = deps({ signIn })
+    expect(await call('', d)).toMatchObject({ ok: false, status: 400 })
+    expect(await call(undefined, d)).toMatchObject({ ok: false, status: 400 })
+    expect(await call(12345, d)).toMatchObject({ ok: false, status: 400 })
     expect(signIn).not.toHaveBeenCalled()
+    expect(d.limiter.reserved).toEqual([])
   })
   it('stops after too many wrong passwords and says how long to wait, without trying the password', async () => {
     const signIn = vi.fn()
-    const r = await call('right', deps({ signIn, checkLimit: () => ({ allowed: false, retryAfter: 600 }) }))
+    const r = await call('right', deps({ signIn, limiter: fakeLimiter({ locked: true, retryAfter: 600 }) }))
     expect(r).toMatchObject({ ok: false, status: 429 })
     expect((r as { error: string }).error).toContain('10 minutes')
     expect(signIn).not.toHaveBeenCalled()
   })
-  it('treats a sign-in error as a wrong password, and a login with no email as not checkable', async () => {
+  it('treats a sign-in error as a wrong password, and a login with no email as not checkable (and not counted)', async () => {
     expect(await call('right', deps({ signIn: async () => { throw new Error('auth down') } }))).toMatchObject({ ok: false, status: 403 })
-    expect(await call('right', deps(), null)).toMatchObject({ ok: false, status: 403 })
+    const d = deps()
+    expect(await call('right', d, null)).toMatchObject({ ok: false, status: 403 })
+    expect(d.limiter.reserved).toEqual([])
   })
 })
 
