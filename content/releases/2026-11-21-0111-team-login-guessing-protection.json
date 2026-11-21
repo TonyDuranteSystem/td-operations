@@ -1,0 +1,6 @@
+{
+  "title": "Harder to guess a team login's password",
+  "tag": "behind-the-scenes",
+  "text": "A colleague added as a team login signs in with a username and a password. Until now the lockout after wrong passwords could be sidestepped: typing the username with a star in it still found the same person but counted as a new name with fresh tries, and a burst of guesses sent at the same moment all got through before the first one was counted. Now a username has one exact spelling, every try is counted before it is checked, and there is also a total limit per address and per login across all addresses (30 wrong tries from one address, 20 against one login, each for 15 minutes). A colleague who signs in normally, in any capitals or with spaces around the name, notices nothing, and many colleagues signing in from the same office do not lock each other out.",
+  "points": []
+}

@@ -109,17 +109,30 @@ export function checkLoginRateLimit(key: string): { allowed: boolean; retryAfter
  * Record a FAILED login attempt. Locks the key once failures reach the cap.
  * Call AFTER an authentication attempt that failed.
  */
-export function recordLoginFailure(key: string): void {
+export function recordLoginFailure(key: string, opts: { maxFailures?: number } = {}): void {
   const now = Date.now()
+  const cap = opts.maxFailures ?? LOGIN_MAX_FAILURES
   const entry = loginStore.get(key)
   if (!entry || now > entry.firstAt + LOGIN_LOCK_MS) {
-    loginStore.set(key, { failures: 1, firstAt: now, lockedUntil: 0 })
+    loginStore.set(key, { failures: 1, firstAt: now, lockedUntil: cap <= 1 ? now + LOGIN_LOCK_MS : 0 })
     return
   }
   entry.failures += 1
-  if (entry.failures >= LOGIN_MAX_FAILURES) {
+  if (entry.failures >= cap) {
     entry.lockedUntil = now + LOGIN_LOCK_MS
   }
+}
+
+/**
+ * Give back ONE counted attempt after it turned out to be a success. A caller that counts an attempt BEFORE the slow steps (so parallel
+ * guesses cannot all pass the check — see lib/portal/team/login-flow.ts) uses this to refund a shared counter (an office address, an
+ * account) when the person got in. A key that is already locked is left locked.
+ */
+export function releaseLoginAttempt(key: string): void {
+  const entry = loginStore.get(key)
+  if (!entry || entry.lockedUntil) return
+  entry.failures -= 1
+  if (entry.failures <= 0) loginStore.delete(key)
 }
 
 /** Clear the failure counter for a key after a SUCCESSFUL login. */
