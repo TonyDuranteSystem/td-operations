@@ -1,0 +1,11 @@
+{
+  "title": "The portal clock and the chat reply can announce a planned closure",
+  "tag": "new",
+  "text": "When the office has a planned closure, such as Thanksgiving week, every client now sees it on every portal page. The Open/Closed clock turns red and says when we reopen, and a notice with no close button sits right under it, in the client's language. A heads-up version shows in the days before. If a client writes in the chat while we are closed, the automatic reply uses the same words and the reopen day. The closures are kept in one place by the team that builds the portal, so the clock, the notice and the chat reply always agree. This release also fixes the automatic out-of-hours chat reply: clients saved as Italian now get it in Italian instead of English.",
+  "points": [
+    "Open any portal page during a closure: the clock is red and the notice sits under it",
+    "A client who writes in the chat while we are closed gets the closure words and the reopen day",
+    "The notice has no close button, so every client reads it"
+  ],
+  "screenshot": "office-closure-clock.png"
+}
