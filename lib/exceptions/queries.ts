@@ -513,6 +513,13 @@ export async function getTaxReturnExtensionGaps(): Promise<TaxReturnExtensionGap
   if (trRes.error) throw new Error(trRes.error.message)
   if (acctRes.error) throw new Error(acctRes.error.message)
 
+  // Tax records where someone chose "No extension needed" (a deliberate choice, not a gap). Read on its own and tolerant: on a database that does not
+  // have the column yet nothing was skipped, and this page must keep working.
+  const skippedTrIds = new Set<string>()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the new column is not in the generated types
+  const skipRes = await (supabaseAdmin as any).from("tax_returns").select("id").not("extension_skipped_at", "is", null).limit(2000)
+  if (!skipRes.error) for (const r of (skipRes.data ?? []) as Array<{ id: string }>) skippedTrIds.add(r.id)
+
   const acctById = new Map<string, { company_name: string | null }>()
   for (const a of acctRes.data ?? []) {
     if (a.id) acctById.set(a.id, { company_name: a.company_name ?? null })
@@ -544,7 +551,7 @@ export async function getTaxReturnExtensionGaps(): Promise<TaxReturnExtensionGap
     const acct = acctById.get(sd.account_id)
     let reason: TaxReturnExtensionGapRow["reason"] | null = null
     if (!tr) reason = "no_tax_returns_row"
-    else if (tr.extension_filed !== true) reason = "extension_not_filed"
+    else if (tr.extension_filed !== true) { if (!skippedTrIds.has(tr.id)) reason = "extension_not_filed" }
     else if (!tr.extension_submission_id) reason = "no_submission_id"
     if (!reason) continue
     rows.push({

@@ -20,7 +20,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { taxReturnYear } from '@/lib/flows/resolve-flows'
 import { fill7004, form7004Problem, type Form7004FillData } from '@/lib/pdf/7004-fill'
-import { EXTENSION_FAX_MARKERS, EXTENSION_FAX_PURPOSE, EXTENSION_STAGES, isPastOriginalDueDate, longDate, originalDueDateIso, todayNewYork, usesExtensionFaxBox, workingCopyName } from '@/lib/fax/extension-fax'
+import { EXTENSION_BOX_WHERE_TEXT, EXTENSION_FAX_MARKERS, EXTENSION_FAX_PURPOSE, EXTENSION_STAGES, isExtensionBoxStage, isPastOriginalDueDate, longDate, originalDueDateIso, todayNewYork, usesExtensionFaxBox, workingCopyName } from '@/lib/fax/extension-fax'
 
 const text = (v: unknown, max = 200): string => (typeof v === 'string' ? v.trim().slice(0, max) : '')
 
@@ -59,8 +59,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const sd = sdRes.data
   if (!sd) return NextResponse.json({ success: false, error: 'Flow not found' }, { status: 404 })
   if (sd.service_type !== 'Tax Return') return NextResponse.json({ success: false, error: 'This box belongs to a Tax Return job.' }, { status: 400 })
-  if (sd.status === 'cancelled' || sd.stage !== EXTENSION_STAGES.waiting) {
-    return NextResponse.json({ success: false, error: `The Form 7004 is made while the job is at "${EXTENSION_STAGES.waiting}".` }, { status: 409 })
+  if (sd.status === 'cancelled' || !isExtensionBoxStage(sd.stage)) {
+    return NextResponse.json({ success: false, error: `The Form 7004 is made while the job is at ${EXTENSION_BOX_WHERE_TEXT}.` }, { status: 409 })
   }
   const accountId = (sd.account_id as string | null) ?? null
   if (!accountId) return NextResponse.json({ success: false, error: 'This job has no company, so there is no storage to keep the Form 7004 in.' }, { status: 409 })

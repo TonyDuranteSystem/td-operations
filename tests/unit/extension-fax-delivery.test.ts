@@ -26,12 +26,13 @@ interface Calls {
   alerts: string[]
   saved: Array<{ name: string; key: string; visibleToClient: boolean; documentType: string; bytes: Buffer }>
   moves: string[]
+  recorded: string[]
   messages: string[]
   merges: Buffer[][]
 }
 
 function make(over: Partial<ExtensionFaxDeps> & { job?: ExtensionJob | null; fax?: ExtensionFaxRow | null; status?: 'delivered' | 'failed' | 'pending' | 'unknown'; markers?: string[] } = {}) {
-  const calls: Calls = { markers: [], alerts: [], saved: [], moves: [], messages: [], merges: [] }
+  const calls: Calls = { markers: [], alerts: [], saved: [], moves: [], recorded: [], messages: [], merges: [] }
   const have = new Set<string>(over.markers ?? [])
   let job: ExtensionJob | null = over.job === undefined ? { ...JOB } : over.job
   const deps: ExtensionFaxDeps = {
@@ -50,6 +51,7 @@ function make(over: Partial<ExtensionFaxDeps> & { job?: ExtensionJob | null; fax
     merge: async (parts) => { calls.merges.push(parts); return Buffer.concat(parts) },
     saveDocument: async (p) => { calls.saved.push({ name: p.name, key: p.key, visibleToClient: p.visibleToClient, documentType: p.documentType, bytes: p.bytes }); return { route: 'store', fileId: `f-${calls.saved.length}` } },
     advanceToFiled: async (_id, notes) => { calls.moves.push(notes); if (job) job = { ...job, stage: 'Extension Filed' }; return { ok: true } },
+    recordFiledInPlace: async (j, year) => { calls.recorded.push(`${j.id}:${year}`); return { ok: true } },
     clientIsItalian: async () => false,
     extensionDeadline: async () => '2026-10-15',
     postClientMessage: async ({ message }) => { calls.messages.push(message); return { posted: true, alreadyThere: false, error: null } },
@@ -64,7 +66,8 @@ describe('which jobs are checked', () => {
   it('a job that is not found, not a Tax Return, or at another step is left alone', async () => {
     expect((await processExtensionFaxDelivery('x', make({ job: null }).deps)).outcome).toBe('not_applicable')
     expect((await processExtensionFaxDelivery('x', make({ job: { ...JOB, service_type: 'ITIN' } }).deps)).outcome).toBe('not_applicable')
-    expect((await processExtensionFaxDelivery('x', make({ job: { ...JOB, stage: 'Data Received' } }).deps)).outcome).toBe('not_applicable')
+    expect((await processExtensionFaxDelivery('x', make({ job: { ...JOB, stage: 'Awaiting 2nd Payment' } }).deps)).outcome).toBe('not_applicable')
+    expect((await processExtensionFaxDelivery('x', make({ job: { ...JOB, stage: 'TR Filed' } }).deps)).outcome).toBe('not_applicable')
     expect((await processExtensionFaxDelivery('x', make({ job: { ...JOB, status: 'cancelled' } }).deps)).outcome).toBe('not_applicable')
   })
   it('no extension fax on record → nothing to check and Faxage is not asked', async () => {
@@ -348,5 +351,47 @@ describe('two checks at the same moment (the cron and "Check now")', () => {
     const waiting = make({ claimFiling: async () => { claims++; return { won: true, error: null } }, transmittal: async () => ({ pdf: null, error: 'not ready' }) })
     await processExtensionFaxDelivery('x', waiting.deps)
     expect(claims).toBe(1)
+  })
+})
+
+describe('a later step (a standalone return whose tax form is already open)', () => {
+  it.each(['Wizard Available', 'Data Submitted', 'Under Review', 'Revision Requested', 'Approved', 'Confirmed', 'Data Received', 'Preparation'])(
+    'delivered at "%s": the extension is recorded on the tax record, the job is NOT moved, the client is told once',
+    async (stage) => {
+      const m = make({ job: { ...JOB, stage } })
+      const r = await processExtensionFaxDelivery('x', m.deps)
+      expect(r.outcome).toBe('filed')
+      expect(m.calls.moves).toEqual([]) // never backwards to "Extension Filed"
+      expect(m.calls.recorded).toEqual(['sd-1:2025'])
+      expect(m.calls.messages).toHaveLength(1)
+      expect(m.calls.markers.filter((x) => x.kind === EXTENSION_FAX_MARKERS.confirmed)).toHaveLength(1)
+      // the second check does nothing again
+      expect((await processExtensionFaxDelivery('x', m.deps)).outcome).toBe('already_done')
+      expect(m.calls.recorded).toHaveLength(1)
+      expect(m.calls.messages).toHaveLength(1)
+    },
+  )
+
+  it('at the first step the job still moves to Extension Filed and nothing is recorded in place (annual clients unchanged)', async () => {
+    const m = make()
+    expect((await processExtensionFaxDelivery('x', m.deps)).outcome).toBe('filed')
+    expect(m.calls.moves).toHaveLength(1)
+    expect(m.calls.recorded).toEqual([])
+  })
+
+  it('when the extension cannot be written on the tax record: one alert, an error (retried), no marker, no client message', async () => {
+    const m = make({ job: { ...JOB, stage: 'Wizard Available' }, recordFiledInPlace: async () => ({ ok: false, error: 'the company has no 2025 tax record' }) })
+    const r = await processExtensionFaxDelivery('x', m.deps)
+    expect(r.outcome).toBe('error')
+    expect(m.calls.alerts.some((a) => a.includes('could not be written on the tax record'))).toBe(true)
+    expect(m.calls.markers.filter((x) => x.kind === EXTENSION_FAX_MARKERS.confirmed)).toEqual([])
+    expect(m.calls.messages).toEqual([])
+  })
+
+  it('a job already at "Extension Filed" is not recorded twice', async () => {
+    const m = make({ job: { ...JOB, stage: 'Extension Filed' } })
+    expect((await processExtensionFaxDelivery('x', m.deps)).outcome).toBe('filed')
+    expect(m.calls.moves).toEqual([])
+    expect(m.calls.recorded).toEqual([])
   })
 })

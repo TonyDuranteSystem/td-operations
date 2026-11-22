@@ -9,11 +9,15 @@ import { getInvoiceHubSetting } from '@/lib/settings'
 import { getLocale } from '@/lib/portal/i18n'
 import { cookies } from 'next/headers'
 import { CustomersPanel } from '@/components/portal/customers-panel'
+import { redirectIfHiddenForServiceScope } from '@/lib/portal/service-scope-server'
+import { SERVICE_SCOPED_PAGE_KEYS } from '@/lib/portal/service-scope'
 
 export default async function PortalCustomersPage() {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/portal/login')
+  // A service-scoped login (one bought service) never opens this page; the menu hides it too (lib/portal/service-scope.ts).
+  await redirectIfHiddenForServiceScope(user, SERVICE_SCOPED_PAGE_KEYS.customers)
 
   // ONE identity decision (same as the Invoices pages): a team member needs 'sales_customers' and is scoped to their company.
   const actor = await resolveInvoiceActor(user, 'sales_customers')

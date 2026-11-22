@@ -8,11 +8,15 @@ import { t, getLocale } from '@/lib/portal/i18n'
 import { loadTranslationsForLocale } from '@/lib/portal/translations-store'
 import { ReferralPage } from '@/components/portal/referral-page'
 import { computePrimaryAccountIds, sumEarnedByCurrency, formatEarnedSummary } from '@/lib/portal/referral-aggregate'
+import { redirectIfHiddenForServiceScope } from '@/lib/portal/service-scope-server'
+import { SERVICE_SCOPED_PAGE_KEYS } from '@/lib/portal/service-scope'
 
 export default async function PortalReferralsPage() {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/portal/login')
+  // A service-scoped login (one bought service) never opens this page; the menu hides it too (lib/portal/service-scope.ts).
+  await redirectIfHiddenForServiceScope(user, SERVICE_SCOPED_PAGE_KEYS.referrals)
 
   const contactId = getClientContactId(user)
   if (!contactId) redirect('/portal')

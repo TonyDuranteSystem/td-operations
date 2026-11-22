@@ -34,6 +34,7 @@ import { normalizeFormationState, DEFAULT_FORMATION_STATE } from "@/lib/formatio
 import { offerSellsTaxReturn } from "@/lib/offers/compute-offer-totals"
 import { taxYearOfOffer, taxReturnServiceName, taxYearAppliesToOffer } from "@/lib/offers/tax-year"
 import { ensureTaxReturnRecord } from "@/lib/tax/ensure-tax-return"
+import { isStandaloneTaxReturnPipelines, standaloneTaxReturnStart } from "@/lib/tax/standalone-tax-return"
 
 // Auto-execute all steps immediately. Previous supervised mode with threshold
 // silently blocked Valerio Sicari and Antonio Truocchio — pending_activations stayed
@@ -608,6 +609,20 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
   const sdResults: Array<{ pipeline: string; status: string; id?: string }> = []
   const pipelines: string[] = Array.isArray(offer?.bundled_pipelines) ? offer.bundled_pipelines : []
 
+  // STANDALONE company tax return (Antonio, 22 Nov 2026): the offer sells ONLY the Tax Return. There is no "1st installment" wait and no 2nd
+  // payment gate — the tax form opens as soon as the payment is confirmed (with a company known: here, once its tax record exists; with no
+  // company yet: after the company-information step, in the intake handler). Everything else keeps the existing path. The rule lives in
+  // lib/tax/standalone-tax-return.ts so this file, the intake handler and the welcome message cannot disagree.
+  const offerServicesForStart = Array.isArray(offer?.services) ? (offer.services as unknown as Record<string, unknown>[]) : null
+  const trLineForStart = findTaxReturnService(offerServicesForStart)
+  const standaloneStartRaw = standaloneTaxReturnStart({
+    standalone: isStandaloneTaxReturnPipelines(pipelines) && contractType !== "formation" && contractType !== "onboarding",
+    companyReturn: trLineForStart.status !== "found" || trLineForStart.service_context !== "individual",
+    hasCompany: !!autoAccountId,
+  })
+  // With no company yet, the account deferral above (isStandaloneBusinessTR) must have happened too; otherwise the existing path applies.
+  const standaloneStart = standaloneStartRaw && (standaloneStartRaw.openAt !== null || isStandaloneBusinessTR) ? standaloneStartRaw : null
+
   // Build quantity map: how many SDs to create per pipeline.
   // Quantity > 1 is set by the Create Offer dialog for multi-unit services (e.g. ITIN ×2).
   // The quantity is stored in offer.services[i].quantity alongside pipeline_type.
@@ -896,7 +911,7 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
         }
 
         // Tax season pause computed once before the quantity loop (same result for all N SDs)
-        const taxPausedBundled = pipeline === "Tax Return" && !isStandaloneBusinessTR
+        const taxPausedBundled = pipeline === "Tax Return" && !isStandaloneBusinessTR && !standaloneStart
           ? await isTaxSeasonPaused()
           : false
         const taxPauseNote = taxPausedBundled ? " [on_hold — tax_season_paused flag set]" : ""
@@ -933,6 +948,19 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
                 target_stage_order: -1,
                 status: "active",
                 notes: `Auto-created from offer ${activation.offer_token}`,
+                source_offer_token: stampOffer ? activation.offer_token : null,
+              }
+            } else if (standaloneStart) {
+              // Standalone company return with a company on the offer: never parked by the tax-season pause (it paid in full up front),
+              // created just before the form opens; the move to "Wizard Available" follows once the tax record exists (step 2a-2).
+              createParams = {
+                service_type: pipeline,
+                service_name: sdName,
+                account_id: accountId,
+                contact_id: contactId,
+                target_stage: standaloneStart.createAt,
+                status: "active",
+                notes: `Auto-created from offer ${activation.offer_token} (standalone tax return)`,
                 source_offer_token: stampOffer ? activation.offer_token : null,
               }
             } else {
@@ -1069,7 +1097,8 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
               accountId: autoAccountId,
               companyName: acct.company_name,
               taxYear: offerTaxYear,
-              status: "Paid - Not Started",
+              // A standalone company return's form opens at payment, so its record is born open (the wizard needs an OPEN record).
+              status: standaloneStart?.openAt ? "Wizard Available" : "Paid - Not Started",
               memberStructure: acct.member_structure,
               entityType: acct.entity_type,
               formationDate: acct.formation_date,
@@ -1087,6 +1116,41 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
       } else {
         steps.push({ step: "tax_return_paid", status: "skipped", detail: `No tax_returns record found for ${trYear}` })
       }
+    }
+  }
+
+  // ─── STEP 2a-2: Standalone company tax return — open the tax form now (AUTO) ─────
+  // The record is ready (step 2a), so the job moves from "Paid - Awaiting Data" to "Wizard Available". The move goes through the canonical
+  // advance, which sends the client their "Complete your tax form" notice (chat + email + bell) — the same order the 2nd-installment path
+  // uses (record first, then advance). If the offer names no tax year and no record exists, the form is NOT opened: staff are told.
+  if (standaloneStart?.openAt && taxReturnSd?.id) {
+    const trPaidStep = [...steps].reverse().find((s) => s.step === "tax_return_paid")
+    const recordReady = !!trPaidStep && (trPaidStep.status === "done" || trPaidStep.status === "updated")
+    if (recordReady) {
+      try {
+        const { advanceServiceDelivery } = await import("@/lib/service-delivery")
+        const adv = await advanceServiceDelivery({
+          delivery_id: taxReturnSd.id,
+          target_stage: standaloneStart.openAt,
+          actor: "activate-service",
+          notes: `Standalone tax return paid (offer ${activation.offer_token}): the tax form is open.`,
+        })
+        if (adv.success) {
+          steps.push({ step: "tax_form_open", status: "done", detail: `${adv.from_stage} → ${adv.to_stage}: the client can fill in the tax form now` })
+        } else {
+          const detail = `The tax form was NOT opened for ${activation.client_name || "the client"} (offer ${activation.offer_token}): ${adv.error ?? "the move was refused"}. Move the job to "${standaloneStart.openAt}" by hand.`
+          steps.push({ step: "tax_form_open", status: "error", detail })
+          reportSystemError({ source: "server", route: "lib/operations/activate-service", message: detail, context: { offerToken: activation.offer_token } }).catch(() => {})
+        }
+      } catch (e) {
+        const detail = `The tax form was NOT opened for ${activation.client_name || "the client"} (offer ${activation.offer_token}): ${e instanceof Error ? e.message : String(e)}. Move the job to "${standaloneStart.openAt}" by hand.`
+        steps.push({ step: "tax_form_open", status: "error", detail })
+        reportSystemError({ source: "server", route: "lib/operations/activate-service", message: detail, context: { offerToken: activation.offer_token } }).catch(() => {})
+      }
+    } else {
+      const detail = `Standalone tax return paid by ${activation.client_name || "the client"} (offer ${activation.offer_token}) but the offer names no tax year, so no tax record exists and the form is NOT open. Set the tax year, create the record, then move the job to "${standaloneStart.openAt}".`
+      steps.push({ step: "tax_form_open", status: "skipped", detail })
+      reportSystemError({ source: "server", route: "lib/operations/activate-service", message: detail, context: { offerToken: activation.offer_token } }).catch(() => {})
     }
   }
 
@@ -1231,6 +1295,9 @@ export async function runActivation(pending_activation_id: string): Promise<Acti
           contractType: experienceType,
           pipelines: welcomePipelines,
           language,
+          // A standalone company tax return whose company is known has its form open already: its welcome says so (instead of "we'll
+          // reach out"). With no company yet the form opens only after the company information, so the existing welcome stays.
+          standaloneTaxForm: !!standaloneStart?.openAt,
         })
 
         // Derive firstName from full_name when first_name is missing.

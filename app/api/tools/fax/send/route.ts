@@ -58,7 +58,7 @@ import { claimSend, finishClaim, abandonClaim, realClaimDeps, HISTORY_NOT_SAVED_
 import { isFaxStagingPath, FAX_STAGING_BUCKET, faxSizeProblem } from '@/lib/fax/staged-upload'
 import { checkSs4Fax } from '@/lib/fax/ss4-fax-gate'
 import { latestSs4ResubmitAt } from '@/lib/fax/ss4-resubmit-marker'
-import { EXTENSION_FAX_PURPOSE, EXTENSION_STAGES, WORKING_COPY_PREFIX } from '@/lib/fax/extension-fax'
+import { EXTENSION_BOX_WHERE_TEXT, EXTENSION_FAX_PURPOSE, isExtensionBoxStage, WORKING_COPY_PREFIX } from '@/lib/fax/extension-fax'
 
 const MAX_COVER_LENGTH = 2000
 
@@ -247,8 +247,8 @@ async function handleSend(user: User | null, body: Record<string, any>): Promise
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- service_deliveries columns are not all in the generated types
       const { data: sdRow, error: sdErr } = await (supabaseAdmin as any).from('service_deliveries').select('service_type, stage, status').eq('id', serviceDeliveryId).maybeSingle()
       if (sdErr) return NextResponse.json({ success: false, error: 'Could not check the job. The fax was NOT sent. Please try again.' }, { status: 503 })
-      if (!sdRow || sdRow.service_type !== 'Tax Return' || sdRow.stage !== EXTENSION_STAGES.waiting || sdRow.status === 'cancelled') {
-        return NextResponse.json({ success: false, error: `The extension is faxed while the job is at "${EXTENSION_STAGES.waiting}".` }, { status: 409 })
+      if (!sdRow || sdRow.service_type !== 'Tax Return' || !isExtensionBoxStage(sdRow.stage) || sdRow.status === 'cancelled') {
+        return NextResponse.json({ success: false, error: `The extension is faxed while the job is at ${EXTENSION_BOX_WHERE_TEXT}.` }, { status: 409 })
       }
     }
   } else if (body.staged_path !== undefined && body.staged_path !== null) {

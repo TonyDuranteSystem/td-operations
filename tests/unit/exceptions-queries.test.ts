@@ -22,11 +22,14 @@ let tasks: Array<Record<string, unknown>> = []
 let serviceDeliveries: Array<Record<string, unknown>> = []
 let taxReturns: Array<Record<string, unknown>> = []
 let accountsRows: Array<Record<string, unknown>> = []
+// the "skipped extension" lookup (tax_returns rows where extension_skipped_at is set) can fail, like on a database that has no such column yet
+let skipLookupError: { message: string } | null = null
 
 vi.mock("@/lib/supabase-admin", () => ({
   supabaseAdmin: {
     from: (table: string) => {
       const chain: Record<string, unknown> = {}
+      let skippedOnly = false
       Object.assign(chain, {
         select: vi.fn(() => chain),
         eq: vi.fn(() => chain),
@@ -35,7 +38,7 @@ vi.mock("@/lib/supabase-admin", () => ({
         ilike: vi.fn(() => chain),
         gte: vi.fn(() => chain),
         lt: vi.fn(() => chain),
-        not: vi.fn(() => chain),
+        not: vi.fn((col: string) => { if (col === 'extension_skipped_at') skippedOnly = true; return chain }),
         order: vi.fn(() => chain),
         limit: vi.fn(() => chain),
         then: (resolve: (v: unknown) => void) => {
@@ -50,6 +53,11 @@ vi.mock("@/lib/supabase-admin", () => ({
           if (table === "service_deliveries") rows = serviceDeliveries
           if (table === "tax_returns") rows = taxReturns
           if (table === "accounts") rows = accountsRows
+          // the skip lookup asks for the rows whose extension_skipped_at is NOT null
+          if (skippedOnly) {
+            if (skipLookupError) return resolve({ data: null, error: skipLookupError })
+            rows = rows.filter((r) => r.extension_skipped_at)
+          }
           resolve({ data: rows, error: null })
         },
       })
@@ -69,6 +77,7 @@ beforeEach(() => {
   serviceDeliveries = []
   taxReturns = []
   accountsRows = []
+  skipLookupError = null
 })
 
 // ─── Partial activations age filter ──────────────────────
@@ -510,3 +519,48 @@ describe("getTaxReturnExtensionGaps", () => {
     expect(rows).toHaveLength(0)
   })
 })
+
+// ─── "No extension needed" (Antonio, 22 Nov 2026): a deliberate choice, not a gap ──
+describe("getTaxReturnExtensionGaps — a skipped extension", () => {
+  const sd = { id: "sd-s", account_id: "acct-s", stage: "Wizard Available", status: "active", updated_at: new Date().toISOString() }
+  const tr = { id: "tr-s", account_id: "acct-s", tax_year: 2025, return_type: "SMLLC", extension_filed: false, extension_submission_id: null }
+
+  it("does not flag a return whose extension was marked 'no extension needed'", async () => {
+    serviceDeliveries = [sd]
+    accountsRows = [{ id: "acct-s", company_name: "Skipped LLC" }]
+    taxReturns = [{ ...tr, extension_skipped_at: "2026-11-22T20:00:00Z" }]
+    const { getTaxReturnExtensionGaps } = await import("@/lib/exceptions/queries")
+    expect(await getTaxReturnExtensionGaps()).toHaveLength(0)
+  })
+
+  it("still flags the same return once the choice is undone (the column is empty again)", async () => {
+    serviceDeliveries = [sd]
+    accountsRows = [{ id: "acct-s", company_name: "Skipped LLC" }]
+    taxReturns = [{ ...tr, extension_skipped_at: null }]
+    const { getTaxReturnExtensionGaps } = await import("@/lib/exceptions/queries")
+    const rows = await getTaxReturnExtensionGaps()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].reason).toBe("extension_not_filed")
+  })
+
+  it("keeps working when the skip column does not exist yet (the page must never break): nothing is treated as skipped", async () => {
+    skipLookupError = { message: 'column tax_returns.extension_skipped_at does not exist' }
+    serviceDeliveries = [sd]
+    accountsRows = [{ id: "acct-s", company_name: "Skipped LLC" }]
+    taxReturns = [{ ...tr, extension_skipped_at: "2026-11-22T20:00:00Z" }]
+    const { getTaxReturnExtensionGaps } = await import("@/lib/exceptions/queries")
+    const rows = await getTaxReturnExtensionGaps()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].reason).toBe("extension_not_filed")
+  })
+
+  it("a skip never hides a missing record or a missing confirmation id", async () => {
+    serviceDeliveries = [sd, { ...sd, id: "sd-t", account_id: "acct-t" }]
+    accountsRows = [{ id: "acct-s", company_name: "A LLC" }, { id: "acct-t", company_name: "B LLC" }]
+    taxReturns = [{ id: "tr-t", account_id: "acct-t", tax_year: 2025, return_type: "SMLLC", extension_filed: true, extension_submission_id: null, extension_skipped_at: "2026-11-22T20:00:00Z" }]
+    const { getTaxReturnExtensionGaps } = await import("@/lib/exceptions/queries")
+    const reasons = (await getTaxReturnExtensionGaps()).map((r) => r.reason).sort()
+    expect(reasons).toEqual(["no_submission_id", "no_tax_returns_row"])
+  })
+})
+

@@ -9,6 +9,8 @@ import { formatMemberAddress } from '@/lib/members/member-address'
 import { pickDefaultSs4SignerLink } from '@/lib/operations/ss4-signer'
 import { inheritMembersMaySign, previousNameForNewOa } from '@/lib/portal/oa-regenerate-guard'
 import { prepareAttestationForClient } from '@/lib/operations/ownership-attestation'
+import { redirectIfHiddenForServiceScope } from '@/lib/portal/service-scope-server'
+import { SERVICE_SCOPED_PAGE_KEYS } from '@/lib/portal/service-scope'
 
 export const dynamic = 'force-dynamic'
 
@@ -16,6 +18,8 @@ export default async function GenerateDocumentsPage({ searchParams }: { searchPa
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/portal/login')
+  // A service-scoped login (one bought service) never opens this page; the menu hides it too (lib/portal/service-scope.ts).
+  await redirectIfHiddenForServiceScope(user, SERVICE_SCOPED_PAGE_KEYS.generateDocuments)
 
   const contactId = getClientContactId(user)
   if (!contactId) redirect('/portal')

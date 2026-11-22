@@ -9,6 +9,8 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { ApprovalsList, type AgentProposal } from '@/components/portal/approvals-list'
+import { redirectIfHiddenForServiceScope } from '@/lib/portal/service-scope-server'
+import { SERVICE_SCOPED_PAGE_KEYS } from '@/lib/portal/service-scope'
 
 export const dynamic = 'force-dynamic'
 
@@ -16,6 +18,8 @@ export default async function ApprovalsPage() {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return <NotAvailable />
+  // A service-scoped login (one bought service) never opens this page; the menu hides it too (lib/portal/service-scope.ts).
+  await redirectIfHiddenForServiceScope(user, SERVICE_SCOPED_PAGE_KEYS.team)
   const role = (user.app_metadata as Record<string, unknown> | undefined)?.role
   if (role === 'client') return <NotAvailable />
 
