@@ -453,8 +453,8 @@ describe("new storage screens — live sandbox", () => {
     expect(Buffer.from(await old.arrayBuffer()).equals(one)).toBe(true)
   }, 60_000)
 
-  it("merging two people who both have their own storage is refused in plain words", async () => {
+  it("merging two people who both have their own storage is no longer refused: the merge combines them", async () => {
     const { storeMergeBlocker } = await import("@/lib/crm-store/merge-guard")
-    expect(await storeMergeBlocker(fx.personA, fx.personB)).toMatch(/Both contacts/)
+    expect(await storeMergeBlocker(fx.personA, fx.personB)).toBeNull()
   })
 })

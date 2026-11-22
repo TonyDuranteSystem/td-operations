@@ -1,21 +1,24 @@
 import { describe, it, expect } from "vitest"
-import { storeMergeBlocker } from "@/lib/crm-store/merge-guard"
+import { storeMergeBlocker, storeMergeCheck } from "@/lib/crm-store/merge-guard"
+import type { CombinePlan } from "@/lib/crm-store/merge-combine"
 
-describe("storeMergeBlocker", () => {
-  it("lets a merge go ahead when at most one of the two has a storage", async () => {
-    expect(await storeMergeBlocker("a", "b", { personOwners: async () => ({ contactIds: ["a"] }) })).toBeNull()
-    expect(await storeMergeBlocker("a", "b", { personOwners: async () => ({ contactIds: [] }) })).toBeNull()
+const deps = (r: CombinePlan | { error: string }) => ({ combinePlan: async () => r })
+
+describe("storeMergeBlocker (two storages are combined by the merge; only the cases the database cannot combine are refused)", () => {
+  it("lets a merge go ahead when there is nothing to combine", async () => {
+    expect(await storeMergeBlocker("a", "b", deps({ combined: false }))).toBeNull()
   })
-  it("refuses when both have a storage, in plain words", async () => {
-    const r = await storeMergeBlocker("a", "b", { personOwners: async () => ({ contactIds: ["a", "b"] }) })
-    expect(r).toMatch(/cannot be merged automatically/)
-    expect(r).not.toMatch(/study copy/)
+  it("lets a merge go ahead when the two storages can be combined, and hands back the plan", async () => {
+    const plan: CombinePlan = { combined: true, files_moved: 3 }
+    const r = await storeMergeCheck("a", "b", deps(plan))
+    expect(r.blocker).toBeNull()
+    expect(r.plan).toEqual(plan)
   })
-  it("says so when one of them was created by a Google Drive study copy", async () => {
-    const r = await storeMergeBlocker("a", "b", { personOwners: async () => ({ contactIds: ["a", "b"], studyOnlyContactIds: ["b"] }) })
-    expect(r).toMatch(/study copy/)
+  it("refuses with the database's own plain-words reason (a study copy, files in the trash ...)", async () => {
+    expect(await storeMergeBlocker("a", "b", deps({ combined: false, blocker: "The merged-away contact has 1 file(s) in the trash." }))).toMatch(/in the trash/)
+    expect(await storeMergeBlocker("a", "b", deps({ combined: false, blocker: "... a Google Drive study copy ..." }))).toMatch(/study copy/)
   })
   it("fails closed when the check itself fails", async () => {
-    expect(await storeMergeBlocker("a", "b", { personOwners: async () => ({ error: "boom" }) })).toMatch(/please try again/)
+    expect(await storeMergeBlocker("a", "b", deps({ error: "boom" }))).toMatch(/please try again/)
   })
 })

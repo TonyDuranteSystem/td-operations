@@ -257,9 +257,20 @@ export function MergeReviewDialog({
                   )}
                 </section>
 
-                {/* 4. Logins */}
+                {/* 4. Storage: both contacts have their own folder, the merge combines them */}
+                {report.storage && (
+                  <section className="space-y-2" aria-label="Storage">
+                    <h3 className="font-semibold text-zinc-900">4. Storage</h3>
+                    <p className="text-zinc-700">{report.storage.summary.headline}</p>
+                    {report.storage.summary.lines.length > 0 && (
+                      <ul className="list-disc pl-5 text-zinc-600">{report.storage.summary.lines.map((l) => <li key={l}>{l}</li>)}</ul>
+                    )}
+                  </section>
+                )}
+
+                {/* Logins */}
                 <section className="space-y-2">
-                  <h3 className="font-semibold text-zinc-900">4. Logins</h3>
+                  <h3 className="font-semibold text-zinc-900">{report.storage ? "5" : "4"}. Logins</h3>
                   {[report.kept, report.removed].every((p) => p.logins.length === 0) ? <p className="text-zinc-600">Neither contact has a portal login.</p> : (
                     <ul>
                       {[{ p: report.kept, tag: "Kept" }, { p: report.removed, tag: "Removed with the merge" }].flatMap(({ p, tag }) => p.logins.map((l) => (

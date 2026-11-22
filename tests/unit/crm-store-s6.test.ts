@@ -209,14 +209,15 @@ describe("OCR reads a store document from the store — never from Drive", async
 describe("contact merge vs the new store", async () => {
   const { storeMergeBlocker } = await import("@/lib/crm-store/merge-guard")
   const L = "loser", W = "winner"
-  const deps = (ids: string[] | { error: string }) => ({ personOwners: async () => (Array.isArray(ids) ? { contactIds: ids } : ids) })
-  it("both people have their own storage → refused in plain words", async () => {
-    expect(await storeMergeBlocker(L, W, deps([L, W]))).toMatch(/Both contacts/)
+  const deps = (r: { combined: boolean; blocker?: string } | { error: string }) => ({ combinePlan: async () => r })
+  it("both people have their own storage → the merge combines them (no refusal)", async () => {
+    expect(await storeMergeBlocker(L, W, deps({ combined: true }))).toBeNull()
+  })
+  it("a case the database cannot combine → refused in the database's words", async () => {
+    expect(await storeMergeBlocker(L, W, deps({ combined: false, blocker: "Both contacts have files ... study copy" }))).toMatch(/Both contacts/)
   })
   it("only one (or neither) has storage → allowed", async () => {
-    expect(await storeMergeBlocker(L, W, deps([L]))).toBeNull()
-    expect(await storeMergeBlocker(L, W, deps([W]))).toBeNull()
-    expect(await storeMergeBlocker(L, W, deps([]))).toBeNull()
+    expect(await storeMergeBlocker(L, W, deps({ combined: false }))).toBeNull()
   })
   it("cannot check → refused (fails closed)", async () => {
     expect(await storeMergeBlocker(L, W, deps({ error: "boom" }))).toMatch(/Could not check/)

@@ -1,0 +1,33 @@
+{
+  "title": "Merging two contacts that both have a Storage folder",
+  "tag": "new",
+  "text": "Two contacts who each already have their own Storage folder can now be merged. The merge window shows a new Storage step that says exactly what will happen: which files move into the kept person's folder, which folders are joined because they have the same name, and which files are renamed because the name was already taken. Nothing is overwritten and nothing is deleted. If both folders hold a file with the same name, both are kept and the incoming one gets a number, for example Passport (2).jpeg, so you can look at both and delete the extra afterwards. A merge is still refused, with the reason written out, when the person being merged away has files in the trash. Restore them first.",
+  "points": [
+    "Open a contact, press Delete / Merge, pick the other contact",
+    "Read the new Storage step: what moves, what is joined, what is renamed",
+    "Type MERGE. Both Storage folders become one, under the kept contact"
+  ],
+  "stepsTitle": "What happens to the two Storage folders",
+  "steps": [
+    {
+      "name": "See the plan",
+      "detail": "The merge window lists what moves and what gets a new name.",
+      "flag": "new"
+    },
+    {
+      "name": "Same-name folders are joined",
+      "detail": "A folder that exists on both sides becomes one folder.",
+      "flag": "new"
+    },
+    {
+      "name": "Same-name files are both kept",
+      "detail": "The incoming file gets a number. Nothing is overwritten.",
+      "flag": "new"
+    },
+    {
+      "name": "The removed folder goes last",
+      "detail": "Only after every file has moved and been checked.",
+      "flag": "new"
+    }
+  ]
+}
