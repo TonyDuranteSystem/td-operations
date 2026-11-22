@@ -135,7 +135,7 @@ function ConfirmStep({
   )
 }
 
-export function TeamManager({ accountId, companyName, teammates, loginUrl, defaultLang = 'en' }: { accountId: string; companyName: string; teammates: Teammate[]; loginUrl: string; defaultLang?: NoticeLang }) {
+export function TeamManager({ accountId, companyName, teammates, loginUrl, defaultLang = 'en', sharesUnavailable = false }: { accountId: string; companyName: string; teammates: Teammate[]; sharesUnavailable?: boolean; loginUrl: string; defaultLang?: NoticeLang }) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -272,7 +272,9 @@ export function TeamManager({ accountId, companyName, teammates, loginUrl, defau
               <p className="text-xs text-zinc-500 truncate">{describeCapabilities(t.capabilities, 'en').join(', ') || 'no access granted'}</p>
               {t.state === 'active' && t.capabilities.documents && (
                 <p className="text-[11px] mt-0.5" data-testid="personal-docs-row">
-                  {t.sharesMyDocs ? (
+                  {sharesUnavailable ? (
+                    <span className="text-amber-700" data-testid="personal-docs-unavailable">Your personal documents: we could not check the sharing right now. Please refresh the page.</span>
+                  ) : t.sharesMyDocs ? (
                     <><span className="text-amber-700 font-medium">Your personal documents are shared with this person.</span>{' '}
                       <button onClick={() => stopSharing(t)} disabled={busy} className="underline text-zinc-500 hover:text-zinc-800 disabled:opacity-50" data-testid="personal-docs-stop">Stop sharing</button></>
                   ) : (

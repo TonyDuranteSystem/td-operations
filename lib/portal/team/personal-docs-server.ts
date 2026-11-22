@@ -108,9 +108,14 @@ export async function moveSharesToContact(
   return { moved: plan.move.length, dropped: plan.drop.length }
 }
 
-/** Which team logins of this company has THIS owner shared their personal documents with (for the Team screen). */
+/**
+ * Which team logins of this company has THIS owner shared their personal documents with (for the Team screen).
+ * THROWS when the list cannot be read: an unreadable list must never look like "nothing is shared" (the owner would think a person
+ * who can see their papers cannot).
+ */
 export async function getMySharedMemberIds(accountId: string, ownerContactId: string): Promise<Set<string>> {
-  const { data } = await sb().from('portal_team_document_shares').select('team_member_id').eq('account_id', accountId).eq('owner_contact_id', ownerContactId)
+  const { data, error } = await sb().from('portal_team_document_shares').select('team_member_id').eq('account_id', accountId).eq('owner_contact_id', ownerContactId)
+  if (error) throw new Error(error.message)
   return new Set(((data ?? []) as { team_member_id: string }[]).map((r) => r.team_member_id))
 }
 
