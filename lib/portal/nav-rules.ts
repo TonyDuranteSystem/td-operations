@@ -14,6 +14,7 @@ import type { PortalNavVisibility, InProgressFormation, InProgressOnboarding } f
 import { isTierFeatureVisible, isPartnerPortal } from '@/lib/portal/tier-config'
 import { hubAccess } from '@/lib/portal/invoice-hub'
 import { hasCapability, teammateNavCapability, type TeamCapability } from '@/lib/portal/team/capabilities'
+import { isServiceScopedLogin, scopedNavKeyHidden } from '@/lib/portal/service-scope'
 
 export interface PortalNavItemDef {
   key: string
@@ -110,6 +111,11 @@ export interface NavRuleContext {
   teammateCapabilities?: Record<string, boolean>
   /** The client has at least one company (account). */
   hasCompany: boolean
+  /**
+   * Menu entries the services this company holds add back for a service-scoped login (catalog `metadata.portal_nav_keys`, e.g. Bank Applications for a
+   * banking buyer). Computed on the server (lib/portal/service-scope-server.ts); only read for a service-scoped login.
+   */
+  extraNavKeys?: string[]
 }
 
 /** Same rule as the Invoices page (lib/portal/invoice-hub.ts hubAccess): a team member gets the hub only through the capabilities the owner granted. */
@@ -130,6 +136,10 @@ export function isNavItemVisible(item: PortalNavItemDef, ctx: NavRuleContext): b
   const teammateCapabilities = (ctx.teammateCapabilities ?? {}) as Partial<Record<TeamCapability, boolean>>
   const { portalTier, accountType, portalRole, navVisibility, hasWizardPending } = ctx
   const isPartner = isPartnerPortal(portalRole)
+
+  // A service-scoped login (a "One-Time" company: one bought service) never has the entries that are not part of that service, unless a bought service
+  // adds one back. Checked first so it also covers Team. Partners and team members are never service-scoped (lib/portal/service-scope.ts).
+  if (isServiceScopedLogin({ accountType, hasCompany: ctx.hasCompany, portalRole, isTeammate }) && scopedNavKeyHidden(item.key, ctx.extraNavKeys)) return false
 
   if (item.teamAdminOnly) return canManageTeam
   // Teammate (Portal Team Access): nav is governed solely by granted capabilities.

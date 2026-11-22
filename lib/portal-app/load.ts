@@ -43,6 +43,8 @@ import type { PortalAccount } from '@/lib/types'
 import type { AppMeInput } from '@/lib/portal-app/assemble'
 import { getBarPref } from '@/lib/portal-app/bar-pref'
 import { isClientAppPayEnabled } from '@/lib/portal-app/enabled'
+import { isServiceScopedLogin } from '@/lib/portal/service-scope'
+import { activeServiceTypesOf, navKeysUnlockedByServices } from '@/lib/portal/service-scope-server'
 
 /** The helpers this module calls, so the decisions below can be tested without a database. */
 export interface AppLoadDeps {
@@ -65,6 +67,8 @@ export interface AppLoadDeps {
   loadTranslations: typeof loadTranslationsForLocale
   getBarPref: typeof getBarPref
   isPayEnabled: typeof isClientAppPayEnabled
+  /** the menu entries the services a company holds add back for a service-scoped login (catalog data) */
+  getExtraNavKeys: (accountId: string) => Promise<string[]>
 }
 
 export const defaultAppLoadDeps: AppLoadDeps = {
@@ -87,6 +91,7 @@ export const defaultAppLoadDeps: AppLoadDeps = {
   loadTranslations: loadTranslationsForLocale,
   getBarPref,
   isPayEnabled: isClientAppPayEnabled,
+  getExtraNavKeys: (accountId) => activeServiceTypesOf(accountId).then(navKeysUnlockedByServices).catch(() => [] as string[]),
 }
 
 export type AppRefusal = { ok: false; status: 403; code: 'NOT_A_CLIENT' | 'NOT_FOR_PARTNERS' | 'NO_ACCESS'; error: string }
@@ -265,6 +270,10 @@ export async function loadAppMeInput(
         isTeammate: false,
         teammateCapabilities: {},
         hasCompany: accounts.length > 0,
+        // the entries a service-scoped login's bought services add back (the same answer the website's side menu gets)
+        extraNavKeys: selectedAccountId && isServiceScopedLogin({ accountType: accounts.find(a => a.id === selectedAccountId)?.account_type ?? null, hasCompany: accounts.length > 0, portalRole: effectiveRole })
+          ? await deps.getExtraNavKeys(selectedAccountId)
+          : [],
       },
       selection: {
         selectedOnboardingId: selected.kind === 'onboarding' ? selected.onboardingId : undefined,

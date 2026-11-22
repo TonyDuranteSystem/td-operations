@@ -70,6 +70,8 @@ interface PortalSidebarProps {
   unpaidInvoiceCount?: number
   hasWizardPending?: boolean
   accountType?: string | null
+  /** menu entries the bought services add back for a service-scoped login (computed on the server) */
+  extraNavKeys?: string[]
   contactId?: string
   portalRole?: string | null
   /** Dual-role (client AND partner) → show the Client ⇄ Partner switcher. */
@@ -123,7 +125,7 @@ const bottomItems: NavItem[] = BOTTOM_NAV_ITEMS.map(withIcon)
 
 
 
-export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, unreadDocsCount = 0, toSignCount = 0, unpaidInvoiceCount = 0, unseenReactionCount = 0, unseenReactionToken = '', accountType, contactId, portalRole, dualRole = false, portalMode = 'client', hasWizardPending, inProgress = [], selectedFormationId, inProgressOnboardings = [], selectedOnboardingId, canManageTeam = false, isTeammate = false, teammateCapabilities = {} }: PortalSidebarProps) {
+export function PortalSidebar({ user, accounts, selectedAccountId, activeServices: _activeServices, navVisibility, portalTier, unreadChatCount = 0, unreadDocsCount = 0, toSignCount = 0, unpaidInvoiceCount = 0, unseenReactionCount = 0, unseenReactionToken = '', accountType, extraNavKeys = [], contactId, portalRole, dualRole = false, portalMode = 'client', hasWizardPending, inProgress = [], selectedFormationId, inProgressOnboardings = [], selectedOnboardingId, canManageTeam = false, isTeammate = false, teammateCapabilities = {} }: PortalSidebarProps) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -325,6 +327,7 @@ export function PortalSidebar({ user, accounts, selectedAccountId, activeService
     isTeammate,
     teammateCapabilities,
     hasCompany: accounts.length > 0,
+    extraNavKeys,
   }
   const visibleTierTop = visibleTierTopItems(navCtx).map(withIcon)
   const visiblePartner = visiblePartnerItems(navCtx).map(withIcon)

@@ -4,11 +4,15 @@ import { resolveInvoiceActor } from '@/lib/portal/invoice-actor'
 import { getPortalAccounts } from '@/lib/portal/queries'
 import { cookies } from 'next/headers'
 import { NewCustomerForm } from '@/components/portal/new-customer-form'
+import { redirectIfHiddenForServiceScope } from '@/lib/portal/service-scope-server'
+import { SERVICE_SCOPED_PAGE_KEYS } from '@/lib/portal/service-scope'
 
 export default async function NewCustomerPage() {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/portal/login')
+  // A service-scoped login (one bought service) never opens this page; the menu hides it too (lib/portal/service-scope.ts).
+  await redirectIfHiddenForServiceScope(user, SERVICE_SCOPED_PAGE_KEYS.customers)
 
   // One identity decision: a team member (even with a contact id on the login) works on their own company
   // and needs the capability; a client picks among their companies.

@@ -15,6 +15,8 @@ import { t, getLocale } from '@/lib/portal/i18n'
 import { Briefcase, CalendarDays, Activity, CheckCircle2, Clock, ChevronRight, Building2, Hash, MapPin } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
+import { redirectIfHiddenForServiceScope } from '@/lib/portal/service-scope-server'
+import { SERVICE_SCOPED_PAGE_KEYS } from '@/lib/portal/service-scope'
 
 const STATUS_COLORS: Record<string, string> = {
   'Not Started': 'bg-zinc-100 text-zinc-600',
@@ -39,6 +41,8 @@ export default async function MyCompanyPage() {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/portal/login')
+  // A service-scoped login (one bought service) never opens this page; the menu hides it too (lib/portal/service-scope.ts).
+  await redirectIfHiddenForServiceScope(user, SERVICE_SCOPED_PAGE_KEYS.company)
 
   const contactId = getClientContactId(user)
   let selectedAccountId: string | undefined

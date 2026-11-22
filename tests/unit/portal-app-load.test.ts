@@ -38,6 +38,7 @@ function deps(over: Partial<Record<keyof AppLoadDeps, unknown>> = {}) {
     loadTranslations: spy('loadTranslations', async () => ({})),
     getBarPref: spy('getBarPref', async () => null),
     isPayEnabled: spy('isPayEnabled', async () => true),
+    getExtraNavKeys: spy('getExtraNavKeys', async () => [] as string[]),
     ...over,
   }
   return { d: d as unknown as AppLoadDeps, calls }
@@ -195,5 +196,25 @@ describe('the portal page shell and this module use the same helpers (drift guar
       expect(layout, `layout reads ${c}`).toContain(c)
       expect(load, `load.ts reads ${c}`).toContain(c)
     }
+  })
+})
+
+describe('a service-scoped login (a "One-Time" company) in the app', () => {
+  it('asks for the entries its bought services add back and hands them to the menu rule', async () => {
+    const { d, calls } = deps({
+      getAccounts: async () => [acct('a1', { account_type: 'One-Time' })],
+      getExtraNavKeys: async () => ['nav.bankApplications'],
+    })
+    const r = await loadAppMeInput(user(), cookies(), d)
+    expect(r).toMatchObject({ ok: true })
+    if (r.ok) expect(r.input.ctx.extraNavKeys).toEqual(['nav.bankApplications'])
+    expect(calls.getExtraNavKeys).toBeUndefined() // (the override replaced the spy; the value above proves the hand-over)
+  })
+  it('does not look anything up for an ordinary client company', async () => {
+    const { d, calls } = deps()
+    const r = await loadAppMeInput(user(), cookies(), d)
+    expect(r).toMatchObject({ ok: true })
+    if (r.ok) expect(r.input.ctx.extraNavKeys).toEqual([])
+    expect(calls.getExtraNavKeys).toBeUndefined()
   })
 })
