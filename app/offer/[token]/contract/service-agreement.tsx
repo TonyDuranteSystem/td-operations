@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { isClientFacingError } from '@/lib/public-forms/signing-failures'
 import { uploadAndSignOffer, submitWireReceipt, type OfferCredential } from '@/lib/offers/offer-api-client'
+import { mountPayerBox } from '@/lib/offers/payer-box'
 import { FORMATION_STATE_NAMES, normalizeFormationState } from '@/lib/formation/states'
 import { computeOfferTotals } from '@/lib/offers/compute-offer-totals'
 import { buildAnnualMaintenanceWording } from '@/lib/offers/annual-maintenance-wording'
@@ -411,6 +412,7 @@ export default function ServiceAgreement({ offer, token: _token, cred }: Props) 
         let sh = '<div class="contract-success-panel"><div class="contract-success-icon">&#10004;</div>'
         sh += `<h2>${cl.successTitle}</h2>`
         sh += `<p style="font-size:12pt;margin-bottom:28px;">${cl.choosePayment}</p>`
+        sh += '<div id="payer-box"></div>'
         sh += '<div id="payment-choice">'
 
         if (hasCard) {
@@ -469,6 +471,7 @@ export default function ServiceAgreement({ offer, token: _token, cred }: Props) 
         sh += '</div>'
         successEl.innerHTML = sh
         successEl.style.display = 'block'
+        { const payerEl = document.getElementById('payer-box'); if (payerEl) mountPayerBox(payerEl, cred, offer.language) }
 
         if (hasBank) {
           document.getElementById('choose-bank')?.addEventListener('click', () => {

@@ -10,7 +10,8 @@
  *
  * Order of work is chosen so a failure always leaves the person LOCKED OUT, never wrongly let in:
  *   off: status first, then the login ban     (a failed ban still leaves status 'revoked')
- *   on : lift the ban, then status, then the record; if the record cannot be saved the person is put back OFF.
+ *   on : end any old personal-document shares, lift the ban, then status, then the record; if the record cannot be saved the person is put back OFF.
+ * A share of personal documents lives only while the login stays continuously active: it ends at switch-off and before a switch-on.
  *
  * Authorization (who may press the button) is the CALLER's job; this file only enforces the state rules.
  * All database access goes through `SwitchDeps` so the rules are unit-tested without a database.
@@ -39,6 +40,7 @@ export type SwitchErrorCode =
   | 'conflict'
   | 'ban_failed'
   | 'log_failed'
+  | 'shares_failed'
 
 export class TeamSwitchError extends Error {
   constructor(public code: SwitchErrorCode, message: string) {
@@ -72,6 +74,12 @@ export interface SwitchDeps {
   takeOver(id: string, accountId: string, reason: string, atIso: string): Promise<boolean>
   restoreOff(row: SwitchRow): Promise<void>
   setBan(authUserId: string, banned: boolean): Promise<void>
+  /**
+   * End every personal-document share of this login (an owner's papers shared with it). Throws when the shares cannot be deleted.
+   * A share only lives while the login stays continuously active: it ends at switch-off (best effort — the login is already locked out) and
+   * again, strictly, before a switch-on (so a login never comes back with an old share).
+   */
+  endShares(id: string, accountId: string, actor: TeamActor, because: 'switched_off' | 'switched_on'): Promise<void>
   record: TeamEventDbWriter
   now?: () => Date
 }
@@ -139,12 +147,20 @@ export async function switchOffTeammate(
     banFailed = true
   }
 
+  // The login is already refused, so a share that cannot be ended right now is dormant — and is ended strictly before any switch-on.
+  let sharesEndFailed = false
+  try {
+    await deps.endShares(id, accountId, actor, 'switched_off')
+  } catch {
+    sharesEndFailed = true
+  }
+
   await deps.record.bestEffort({
     teamMemberId: id,
     accountId,
     event: 'switched_off',
     actor,
-    detail: { reason: reason || null, ban_failed: banFailed || undefined },
+    detail: { reason: reason || null, ban_failed: banFailed || undefined, shares_end_failed: sharesEndFailed || undefined },
   })
 
   if (banFailed) throw new TeamSwitchError('ban_failed', 'Switched off, but the sign-in could not be fully blocked. Please try again.')
@@ -165,6 +181,13 @@ export async function switchOnTeammate(
   if (!isSwitchedOff(row)) throw new TeamSwitchError('removed', 'This person was removed for good and cannot be switched back on. Add them again instead.')
   if (by === 'owner' && row.switched_off_by === 'td') {
     throw new TeamSwitchError('td_locked', 'Tony Durante LLC switched this person off. Please contact us to switch them back on.')
+  }
+
+  // 0) end any share left from before (the owner shares again) — BEFORE the login can come back. If that fails they stay off.
+  try {
+    await deps.endShares(id, accountId, actor, 'switched_on')
+  } catch {
+    throw new TeamSwitchError('shares_failed', 'We could not end the personal-document sharing this person had before, so they stay switched off. Please try again.')
   }
 
   // 1) lift the ban  2) set active  3) record it. Any failure leaves them off.

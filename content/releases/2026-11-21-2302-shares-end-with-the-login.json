@@ -1,0 +1,6 @@
+{
+  "title": "Shared personal documents stop when a team login is switched off or removed",
+  "tag": "behind-the-scenes",
+  "text": "When an owner shares their personal papers with a team login, that sharing now ends the moment the login is switched off or removed, and never comes back by itself: after a switch back on, the owner shares again. Also, if the system cannot read or change the sharing at that moment, \"Stop sharing\" now says so instead of quietly reporting that nothing changed. No company has shared anything yet.",
+  "points": []
+}

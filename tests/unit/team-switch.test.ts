@@ -18,8 +18,12 @@ const offBy = (by: 'owner' | 'td'): SwitchRow => ({ ...active, status: 'revoked'
 const removed: SwitchRow = { ...active, status: 'revoked' }
 
 /** In-memory fake of the database + login, with switches to make each step fail. */
-function world(initial: SwitchRow | null, opts: { banFails?: boolean; strictLogFails?: boolean; bestLogFails?: boolean; markOffRace?: boolean; markOnRace?: boolean; takeOverRace?: boolean; restoreFails?: boolean } = {}) {
-  const state = { row: initial ? { ...initial } : null, banned: initial ? initial.status !== 'active' : false, events: [] as TeamEventInput[], order: [] as string[] }
+function world(initial: SwitchRow | null, opts: { banFails?: boolean; strictLogFails?: boolean; bestLogFails?: boolean; markOffRace?: boolean; markOnRace?: boolean; takeOverRace?: boolean; restoreFails?: boolean; sharesFail?: boolean } = {}) {
+  const state = {
+    row: initial ? { ...initial } : null, banned: initial ? initial.status !== 'active' : false, events: [] as TeamEventInput[], order: [] as string[],
+    /** each call to end the login's shares, with the steps that had already happened when it ran (kept apart from `order` so older order checks stay as they were) */
+    sharesEnded: [] as Array<{ because: string; before: string[] }>,
+  }
   const deps: SwitchDeps = {
     getRow: async () => (state.row ? { ...state.row } : null),
     markOff: async (_i, _a, by, reason, at) => {
@@ -48,6 +52,10 @@ function world(initial: SwitchRow | null, opts: { banFails?: boolean; strictLogF
       state.order.push(banned ? 'ban' : 'unban')
       if (opts.banFails) throw new Error('auth down')
       state.banned = banned
+    },
+    endShares: async (_i, _a, _actor, because) => {
+      if (opts.sharesFail) throw new Error('shares db down')
+      state.sharesEnded.push({ because, before: [...state.order] })
     },
     record: {
       strict: async (e) => { state.order.push('log-strict'); if (opts.strictLogFails) throw new Error('log down'); state.events.push(e) },
@@ -192,5 +200,37 @@ describe('switchOnTeammate', () => {
     expect(msg).toMatch(/blocked from signing in/)
     expect(msg).toMatch(/contact support/)
     expect(w.state.banned).toBe(true)
+  })
+})
+
+describe('personal-document shares end with the login (a share never outlives the stretch the login was continuously active)', () => {
+  it('SWITCH OFF ends the login\'s shares after the login is already refused and blocked, and before the record', async () => {
+    const { state, deps } = world(active)
+    expect(await code(switchOffTeammate('tm1', 'a1', owner, '', deps))).toBe('ok')
+    expect(state.sharesEnded).toEqual([{ because: 'switched_off', before: ['markOff', 'ban'] }])
+  })
+  it('a failure ending the shares never stops a switch-off (the person is already locked out) and is noted in the record', async () => {
+    const { state, deps } = world(active, { sharesFail: true })
+    expect(await code(switchOffTeammate('tm1', 'a1', owner, '', deps))).toBe('ok')
+    expect(state.row?.status).toBe('revoked')
+    expect(state.events[0]).toMatchObject({ event: 'switched_off', detail: { shares_end_failed: true } })
+  })
+  it('SWITCH ON ends any old shares FIRST — before the sign-in is unblocked or the status changes — so the login never comes back with one', async () => {
+    const { state, deps } = world(offBy('owner'))
+    expect(await code(switchOnTeammate('tm1', 'a1', owner, deps))).toBe('ok')
+    expect(state.sharesEnded).toEqual([{ because: 'switched_on', before: [] }])
+    expect(state.order.indexOf('unban')).toBeGreaterThan(-1)
+  })
+  it('if the old shares cannot be ended the person STAYS switched off and nothing else is touched', async () => {
+    const { state, deps } = world(offBy('owner'), { sharesFail: true })
+    expect(await code(switchOnTeammate('tm1', 'a1', owner, deps))).toBe('shares_failed')
+    expect(state.row?.status).toBe('revoked')
+    expect(state.banned).toBe(true)
+    expect(state.order).toEqual([]) // no unban, no status change, no record
+  })
+  it('TD takeover of an owner\'s switch-off, a removed person and a "not off" person never touch shares', async () => {
+    const a = world(offBy('owner')); await code(switchOffTeammate('tm1', 'a1', td, 'locking', a.deps)); expect(a.state.sharesEnded).toEqual([])
+    const b = world(removed); await code(switchOnTeammate('tm1', 'a1', owner, b.deps)); expect(b.state.sharesEnded).toEqual([])
+    const c = world(active); await code(switchOnTeammate('tm1', 'a1', owner, c.deps)); expect(c.state.sharesEnded).toEqual([])
   })
 })

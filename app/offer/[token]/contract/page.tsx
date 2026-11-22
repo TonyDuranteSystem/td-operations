@@ -19,6 +19,8 @@ import { buildAnnualMaintenanceWording } from '@/lib/offers/annual-maintenance-w
 import { clientFacingSchedule, validatePaymentPlan } from '@/lib/offers/payment-plan'
 import { isClientFacingError } from '@/lib/public-forms/signing-failures'
 import { fetchOfferView, submitWireReceipt, uploadAndSignOffer, createOfferCheckout, type OfferCredential } from '@/lib/offers/offer-api-client'
+import { mountPayerBox } from '@/lib/offers/payer-box'
+import { PayerBox } from '@/components/offers/payer-box'
 import { euroBankAddress } from '@/lib/offers/bank-address'
 
 /** "Back to offer" keeps the client's access code, so they are not sent back to the email gate. */
@@ -171,6 +173,7 @@ function CheckoutPreview({ offer: rawOffer, cl, hasCard, hasBank, token, cred }:
         <div className="contract-success-icon">&#10004;</div>
         <h2 style={{ color: 'var(--c-green)', fontSize: '18pt', marginBottom: 8 }}>{cl.successTitle}</h2>
         <p style={{ fontSize: '12pt', marginBottom: 28, color: 'var(--c-muted)' }}>{cl.choosePayment}</p>
+        <PayerBox cred={cred} lang={cl === CL['it'] ? 'it' : 'en'} />
 
         {!showBank && amountIsUnstateable && (
           <div className="post-sign-option">
@@ -769,6 +772,7 @@ export default function ContractPage() {
         let sh = '<div class="contract-success-panel"><div class="contract-success-icon">&#10004;</div>'
         sh += `<h2>${cl.successTitle}</h2>`
         sh += `<p style="font-size:12pt;margin-bottom:28px;">${cl.choosePayment}</p>`
+        sh += '<div id="payer-box"></div>'
 
         // ── Choice buttons ──
         // Same rule as the React panel, and it matters MORE here: this HTML is frozen into the
@@ -841,6 +845,7 @@ export default function ContractPage() {
         sh += '</div>'
         successEl.innerHTML = sh
         successEl.style.display = 'block'
+        { const payerEl = document.getElementById('payer-box'); if (payerEl) mountPayerBox(payerEl, cred, offer.language) }
 
         attachPdfDownload()
 
