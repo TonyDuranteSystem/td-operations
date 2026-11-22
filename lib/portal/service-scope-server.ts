@@ -8,7 +8,7 @@ import { redirect } from 'next/navigation'
 import type { User } from '@supabase/supabase-js'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts } from '@/lib/portal/queries'
+import { getPortalAccounts, getPortalTierByContact } from '@/lib/portal/queries'
 import { getEntryByServiceType } from '@/lib/services'
 import { isServiceScopedLogin, portalNavKeysOf, scopedNavKeyHidden } from '@/lib/portal/service-scope'
 
@@ -50,12 +50,16 @@ export async function redirectIfHiddenForServiceScope(user: User, navKey: string
     const contactId = getClientContactId(user)
     if (!contactId) return
     const accounts = await getPortalAccounts(contactId)
-    if (accounts.length === 0) return
-    const cookieAccountId = (await cookies()).get('portal_account_id')?.value
-    const selected = accounts.find((a) => a.id === cookieAccountId) ?? accounts[0]
-    if (!isServiceScopedLogin({ accountType: selected.account_type ?? null, hasCompany: true })) return
-    const unlocked = await navKeysUnlockedByServices(await activeServiceTypesOf(selected.id))
-    hidden = scopedNavKeyHidden(navKey, unlocked)
+    if (accounts.length === 0) {
+      // a person with no company: limited only at the active level (a personal service); nothing is added back (no company, no company services)
+      hidden = isServiceScopedLogin({ hasCompany: false, portalTier: await getPortalTierByContact(contactId) }) && scopedNavKeyHidden(navKey)
+    } else {
+      const cookieAccountId = (await cookies()).get('portal_account_id')?.value
+      const selected = accounts.find((a) => a.id === cookieAccountId) ?? accounts[0]
+      if (!isServiceScopedLogin({ accountType: selected.account_type ?? null, hasCompany: true })) return
+      const unlocked = await navKeysUnlockedByServices(await activeServiceTypesOf(selected.id))
+      hidden = scopedNavKeyHidden(navKey, unlocked)
+    }
   } catch {
     return
   }

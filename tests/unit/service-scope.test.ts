@@ -18,9 +18,13 @@ describe('isServiceScopedLogin', () => {
   it('is true for a "One-Time" company login', () => {
     expect(isServiceScopedLogin({ accountType: 'One-Time', hasCompany: true })).toBe(true)
   })
-  it('is false for annual management ("Client"), an empty label, or no company at all', () => {
+  it('is false for annual management ("Client") or an empty label', () => {
     expect(isServiceScopedLogin({ accountType: 'Client', hasCompany: true })).toBe(false)
     expect(isServiceScopedLogin({ accountType: null, hasCompany: true })).toBe(false)
+  })
+  it('with NO company: true only at the active level (a one-time individual); a lead or a person being set up is not limited', () => {
+    expect(isServiceScopedLogin({ hasCompany: false, portalTier: 'active' })).toBe(true)
+    for (const t of ['lead', 'formation', 'onboarding', undefined, null, 'not-a-tier']) expect(isServiceScopedLogin({ hasCompany: false, portalTier: t as string | null | undefined })).toBe(false)
     expect(isServiceScopedLogin({ accountType: 'One-Time', hasCompany: false })).toBe(false)
   })
   it('is never true for a team member or a partner (they follow their own rules)', () => {

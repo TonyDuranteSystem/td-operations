@@ -139,7 +139,7 @@ export function isNavItemVisible(item: PortalNavItemDef, ctx: NavRuleContext): b
 
   // A service-scoped login (a "One-Time" company: one bought service) never has the entries that are not part of that service, unless a bought service
   // adds one back. Checked first so it also covers Team. Partners and team members are never service-scoped (lib/portal/service-scope.ts).
-  if (isServiceScopedLogin({ accountType, hasCompany: ctx.hasCompany, portalRole, isTeammate }) && scopedNavKeyHidden(item.key, ctx.extraNavKeys)) return false
+  if (isServiceScopedLogin({ accountType, hasCompany: ctx.hasCompany, portalRole, isTeammate, portalTier }) && scopedNavKeyHidden(item.key, ctx.extraNavKeys)) return false
 
   if (item.teamAdminOnly) return canManageTeam
   // Teammate (Portal Team Access): nav is governed solely by granted capabilities.
@@ -215,9 +215,12 @@ export function visiblePartnerItems(ctx: NavRuleContext): PortalNavItemDef[] {
 export function visibleMainItems(ctx: NavRuleContext): PortalNavItemDef[] {
   if (isPartnerPortal(ctx.portalRole)) return []
   const companies = showCompaniesSection(ctx)
+  // A service-scoped person with NO company (an individual's personal service) keeps Documents: that page works without a company. Sign Documents stays
+  // out: it needs a company (its page says "No company found"), so it would be a dead end.
+  const scopedPerson = !companies && isServiceScopedLogin({ accountType: ctx.accountType, hasCompany: false, portalRole: ctx.portalRole, isTeammate: ctx.isTeammate, portalTier: ctx.portalTier })
   return MAIN_NAV_ITEMS
     .map(item => (item.key === 'nav.invoices' && !companies ? PERSONAL_INVOICES_NAV_ITEM : item))
-    .filter(item => (!item.needsCompany || companies) && isNavItemVisible(item, ctx))
+    .filter(item => (!item.needsCompany || companies || (scopedPerson && item.key === 'nav.documents')) && isNavItemVisible(item, ctx))
 }
 
 /**

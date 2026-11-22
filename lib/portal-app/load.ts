@@ -271,7 +271,7 @@ export async function loadAppMeInput(
         teammateCapabilities: {},
         hasCompany: accounts.length > 0,
         // the entries a service-scoped login's bought services add back (the same answer the website's side menu gets)
-        extraNavKeys: selectedAccountId && isServiceScopedLogin({ accountType: accounts.find(a => a.id === selectedAccountId)?.account_type ?? null, hasCompany: accounts.length > 0, portalRole: effectiveRole })
+        extraNavKeys: selectedAccountId && isServiceScopedLogin({ accountType: accounts.find(a => a.id === selectedAccountId)?.account_type ?? null, hasCompany: accounts.length > 0, portalRole: effectiveRole, portalTier })
           ? await deps.getExtraNavKeys(selectedAccountId)
           : [],
       },

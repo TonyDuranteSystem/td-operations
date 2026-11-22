@@ -202,7 +202,7 @@ describe('parity: the shared rule gives exactly the menu the old side menu gave'
     forEachContext(c => {
       // Antonio, 22 Nov 2026: a "One-Time" company login is limited to the service it bought, so the OLD list no longer describes it on purpose.
       // Its new menu is pinned by the 'service-scoped login' checks below, and everything else must still match the old menu exactly.
-      if (isServiceScopedLogin({ accountType: c.accountType, hasCompany: c.hasCompany, portalRole: c.portalRole, isTeammate: c.isTeammate })) return
+      if (isServiceScopedLogin({ accountType: c.accountType, hasCompany: c.hasCompany, portalRole: c.portalRole, isTeammate: c.isTeammate, portalTier: c.portalTier })) return
       const old = legacyMenu({
         navVisibility: c.navVisibility,
         portalTier: c.portalTier,
@@ -335,6 +335,20 @@ describe('service-scoped login (a "One-Time" company: one bought service)', () =
   })
   it('an added entry still follows its normal rule (Bank Applications is only for the active tier)', () => {
     expect(keysOf(oneTime({ portalTier: 'onboarding', extraNavKeys: ['nav.bankApplications'] }))).not.toContain('nav.bankApplications')
+  })
+  it('a person with NO company at the active level (an individual\'s personal service) sees Overview, Chat, Documents and their personal invoices — no Referrals, no Request a Service', () => {
+    const keys = keysOf({ portalTier: 'active', hasCompany: false })
+    expect(keys).toEqual(['nav.overview', 'nav.chat', 'nav.invoices', 'nav.documents'])
+    expect(visibleMainItems({ portalTier: 'active', hasCompany: false }).find(i => i.key === 'nav.invoices')?.hintKey).toBe('invoicesPersonal')
+  })
+  it('Sign Documents is NOT offered to a person with no company (its page needs a company: it would be a dead end)', () => {
+    expect(keysOf({ portalTier: 'active', hasCompany: false })).not.toContain('nav.signDocuments')
+  })
+  it('a lead, a formation or an onboarding person with no company is NOT limited (they are being set up)', () => {
+    for (const portalTier of ['lead', 'formation', 'onboarding']) {
+      const keys = keysOf({ portalTier, hasCompany: false })
+      expect(keys, portalTier).toContain('nav.requestService')
+    }
   })
   it('a "Client" company (annual management) is NOT limited: the limit lifts', () => {
     expect(keysOf(active({ accountType: 'Client' }))).toContain('nav.referrals')

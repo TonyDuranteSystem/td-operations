@@ -45,16 +45,23 @@ export interface ServiceScopeInput {
   accountType?: string | null
   /** the person has at least one company */
   hasCompany: boolean
+  /** the portal level: with NO company, only a person at the active level (a one-time individual, e.g. an ITIN) is limited — a lead or a client being set up is not */
+  portalTier?: string | null
   portalRole?: string | null
   /** a team member follows the capabilities the owner granted, never this rule */
   isTeammate?: boolean
 }
 
-/** Is this login limited to the service(s) it bought? Pure. A partner and a team member follow their own rules. */
+/**
+ * Is this login limited to the service(s) it bought? Pure. A partner and a team member follow their own rules.
+ *  - with a company: the company is labeled "One-Time" (annual management, "Client", lifts the limit);
+ *  - with NO company: an individual at the active level (a personal service such as an ITIN). A lead, or a person being set up, is not limited.
+ */
 export function isServiceScopedLogin(p: ServiceScopeInput): boolean {
   if (p.isTeammate) return false
   if (p.portalRole === 'partner') return false
-  return p.hasCompany && p.accountType === SERVICE_SCOPED_ACCOUNT_TYPE
+  if (p.hasCompany) return p.accountType === SERVICE_SCOPED_ACCOUNT_TYPE
+  return p.portalTier === 'active'
 }
 
 /** Is this menu entry hidden from a service-scoped login? `unlocked` = the entries the bought services add back. Pure. */

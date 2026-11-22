@@ -326,7 +326,7 @@ export default async function PortalLayout({
   // A service-scoped login (a "One-Time" company: one bought service) sees only that service's entries; a bought service can add one back (Bank Applications
   // for a banking buyer) — catalog data, read here on the server because the side menu is a client component. Only looked up when the limit applies.
   const selectedAccountType = accounts.find(a => a.id === selectedAccountId)?.account_type ?? null
-  const extraNavKeys: string[] = selectedAccountId && isServiceScopedLogin({ accountType: selectedAccountType, hasCompany: accounts.length > 0, portalRole: effectivePortalRole })
+  const extraNavKeys: string[] = selectedAccountId && isServiceScopedLogin({ accountType: selectedAccountType, hasCompany: accounts.length > 0, portalRole: effectivePortalRole, portalTier })
     ? await activeServiceTypesOf(selectedAccountId).then(navKeysUnlockedByServices).catch(() => [] as string[])
     : []
 
