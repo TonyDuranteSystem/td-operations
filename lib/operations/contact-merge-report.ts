@@ -10,7 +10,8 @@ import {
   DETAIL_FIELDS, countFilledDetails, diffPersonalDetails, eligibleOwnerlessDocs, suggestKeep, unresolvedIdentityConflicts,
   type DetailRow, type KeepSuggestion,
 } from "@/lib/contacts/merge-details"
-import { storeMergeBlocker } from "@/lib/crm-store/merge-guard"
+import { storeMergeCheck } from "@/lib/crm-store/merge-guard"
+import { summarizePlan, type CombinePlan, type PlanSummary } from "@/lib/crm-store/merge-combine"
 import { memberRowsOf } from "@/lib/operations/contact-name-follow"
 import { sharedMemberAccounts } from "@/lib/operations/contact-merge-preview"
 import { getContactReferenceReport } from "@/lib/operations/contact-reference"
@@ -62,6 +63,8 @@ export interface MergeRaw {
   /** blocker messages from the checks the merge itself runs (storages, same owner twice, already merged...) */
   blockers: string[]
   wantedEmail: string | null
+  /** both contacts have their own storage and the merge will combine them: what it will do (null = nothing to combine) */
+  storagePlan: CombinePlan | null
 }
 
 export interface PersonView {
@@ -90,6 +93,8 @@ export interface MergeReport {
     movingFromRemoved: number
   }
   blockers: string[]
+  /** the combine of the two Storage folders, in plain English (null when the storages are not combined) */
+  storage: { plan: CombinePlan; summary: PlanSummary } | null
 }
 
 function view(c: RawContact, companies: RawCompany[], records: number, logins: LoginView[], hasStorage: boolean): PersonView {
@@ -118,6 +123,7 @@ export function assembleMergeReport(raw: MergeRaw): MergeReport {
       movingFromRemoved: raw.removedOwnedDocs,
     },
     blockers: raw.blockers,
+    storage: raw.storagePlan && summarizePlan(raw.storagePlan) ? { plan: raw.storagePlan, summary: summarizePlan(raw.storagePlan) as PlanSummary } : null,
   }
 }
 
@@ -167,8 +173,8 @@ export async function loadMergeRaw(removedId: string, keptId: string, wantedEmai
   const blockers: string[] = []
   if (kept.merged_into) blockers.push(`"${kept.full_name}" was already merged into another contact — choose the one that is kept.`)
   if (removed.merged_into) blockers.push(`"${removed.full_name}" was already merged into another contact.`)
-  const storeBlock = await storeMergeBlocker(removedId, keptId)
-  if (storeBlock) blockers.push(storeBlock)
+  const storeCheck = await storeMergeCheck(removedId, keptId)
+  if (storeCheck.blocker) blockers.push(storeCheck.blocker)
   const [removedMembers, keptMembers] = await Promise.all([memberRowsOf(removedId), memberRowsOf(keptId)])
   const shared = sharedMemberAccounts(removedMembers, keptMembers)
   if (shared.length > 0) {
@@ -206,7 +212,7 @@ export async function loadMergeRaw(removedId: string, keptId: string, wantedEmai
     records: { removed: rRem, kept: rKept },
     logins: { removed: lRem, kept: lKept },
     hasStorage: { removed: sRem, kept: sKept },
-    ownerlessDocs, removedOwnedDocs: removedOwnedDocs ?? 0, blockers, wantedEmail,
+    ownerlessDocs, removedOwnedDocs: removedOwnedDocs ?? 0, blockers, wantedEmail, storagePlan: storeCheck.plan,
   }
 }
 
