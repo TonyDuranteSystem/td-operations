@@ -147,6 +147,38 @@ function fakeShareDeps(over: Partial<ShareDeps> & { shares?: Set<string>; member
 const on = { teamMemberId: 'tm-1', accountId: 'acc-1', ownerContactId: OWNER_A, enabled: true, confirmation, ip: '203.0.113.9' }
 const off = { ...on, enabled: false, confirmation: null }
 
+describe('setPersonalDocShare — a failed database read or write is an ERROR, never "nothing changed"', () => {
+  it('STOP sharing: when the share list cannot be read the owner is told so (the share may still be there)', async () => {
+    const { deps, shares, events } = fakeShareDeps({ shares: new Set(['tm-1|contact-a']), hasShare: async () => { throw new Error('db down') } })
+    const r = await setPersonalDocShare(off, deps)
+    expect(r).toMatchObject({ ok: false, status: 500 })
+    expect((r as { error: string }).error).toMatch(/nothing was changed/)
+    expect(shares.has('tm-1|contact-a')).toBe(true) // untouched
+    expect(events).toEqual([])
+  })
+  it('STOP sharing: when the person cannot be read it is an error, not "team member not found"', async () => {
+    const { deps } = fakeShareDeps({ fetchMember: async () => { throw new Error('db down') } })
+    expect(await setPersonalDocShare(off, deps)).toMatchObject({ ok: false, status: 500 })
+  })
+  it('STOP sharing: when the delete itself fails the owner is told the person may still see the documents', async () => {
+    const { deps, shares, events } = fakeShareDeps({ shares: new Set(['tm-1|contact-a']), removeShare: async () => { throw new Error('db down') } })
+    const r = await setPersonalDocShare(off, deps)
+    expect(r).toMatchObject({ ok: false, status: 500 })
+    expect((r as { error: string }).error).toMatch(/may still see/)
+    expect(shares.has('tm-1|contact-a')).toBe(true)
+    expect(events).toEqual([]) // no "stopped sharing" line for something that did not stop
+  })
+  it('SWITCHING ON with an unreadable share list saves nothing', async () => {
+    const { deps, added } = fakeShareDeps({ hasShare: async () => { throw new Error('db down') } })
+    expect(await setPersonalDocShare(on, deps)).toMatchObject({ ok: false, status: 500 })
+    expect(added).toEqual([])
+  })
+  it('a share that is really not there is still "nothing to stop" (the honest no-op)', async () => {
+    const { deps } = fakeShareDeps()
+    expect(await setPersonalDocShare(off, deps)).toEqual({ ok: true, changed: false })
+  })
+})
+
 describe('setPersonalDocShare — switching ON', () => {
   it('saves the share and records the exact words, naming the owner who acted', async () => {
     const { deps, shares, events, added } = fakeShareDeps()

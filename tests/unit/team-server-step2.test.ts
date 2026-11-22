@@ -175,6 +175,28 @@ describe('revokeTeammate (remove for good)', () => {
   })
 })
 
+describe('revokeTeammate: personal-document shares end with the person', () => {
+  const sharesDeleted = () => state.ops.filter(o => o.table === 'portal_team_document_shares' && o.op === 'delete')
+  it('deletes the person\'s shares and leaves a "Stopped sharing" line for each owner, then the removal line', async () => {
+    state.answers['portal_team_members:select'] = { data: { auth_user_id: 'u1' }, error: null }
+    state.answers['portal_team_document_shares:delete'] = { data: [{ owner_contact_id: 'c1' }, { owner_contact_id: 'c2' }], error: null }
+    await revokeTeammate('tm1', 'a1', owner)
+    expect(sharesDeleted()).toHaveLength(1)
+    expect(sharesDeleted()[0].filters).toContainEqual(['team_member_id', 'tm1'])
+    const lines = state.ops.filter(o => o.table === 'portal_team_events' && o.op === 'insert').map(o => o.payload as { event: string; detail?: Record<string, unknown> })
+    expect(lines.map(l => l.event)).toEqual(['powers_changed', 'powers_changed', 'removed'])
+    expect(lines[0].detail).toMatchObject({ personal_documents: false, owner_contact_id: 'c1', ended_because: 'removed' })
+    expect(lines[1].detail).toMatchObject({ personal_documents: false, owner_contact_id: 'c2', ended_because: 'removed' })
+  })
+  it('a failure deleting the shares never fails the removal (the login is already refused); it is noted on the removal line', async () => {
+    state.answers['portal_team_members:select'] = { data: { auth_user_id: 'u1' }, error: null }
+    state.answers['portal_team_document_shares:delete'] = { data: null, error: { message: 'db down' } }
+    await expect(revokeTeammate('tm1', 'a1', owner)).resolves.toEqual({ ok: true })
+    const removed = state.ops.find(o => o.table === 'portal_team_events' && o.op === 'insert')!
+    expect(removed.payload).toMatchObject({ event: 'removed', detail: { shares_end_failed: true } })
+  })
+})
+
 describe('revokeTeammate: a failed sign-in block is reported', () => {
   it('says so (and records it) instead of claiming everything is fine', async () => {
     state.answers['portal_team_members:select'] = { data: { auth_user_id: 'u1' }, error: null }
