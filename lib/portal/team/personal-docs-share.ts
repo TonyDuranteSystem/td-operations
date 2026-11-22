@@ -14,6 +14,9 @@
  *   - A database read or write that fails is an ERROR the owner sees, never "nothing changed": a failed read must not look like "no share to stop".
  *   - A share lives only while the login stays continuously active: switching the login off or removing it ends its shares
  *     (personal-docs-server.ts `endSharesOfLogin`, called from switch.ts and server.ts) — the owner shares again after a switch back on.
+ *   - A share follows its owner through a contact merge: the table has no foreign key (on purpose), so the merge function never moves it —
+ *     the merge route calls personal-docs-server.ts `moveSharesToContact`, and `planShareMove` (below) decides which rows move and which
+ *     are dropped because that login already has a share from the kept contact.
  *
  * Dependencies are passed in so the rules run without a database (tests); personal-docs-server.ts wires the real ones.
  */
@@ -124,4 +127,28 @@ export async function setPersonalDocShare(input: ShareInput, deps: ShareDeps): P
     return { ok: false, status: 500, error: 'We could not save the record of this change, so nothing was shared. Please try again.' }
   }
   return { ok: true, changed: true }
+}
+
+export interface ShareRef {
+  team_member_id: string
+  account_id: string
+}
+
+/**
+ * Pure: two contacts are merged and the removed one had shared its personal documents with some team logins. Each of those shares goes to the
+ * kept contact (`move`). A login that ALREADY has a share from the kept contact keeps that one and the removed contact's row is simply dropped
+ * (`drop`) — the table is one row per (login, owner), so moving it would collide. Rows are listed once, in the order given.
+ */
+export function planShareMove(removedShares: ShareRef[], keptContactMemberIds: string[]): { move: ShareRef[]; drop: ShareRef[] } {
+  const already = new Set(keptContactMemberIds)
+  const seen = new Set<string>()
+  const move: ShareRef[] = []
+  const drop: ShareRef[] = []
+  for (const row of removedShares) {
+    if (seen.has(row.team_member_id)) continue
+    seen.add(row.team_member_id)
+    if (already.has(row.team_member_id)) drop.push(row)
+    else move.push(row)
+  }
+  return { move, drop }
 }
