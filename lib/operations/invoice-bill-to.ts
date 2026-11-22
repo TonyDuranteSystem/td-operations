@@ -8,9 +8,13 @@
  * When the company changes, the client's own copy of the invoice (the client_expenses
  * mirror row) moves with it — the database trigger does NOT follow an account change.
  *
- * What it never changes: who RECEIVES the invoice (payments.contact_id), the number,
- * the amounts, the status. It writes a dated line to the invoice's INTERNAL notes.
- * Rules (what is allowed) live in lib/invoices/bill-to-change.ts.
+ * What it never changes: who RECEIVES the invoice, the number, the amounts, the status.
+ * An invoice that has no person on it is emailed to its company's owner — so before such an
+ * invoice moves to another company, that person is PINNED on the invoice (contact_id), or the
+ * email would silently switch to the new company's owner. It writes a dated line to the
+ * invoice's INTERNAL notes. Rules (what is allowed) live in lib/invoices/bill-to-change.ts.
+ * Bug-hunter pass (job e62bc2b6, 2026-11-22): recipient pin, autopay refusal, is_test follows
+ * the new company, and a checked roll-back.
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { ensureBillingEntity } from "@/lib/offers/bill-to-server"
@@ -33,6 +37,8 @@ export interface ChangeInvoiceBillToResult {
   accountChanged: boolean
   accountId: string | null
   billingEntityId: string | null
+  /** Set when the invoice had no person: the person its email keeps going to (pinned on the invoice). */
+  emailKeptWith: string | null
 }
 
 /** The person a payer hangs on: the invoice's own contact, else the company's owner. */
@@ -47,6 +53,30 @@ async function contactForPayer(row: { contact_id: string | null; account_id: str
     .limit(10)
   const links = (data ?? []) as Array<{ contact_id: string; role: string | null }>
   return (links.find((l) => l.role?.toLowerCase().includes("owner")) ?? links[0])?.contact_id ?? null
+}
+
+/**
+ * The person an invoice WITH NO PERSON is emailed to today — the SAME pick as
+ * lib/portal/resolve-payment-recipient.ts (path 2): the owner-role contact that has an email,
+ * else any linked contact with an email. Null when the company has none (then the email would
+ * only be able to go to the company's general address, which cannot be kept across a move).
+ */
+async function recipientOfCompany(accountId: string): Promise<{ id: string; name: string | null } | null> {
+  const { data: links, error } = await supabaseAdmin
+    .from("account_contacts")
+    .select("contact_id, role")
+    .eq("account_id", accountId)
+    .is("access_revoked_at", null)
+    .limit(10)
+  if (error) throw new Error(`Could not read the company's contacts: ${error.message}`)
+  const rows = (links ?? []) as Array<{ contact_id: string; role: string | null }>
+  if (rows.length === 0) return null
+  const { data: people, error: pErr } = await supabaseAdmin.from("contacts").select("id, email, full_name").in("id", rows.map((r) => r.contact_id))
+  if (pErr) throw new Error(`Could not read the company's contacts: ${pErr.message}`)
+  const usable = new Map((people ?? []).filter((c) => c.email).map((c) => [c.id as string, (c.full_name as string | null) ?? null]))
+  const ok = rows.filter((r) => usable.has(r.contact_id))
+  const chosen = ok.find((l) => l.role?.toLowerCase().includes("owner")) ?? ok[0]
+  return chosen ? { id: chosen.contact_id, name: usable.get(chosen.contact_id) ?? null } : null
 }
 
 /** A readable name for where an invoice is billed right now. */
@@ -70,7 +100,7 @@ async function billToLabel(p: { billing_entity_id: string | null; account_id: st
 export async function changeInvoiceBillTo(input: ChangeInvoiceBillToInput): Promise<ChangeInvoiceBillToResult> {
   const { data: pay, error: payErr } = await supabaseAdmin
     .from("payments")
-    .select("id, invoice_number, invoice_status, total, account_id, contact_id, billing_entity_id, payment_category, installment, notes, updated_at")
+    .select("id, invoice_number, invoice_status, total, account_id, contact_id, billing_entity_id, payment_category, installment, notes, is_test, updated_at")
     .eq("id", input.paymentId)
     .maybeSingle()
   if (payErr) throw new Error(`Could not read the invoice: ${payErr.message}`)
@@ -111,10 +141,39 @@ export async function changeInvoiceBillTo(input: ChangeInvoiceBillToInput): Prom
       newEntityId = await ensureBillingEntity(personId, plan.entity.details)
     }
   }
-  if (plan.account_id && plan.account_id !== pay.account_id) {
-    const { data: acc } = await supabaseAdmin.from("accounts").select("id").eq("id", plan.account_id).maybeSingle()
-    if (!acc) throw new Error("That company was not found in the CRM.")
+
+  // A move to another company (or to the person) changes more than the printed name — check each side effect first.
+  let pinned: { id: string; name: string | null } | null = null
+  let targetIsTest: boolean | null = null
+  if (plan.accountChanged) {
+    if (plan.account_id) {
+      const { data: acc, error: accErr } = await supabaseAdmin
+        .from("accounts")
+        .select("id, is_test, autopay_card_enabled")
+        .eq("id", plan.account_id)
+        .maybeSingle()
+      if (accErr) throw new Error(`Could not read that company: ${accErr.message}`)
+      if (!acc) throw new Error("That company was not found in the CRM.")
+      // The card-autopay cron picks Sent invoices by the company on the invoice: moving an unpaid one into a company with a saved
+      // card on autopay could charge that card for an invoice that is not theirs.
+      if (acc.autopay_card_enabled && pay.invoice_status !== "Paid") {
+        throw new Error("That company has automatic card payment turned on, so an unpaid invoice moved into it could be charged to its saved card. Turn that off first, or choose a payer instead of the company.")
+      }
+      targetIsTest = Boolean(acc.is_test)
+    } else if (pay.contact_id) {
+      const { data: cont, error: cErr } = await supabaseAdmin.from("contacts").select("is_test").eq("id", pay.contact_id).maybeSingle()
+      if (cErr) throw new Error(`Could not read the person: ${cErr.message}`)
+      targetIsTest = Boolean(cont?.is_test)
+    }
+    // No person on the invoice: its email goes to the company's owner. Pin that person so the email does not switch to the new company's owner.
+    if (plan.account_id && !pay.contact_id) {
+      pinned = pay.account_id ? await recipientOfCompany(pay.account_id) : null
+      if (!pinned) {
+        throw new Error("This invoice has no person on it and its company has no contact with an email address to keep sending it to, so moving it would change who receives the email. Add the person to the invoice first.")
+      }
+    }
   }
+  const isTestChanged = targetIsTest !== null && targetIsTest !== Boolean(pay.is_test)
 
   const from = await billToLabel(row)
   const to = await billToLabel({
@@ -130,6 +189,7 @@ export async function changeInvoiceBillTo(input: ChangeInvoiceBillToInput): Prom
     accountChanged: plan.accountChanged,
     accountId: plan.account_id,
     billingEntityId: newEntityId,
+    emailKeptWith: pinned ? (pinned.name ?? "the company's owner") : null,
   }
 
   if (plan.account_id === pay.account_id && newEntityId === pay.billing_entity_id) {
@@ -137,30 +197,44 @@ export async function changeInvoiceBillTo(input: ChangeInvoiceBillToInput): Prom
   }
 
   const now = new Date().toISOString()
-  const notes = appendNote(pay.notes, billToChangeNote({ date: now.slice(0, 10), from, to, by: input.by }))
-  let update = supabaseAdmin
-    .from("payments")
-    .update({ account_id: plan.account_id, billing_entity_id: newEntityId, notes, updated_at: now })
-    .eq("id", pay.id)
+  const byText = pinned ? `${input.by}; the invoice email stays with ${pinned.name ?? "the company's owner"}` : input.by
+  const notes = appendNote(pay.notes, billToChangeNote({ date: now.slice(0, 10), from, to, by: byText }))
+  const patch: Record<string, unknown> = { account_id: plan.account_id, billing_entity_id: newEntityId, notes, updated_at: now }
+  if (pinned) patch.contact_id = pinned.id
+  if (isTestChanged) patch.is_test = targetIsTest
+  let update = supabaseAdmin.from("payments").update(patch).eq("id", pay.id)
   // Compare-and-swap: refuse if somebody else changed the invoice since we read it.
   update = pay.updated_at ? update.eq("updated_at", pay.updated_at) : update.is("updated_at", null)
-  const { data: written, error: wErr } = await update.select("id")
+  const { data: written, error: wErr } = await update.select("id, updated_at")
   if (wErr) throw new Error(`Could not save the change: ${wErr.message}`)
   if (!written || written.length === 0) throw new Error("The invoice was changed by someone else a moment ago. Reload and try again.")
+  // PRODUCTION stamps updated_at itself on every update (trigger trg_payments_updated_at); the sandbox does not. So the value to
+  // compare against when undoing is the one the database REPORTS back, never the one we sent.
+  const wroteAt = (written[0] as { updated_at: string | null }).updated_at
 
   if (plan.accountChanged) {
     // The client's own copy of this invoice must follow the company, or the invoice would stay
     // in the old company's portal. If this fails, put the invoice back — never leave them apart.
+    const mirrorPatch: Record<string, unknown> = { account_id: plan.account_id }
+    if (isTestChanged) mirrorPatch.is_test = targetIsTest
     const { error: mErr } = await supabaseAdmin
       .from("client_expenses")
-      .update({ account_id: plan.account_id })
+      .update(mirrorPatch)
       .eq("td_payment_id", pay.id)
       .eq("source", "td_invoice")
     if (mErr) {
-      await supabaseAdmin
-        .from("payments")
-        .update({ account_id: pay.account_id, billing_entity_id: pay.billing_entity_id, notes: pay.notes, updated_at: new Date().toISOString() })
-        .eq("id", pay.id)
+      const back: Record<string, unknown> = { account_id: pay.account_id, billing_entity_id: pay.billing_entity_id, notes: pay.notes, contact_id: pay.contact_id, updated_at: new Date().toISOString() }
+      if (isTestChanged) back.is_test = pay.is_test
+      // Only undo OUR write (updated_at is still the value our write left) and CHECK that it worked.
+      let undoQuery = supabaseAdmin.from("payments").update(back).eq("id", pay.id)
+      undoQuery = wroteAt ? undoQuery.eq("updated_at", wroteAt) : undoQuery.is("updated_at", null)
+      const { data: undone, error: undoErr } = await undoQuery.select("id")
+      if (undoErr || !undone || undone.length === 0) {
+        console.error(`[invoice-bill-to] ${pay.invoice_number}: client copy move failed (${mErr.message}) AND the roll-back failed (${undoErr?.message ?? "invoice changed meanwhile"})`)
+        throw new Error(
+          `Could not move the client's copy of ${pay.invoice_number ?? "the invoice"}, and putting the invoice back failed too: the invoice and the client's copy now sit on different companies. Do not change it again — tell the developer. (${mErr.message})`,
+        )
+      }
       throw new Error(`Could not move the client's copy of the invoice, so nothing was changed: ${mErr.message}`)
     }
   }

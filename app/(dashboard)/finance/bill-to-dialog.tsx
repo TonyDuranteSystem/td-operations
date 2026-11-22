@@ -10,7 +10,8 @@ import { changeInvoiceBillTo } from './actions'
 /**
  * Finance → "Bill to" (dev job e62bc2b6, Antonio 2026-11-21): change who an invoice is
  * billed to when the client asks. The choices are the offer builder's "Invoice to"
- * choices. The email still goes to the invoice's own contact — only the Bill To changes.
+ * choices. Only the Bill To changes: the invoice email keeps going to the same person (an
+ * invoice with no person gets that person pinned on it before it moves to another company).
  */
 
 interface Options {
@@ -21,6 +22,8 @@ interface Options {
   clientNamedPayer: boolean
   personName: string | null
   hasPerson: boolean
+  /** Who the invoice email goes to today (null = nobody found). */
+  recipient: { name: string; email: string } | null
   canAttachPayer: boolean
   companyMoveBlockedReason: string | null
   companies: Array<{ id: string; name: string }>
@@ -89,7 +92,7 @@ export function BillToDialog({ invoiceId, invoiceNumber, onClose }: { invoiceId:
       const r = await changeInvoiceBillTo(invoiceId, body)
       if (!r.success) { toast.error(r.error ?? 'Could not change the Bill To.'); return }
       if (r.data && !r.data.changed) toast.info('Nothing changed — the invoice is already billed to this.')
-      else toast.success(`${invoiceNumber}: Bill to changed from "${r.data?.from}" to "${r.data?.to}"`)
+      else toast.success(`${invoiceNumber}: Bill to changed from "${r.data?.from}" to "${r.data?.to}"${r.data?.emailKeptWith ? `. The invoice email stays with ${r.data.emailKeptWith}.` : ''}`)
       router.refresh()
       onClose()
     })
@@ -116,7 +119,11 @@ export function BillToDialog({ invoiceId, invoiceNumber, onClose }: { invoiceId:
                 <div className="mt-1 inline-block rounded bg-amber-100 text-amber-800 text-xs px-2 py-0.5">Named by the client on the payment page</div>
               )}
             </div>
-            <p className="text-xs text-zinc-500">The invoice email still goes to the client&apos;s own contact. Only the name printed in Bill To changes.</p>
+            <p className="text-xs text-zinc-500" data-testid="bill-to-recipient">
+              {opts.recipient
+                ? <>The invoice email goes to <span className="font-medium">{opts.recipient.name}</span> ({opts.recipient.email}) and stays with them. Only the Bill To changes.</>
+                : <>No email address was found for this invoice, so it cannot be emailed until one is added. Only the Bill To changes.</>}
+            </p>
 
             {!opts.editable ? (
               <p className="text-sm text-red-600">Bill to can only be changed on Draft, Sent, Overdue, Partial or Paid invoices (this one is {opts.status ?? 'a legacy record'}).</p>
@@ -189,7 +196,7 @@ export function BillToDialog({ invoiceId, invoiceNumber, onClose }: { invoiceId:
                   <p className="text-xs text-amber-700" data-testid="bill-to-move-warning">
                     {choice === 'person'
                       ? 'The invoice leaves the company and sits on the person only.'
-                      : `The invoice moves into ${targetCompanyName ?? 'that company'}'s records (its portal and books). Use this only when that company really is the one billed.`}
+                      : `The invoice moves into ${targetCompanyName ?? 'that company'}'s records (its portal and books). Use this only when that company really is the one billed. The wording of the payment instructions in the email follows that company's portal status.`}
                   </p>
                 )}
               </div>

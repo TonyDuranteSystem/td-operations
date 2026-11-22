@@ -5,11 +5,13 @@
  * where it is billed now, the person's saved payers, the companies the person is
  * linked to, and (when `q` has 2+ letters) any company in the CRM by name — the
  * "payer is a company that is already our client" case. Also says whether the
- * invoice may move to another company. Staff only. Read-only.
+ * invoice may move to another company, and who the invoice email goes to (so the dialog says
+ * the truth about it). Staff only. Read-only.
  */
 import { NextResponse } from "next/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
+import { resolvePaymentRecipient } from "@/lib/portal/resolve-payment-recipient"
 import { companyMoveBlockedReason, lastBillToChangeWasByClient, BILL_TO_EDITABLE_STATUSES } from "@/lib/invoices/bill-to-change"
 
 export const dynamic = "force-dynamic"
@@ -89,6 +91,9 @@ export async function GET(req: Request) {
     if (a?.company_name) { currentLabel = a.company_name; currentKind = "company" }
   }
 
+  // Who the invoice email goes to today — the one rule every send path uses.
+  const recipient = await resolvePaymentRecipient({ contact_id: pay.contact_id, account_id: pay.account_id }, supabaseAdmin)
+
   const status = pay.invoice_status
   const editable = Boolean(status && (BILL_TO_EDITABLE_STATUSES as readonly string[]).includes(status)) && Number(pay.total ?? 0) >= 0
   const moveBlocked = companyMoveBlockedReason(
@@ -112,6 +117,7 @@ export async function GET(req: Request) {
     clientNamedPayer: lastBillToChangeWasByClient(pay.notes),
     personName,
     hasPerson: Boolean(pay.contact_id),
+    recipient: recipient ? { name: recipient.name, email: recipient.email } : null,
     canAttachPayer: Boolean(personId),
     companyMoveBlockedReason: moveBlocked,
     companies: Array.from(companies, ([id, name]) => ({ id, name })),

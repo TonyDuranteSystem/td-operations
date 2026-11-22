@@ -953,7 +953,7 @@ function InvoiceActions({ invoice }: { invoice: InvoiceRecord }) {
           <ActionButton onClick={() => setEditingItems(true)} label="Edit Items — change individual line items and the discount" icon={ListPlus} color="text-zinc-500" hoverBg="hover:bg-zinc-100" />
         )}
         {(BILL_TO_EDITABLE_STATUSES as readonly string[]).includes(status) && (
-          <ActionButton onClick={() => setBillToOpen(true)} label="Bill to — change who this invoice is billed to (the email still goes to the client's own contact)" icon={Building2} color="text-zinc-500" hoverBg="hover:bg-zinc-100" />
+          <ActionButton onClick={() => setBillToOpen(true)} label="Bill to — change who this invoice is billed to" icon={Building2} color="text-zinc-500" hoverBg="hover:bg-zinc-100" />
         )}
         {status === 'Paid' && (
           <ActionButton

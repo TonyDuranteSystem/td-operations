@@ -1,0 +1,11 @@
+{
+  "title": "Bill to keeps the invoice email with the same person, and refuses risky moves",
+  "tag": "improved",
+  "text": "The Bill to window in Finance → All Invoices now says who the invoice email goes to, and moving an invoice to another company no longer changes that: an invoice with no person on it keeps going to the same person. An unpaid invoice can no longer be moved into a company that has automatic card payment on, so its saved card cannot be charged by mistake. A moved invoice also takes the new company's test or real status. On the client's payment page, a payer named by the client no longer pulls later parts of a payment plan away from the company, and a loading problem is shown instead of a false \"Saved\".",
+  "points": [
+    "Finance → All Invoices → the building icon shows who gets the email",
+    "Unpaid invoices cannot be moved into a company with automatic card payment on",
+    "If a move cannot be completed it is undone, or you are told plainly that it could not be"
+  ],
+  "screenshot": "finance-bill-to-email-stays.png"
+}

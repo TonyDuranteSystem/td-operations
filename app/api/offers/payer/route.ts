@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { readOfferRequest } from '@/lib/offers/public-offer-request'
 import { resolvePublicOfferAccess } from '@/lib/offers/public-offer-access'
 import { sanitizeClientPayer } from '@/lib/offers/client-payer'
+import { resolveInvoiceTarget } from '@/lib/offers/bill-to'
 import { CLIENT_NAMED_BY } from '@/lib/invoices/bill-to-change'
 import { changeInvoiceBillTo } from '@/lib/operations/invoice-bill-to'
 
@@ -18,11 +19,23 @@ export const dynamic = 'force-dynamic'
  * They can never pick one of our companies — linking a typed name to a CRM company is
  * staff-only (Finance → Bill to). Allowed only on a SIGNED offer and only until the
  * invoice is paid. It changes the name printed as Bill To; the invoice email still goes to
- * the person who signed. The offer's own "Invoice to" is updated too, so later invoices of
- * the same offer carry the same payer.
+ * the person who signed.
+ *
+ * The offer's own "Invoice to" is updated too, so later parts of a payment plan carry the same
+ * payer — BUT ONLY when the invoice sits on the person (no company). On a company's invoice the
+ * later parts must follow part 1 (same company, same payer); writing a payer into the offer
+ * would send them to the person instead (bug-hunter pass, job e62bc2b6, 2026-11-22).
+ * A database read that fails is an error, never an empty answer: the client must not be told
+ * "Saved" when it was not.
  */
 
 const OPEN_STATUSES = new Set(['Draft', 'Sent', 'Overdue', 'Partial'])
+
+/** A failed database read: log the real reason, answer plainly, never pretend it worked. */
+function failed(what: string, reason: string) {
+  console.error(`[offers/payer] could not ${what}:`, reason)
+  return NextResponse.json({ error: 'We could not load this right now. Please try again in a moment, or tell us in the portal chat who is paying.' }, { status: 500 })
+}
 
 export async function POST(req: NextRequest) {
   const r = await readOfferRequest(req)
@@ -34,15 +47,17 @@ export async function POST(req: NextRequest) {
   const token = String(access.offer.token)
 
   // The offer's invoice of record (created at signing) and who it is billed to now.
-  const { data: act } = await supabaseAdmin
+  const { data: act, error: actErr } = await supabaseAdmin
     .from('pending_activations')
     .select('portal_invoice_id')
     .eq('offer_token', token)
     .maybeSingle()
+  if (actErr) return failed('read the offer', actErr.message)
   const invoiceId = act?.portal_invoice_id ?? null
-  let invoice: { id: string; invoice_status: string | null; billing_entity_id: string | null } | null = null
+  let invoice: { id: string; invoice_status: string | null; billing_entity_id: string | null; account_id: string | null } | null = null
   if (invoiceId) {
-    const { data } = await supabaseAdmin.from('payments').select('id, invoice_status, billing_entity_id').eq('id', invoiceId).maybeSingle()
+    const { data, error } = await supabaseAdmin.from('payments').select('id, invoice_status, billing_entity_id, account_id').eq('id', invoiceId).maybeSingle()
+    if (error) return failed('read the invoice', error.message)
     invoice = data ?? null
   }
   const paid = invoice ? !OPEN_STATUSES.has(invoice.invoice_status ?? '') : false
@@ -50,11 +65,12 @@ export async function POST(req: NextRequest) {
   if (r.body.action === 'get') {
     let payer: { name: string; address: string | null; country: string | null; vat_number: string | null } | null = null
     if (invoice?.billing_entity_id) {
-      const { data: be } = await supabaseAdmin
+      const { data: be, error: beErr } = await supabaseAdmin
         .from('billing_entities')
         .select('entity_name, billing_address, country, vat_number')
         .eq('id', invoice.billing_entity_id)
         .maybeSingle()
+      if (beErr) return failed('read the payer', beErr.message)
       if (be) payer = { name: be.entity_name, address: be.billing_address, country: be.country, vat_number: be.vat_number }
     }
     return NextResponse.json({ ok: true, available: access.offer.status === 'signed', editable: !paid, payer })
@@ -82,12 +98,18 @@ export async function POST(req: NextRequest) {
         by: CLIENT_NAMED_BY,
       })
     }
-    // Later invoices of this offer follow the same payer (the offer's own "Invoice to").
-    const { error: offerErr } = await supabaseAdmin
-      .from('offers')
-      .update({ bill_to: { type: 'entity', entity: clean.details } } as never)
-      .eq('token', token)
-    if (offerErr) throw new Error('offer update failed')
+    // Later parts of a payment plan follow the same payer (the offer's own "Invoice to") — only while the invoice sits on the person.
+    // On a company's invoice they follow part 1 as it is (same company, same payer), so the offer's "Invoice to" is left alone.
+    const sitsOnCompany = invoice
+      ? invoice.account_id !== null
+      : resolveInvoiceTarget({ billTo: access.offer.bill_to ?? null, offerAccountId: access.offer.account_id ?? null, contactId: access.offer.contact_id ?? null }).account_id !== null
+    if (!sitsOnCompany) {
+      const { error: offerErr } = await supabaseAdmin
+        .from('offers')
+        .update({ bill_to: { type: 'entity', entity: clean.details } } as never)
+        .eq('token', token)
+      if (offerErr) throw new Error('offer update failed')
+    }
   } catch (e) {
     console.error('[offers/payer] could not save the payer:', e instanceof Error ? e.message : e)
     return NextResponse.json({ error: 'We could not save this right now. Please try again, or tell us in the portal chat who is paying.' }, { status: 500 })
