@@ -1,0 +1,6 @@
+{
+  "title": "Merging two duplicate contacts keeps an owner's shared personal documents",
+  "tag": "behind-the-scenes",
+  "text": "When an owner had shared their personal papers with a team login and their duplicate contact was merged into another, the sharing stayed on the removed contact and the login quietly lost it. The merge now moves the sharing to the kept contact, and if that login already had one from the kept contact, keeps it and drops the extra. If the move fails, the merge screen says so in plain words and nothing is deleted. The code's copy of the database layout was also refreshed for the new storage-combining functions. No company has shared anything yet.",
+  "points": []
+}
