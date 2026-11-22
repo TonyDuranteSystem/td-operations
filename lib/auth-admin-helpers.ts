@@ -168,6 +168,20 @@ export async function findAuthUsersByContactId(contactId: string): Promise<User[
 }
 
 /**
+ * The logins of SEVERAL contacts from ONE scan of the users (the merge preview needs two contacts; scanning once per contact
+ * made it slow). Same rule as findAuthUsersByContactId. Returns a map contact id -> logins (empty list when none).
+ */
+export async function findAuthUsersByContactIds(contactIds: string[]): Promise<Map<string, User[]>> {
+  const out = new Map<string, User[]>(contactIds.map((id) => [id, []]))
+  const all = await listAllAuthUsers()
+  for (const u of all) {
+    const cid = (u.app_metadata as { contact_id?: string } | undefined)?.contact_id
+    if (cid && out.has(cid) && notMarketing(u)) out.get(cid)!.push(u)
+  }
+  return out
+}
+
+/**
  * Match a set of candidate emails against every existing login in ONE
  * paginated pass — for a check that needs "does ANY of these N people have
  * a login" rather than one specific email. Built for dev job bb48eba1: a

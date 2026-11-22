@@ -1,0 +1,36 @@
+{
+  "title": "Merging two contacts: see both, copy the details, give files an owner",
+  "tag": "new",
+  "text": "The Merge window now shows both people side by side, whichever contact page you started from, and suggests which one should stay, with a Swap button. Personal details that are empty on the kept contact (passport, ITIN, date of birth, phone, address) are copied from the other one. When both differ you choose; for passport, ITIN and date of birth the Merge button stays off until you do. Personal files with no owner can be given to the kept person in one click, or one by one. Both logins are listed. Two people who each have a Storage folder still cannot be merged here yet.",
+  "points": [
+    "Open a contact, press Delete / Merge, pick the other contact",
+    "Look at the suggestion, press Swap if the other one should stay",
+    "Choose any detail that differs, give the owner-less files to the kept person, type MERGE"
+  ],
+  "stepsTitle": "What the merge window does now",
+  "steps": [
+    {
+      "name": "Pick the other contact",
+      "detail": "Same as before, from either of the two contact pages."
+    },
+    {
+      "name": "See both side by side",
+      "detail": "Companies, logins, Storage and a suggested keeper, with Swap.",
+      "flag": "new"
+    },
+    {
+      "name": "Details copied or chosen",
+      "detail": "Empty details are copied. Different ones are your choice.",
+      "flag": "new"
+    },
+    {
+      "name": "Owner-less files get an owner",
+      "detail": "All to the kept person, or file by file.",
+      "flag": "new"
+    },
+    {
+      "name": "Type MERGE",
+      "detail": "All of it happens in one step. The removed login is deleted as before."
+    }
+  ]
+}
