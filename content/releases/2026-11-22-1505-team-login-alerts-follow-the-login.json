@@ -1,0 +1,6 @@
+{
+  "title": "A team login's phone and browser alerts follow the login",
+  "tag": "behind-the-scenes",
+  "text": "A company's chat alerts now reach a team login's phone or browser only while that login is switched on and can see chat. A login that is switched off, removed, or without the chat tick gets nothing, and removing a login also deletes its alert devices. The daily summary email also no longer treats a team login's alerts as if the owner had them. Nothing changes on screen, and no company was affected yet.",
+  "points": []
+}

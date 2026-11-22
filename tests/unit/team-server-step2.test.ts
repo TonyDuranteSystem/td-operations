@@ -197,6 +197,23 @@ describe('revokeTeammate: personal-document shares end with the person', () => {
   })
 })
 
+describe('revokeTeammate: the login\'s alert devices are deleted too', () => {
+  const devicesDeleted = () => state.ops.filter(o => o.table === 'push_subscriptions' && o.op === 'delete')
+  it('deletes the devices registered by this login\'s sign-in id', async () => {
+    state.answers['portal_team_members:select'] = { data: { auth_user_id: 'u1' }, error: null }
+    await revokeTeammate('tm1', 'a1', owner)
+    expect(devicesDeleted()).toHaveLength(1)
+    expect(devicesDeleted()[0].filters).toContainEqual(['user_id', 'u1'])
+  })
+  it('a failure deleting them never fails the removal; it is noted on the removal line', async () => {
+    state.answers['portal_team_members:select'] = { data: { auth_user_id: 'u1' }, error: null }
+    state.answers['push_subscriptions:delete'] = { data: null, error: { message: 'db down' } }
+    await expect(revokeTeammate('tm1', 'a1', owner)).resolves.toEqual({ ok: true })
+    const removed = state.ops.find(o => o.table === 'portal_team_events' && o.op === 'insert')!
+    expect(removed.payload).toMatchObject({ event: 'removed', detail: { devices_end_failed: true } })
+  })
+})
+
 describe('revokeTeammate: a failed sign-in block is reported', () => {
   it('says so (and records it) instead of claiming everything is fine', async () => {
     state.answers['portal_team_members:select'] = { data: { auth_user_id: 'u1' }, error: null }

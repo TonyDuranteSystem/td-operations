@@ -16,6 +16,7 @@ import { canonicalTeamUsername } from '@/lib/portal/team/login-guard'
 import { recordTeamEvent, recordTeamEventBestEffort, powersGrew, type TeamActor } from '@/lib/portal/team/events'
 import { enqueueTeamNotices } from '@/lib/portal/team/notify'
 import { endSharesOfLogin } from '@/lib/portal/team/personal-docs-server'
+import { endAlertDevicesOfLogin } from '@/lib/portal/team/push-devices'
 import type { Confirmation } from '@/lib/portal/team/confirm'
 import {
   eventWriter,
@@ -309,7 +310,14 @@ export async function revokeTeammate(id: string, accountId: string, actor: TeamA
   // The person is gone for good: end any personal-document shares too. The login is already refused, so a failure here leaves only a dormant
   // row — noted in the record, never a reason to fail the removal.
   const sharesEndFailed = await endSharesOfLogin(id, accountId, actor, 'removed').then(() => false, () => true)
-  const removedDetail = { ...(banErr ? { ban_failed: true } : {}), ...(sharesEndFailed ? { shares_end_failed: true } : {}) }
+  // Same for the login's phone and browser alert devices: a removed login is gone for good, so its devices are deleted too (company alerts
+  // already skip an inactive login's devices at send time — lib/portal/team/push-devices.ts — this is the clean-up).
+  const devicesEndFailed = await endAlertDevicesOfLogin(row.auth_user_id).then(() => false, () => true)
+  const removedDetail = {
+    ...(banErr ? { ban_failed: true } : {}),
+    ...(sharesEndFailed ? { shares_end_failed: true } : {}),
+    ...(devicesEndFailed ? { devices_end_failed: true } : {}),
+  }
   await recordTeamEventBestEffort(sb(), { teamMemberId: id, accountId, event: 'removed', actor, detail: Object.keys(removedDetail).length ? removedDetail : undefined })
   if (banErr) throw new Error('The person was removed from the company, but their sign-in could not be fully blocked. Please contact support.')
   return { ok: true }

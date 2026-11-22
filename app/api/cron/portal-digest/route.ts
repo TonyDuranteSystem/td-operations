@@ -9,6 +9,7 @@ import { escapeHtml } from '@/lib/html-escape'
 import { NextRequest, NextResponse } from 'next/server'
 import { logCron } from '@/lib/cron-log'
 import { localeFromLanguage } from '@/lib/locale'
+import { companyHasDeviceBesidesTeamLogins } from '@/lib/portal/push-presence'
 
 /**
  * GET /api/cron/portal-digest
@@ -181,13 +182,15 @@ export async function GET(request: NextRequest) {
       // from the digest email (they're still marked email_sent_at below so the
       // cron doesn't reprocess them). Other notification types are unaffected.
       let hasPush = false
-      {
-        const pushQuery = supabaseAdmin
+      if (type === 'account') {
+        // A company-wide notice goes to the owner's address: a team login's phone or browser does not count as "the owner has the app"
+        // (a team login's alerts reach that login only — dev job e59dd470, same rule as the chat email).
+        hasPush = await companyHasDeviceBesidesTeamLogins(id)
+      } else {
+        const { count } = await supabaseAdmin
           .from('push_subscriptions')
           .select('id', { count: 'exact', head: true })
-        const { count } = type === 'account'
-          ? await pushQuery.eq('account_id', id)
-          : await pushQuery.eq('contact_id', id)
+          .eq('contact_id', id)
         hasPush = !!count && count > 0
       }
       // 'reaction' notifications are push/in-app ONLY (Antonio 2026-06-30) — never
