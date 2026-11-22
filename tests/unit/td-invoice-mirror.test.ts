@@ -50,4 +50,12 @@ describe('mirrorDiffers', () => {
   it('detects a paid_date drift', () => {
     expect(mirrorDiffers({ ...base, paid_date: '2026-01-01' }, base)).toBe(true)
   })
+  it('detects a different company on the two copies (a Bill to move that only half landed)', () => {
+    expect(mirrorDiffers({ ...base, account_id: 'acc-a' }, { ...base, account_id: 'acc-b' })).toBe(true)
+    expect(mirrorDiffers({ ...base, account_id: null }, { ...base, account_id: 'acc-b' })).toBe(true)
+  })
+  it('the same company on both copies is not a difference; a caller that passes no company is not judged on it', () => {
+    expect(mirrorDiffers({ ...base, account_id: 'acc-a' }, { ...base, account_id: 'acc-a' })).toBe(false)
+    expect(mirrorDiffers({ ...base, account_id: 'acc-a' }, base)).toBe(false)
+  })
 })

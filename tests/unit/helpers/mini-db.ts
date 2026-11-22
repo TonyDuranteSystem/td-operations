@@ -15,6 +15,8 @@ export interface MiniDbOptions {
   failing?: Record<string, string>
   /** a table + operation that fails once it is reached: e.g. { 'contact_calls:insert': 'boom' } */
   failOps?: Record<string, string>
+  /** tables whose every UPDATE stamps `updated_at` itself (a BEFORE UPDATE trigger, as production's payments table has), whatever the caller sent */
+  stampUpdatedAt?: string[]
 }
 
 export interface MiniDb {
@@ -103,6 +105,7 @@ export function miniDb(seed: Record<string, Row[]> = {}, opts: MiniDbOptions = {
           const idx = rows.indexOf(r)
           if (violates(next, idx)) return { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint' } }
           Object.assign(r, payload)
+          if (opts.stampUpdatedAt?.includes(table)) r.updated_at = `2026-11-22T20:00:00.${String(++n).padStart(6, '0')}+00:00`
         }
         return { data: returning ? hit.map((r) => ({ ...r })) : null, error: null }
       }

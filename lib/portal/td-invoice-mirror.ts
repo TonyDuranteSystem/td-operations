@@ -29,11 +29,17 @@ export function mapPaymentStatusToExpense(paymentInvoiceStatus: string | null | 
   return map[s] || s
 }
 
-/** Pure diff: does the projected state differ from the current mirror row? */
+/**
+ * Pure diff: does the projected state differ from the current mirror row?
+ * `account_id` is compared only when the caller passes it in `after` — the database trigger does NOT
+ * follow a change of company, so a move that updated one copy but not the other (Finance → Bill to)
+ * must show up here (bug-hunter pass, job e62bc2b6).
+ */
 export function mirrorDiffers(
-  before: { total: number | null; amount_due: number | null; amount_paid: number | null; status: string | null; paid_date: string | null },
-  after: { total: number; amount_due: number; amount_paid: number; status: string; paid_date: string | null },
+  before: { total: number | null; amount_due: number | null; amount_paid: number | null; status: string | null; paid_date: string | null; account_id?: string | null },
+  after: { total: number; amount_due: number; amount_paid: number; status: string; paid_date: string | null; account_id?: string | null },
 ): boolean {
+  if ('account_id' in after && (before.account_id ?? null) !== (after.account_id ?? null)) return true
   return (
     Number(before.total) !== after.total ||
     Number(before.amount_due) !== after.amount_due ||
@@ -80,14 +86,14 @@ export async function syncTDInvoiceMirror(
   const db = supabaseAdmin
   const { data: p } = await db
     .from('payments')
-    .select('total, amount, amount_due, amount_paid, status, invoice_status, paid_date')
+    .select('total, amount, amount_due, amount_paid, status, invoice_status, paid_date, account_id')
     .eq('id', paymentId)
     .maybeSingle()
   if (!p) return { changed: false }
 
   const { data: before } = await db
     .from('client_expenses')
-    .select('total, amount_due, amount_paid, status, paid_date')
+    .select('total, amount_due, amount_paid, status, paid_date, account_id')
     .eq('td_payment_id', paymentId)
     .maybeSingle()
   if (!before) return { changed: false } // no mirror row (e.g. contact-only or not a TD invoice)
@@ -104,6 +110,7 @@ export async function syncTDInvoiceMirror(
     amount_paid: Number(p.amount_paid ?? 0),
     status,
     paid_date: (p.paid_date as string | null) ?? null,
+    account_id: (p.account_id as string | null) ?? null,
   }
 
   // No write here — the payments-side trigger already applied it. Reporting

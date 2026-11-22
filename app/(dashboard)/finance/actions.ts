@@ -1985,7 +1985,7 @@ export async function unlinkPayment(
 export async function changeInvoiceBillTo(
   paymentId: string,
   billTo: unknown,
-): Promise<ActionResult<{ invoiceNumber: string | null; from: string; to: string; changed: boolean; accountChanged: boolean }>> {
+): Promise<ActionResult<{ invoiceNumber: string | null; from: string; to: string; changed: boolean; accountChanged: boolean; emailKeptWith: string | null }>> {
   // Staff only: a server action is reachable by id, so do not rely on the page door alone.
   const { createClient } = await import('@/lib/supabase/server')
   const { isDashboardUser } = await import('@/lib/auth')
@@ -2000,7 +2000,7 @@ export async function changeInvoiceBillTo(
     const r = await run({ paymentId, billTo, by: 'by staff in Finance' })
     revalidatePath('/finance')
     revalidatePath('/accounts')
-    return { invoiceNumber: r.invoiceNumber, from: r.from, to: r.to, changed: r.changed, accountChanged: r.accountChanged }
+    return { invoiceNumber: r.invoiceNumber, from: r.from, to: r.to, changed: r.changed, accountChanged: r.accountChanged, emailKeptWith: r.emailKeptWith }
   }, {
     action_type: 'update',
     table_name: 'payments',

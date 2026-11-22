@@ -139,3 +139,119 @@ describe('changeInvoiceBillTo — refusals', () => {
     await expect(changeInvoiceBillTo({ paymentId: 'nope', billTo: typed('X Ltd'), by: 'x' })).rejects.toThrow(/not found/i)
   })
 })
+
+// ── Bug-hunter pass (job e62bc2b6, 2026-11-22): what a move to another company must NOT change by accident ──
+describe('changeInvoiceBillTo — an invoice with no person on it moves company (recipient pin)', () => {
+  const noPerson = (over: Row = {}): Row => ({ id: 'p1', invoice_number: 'INV-9', invoice_status: 'Sent', total: 900, account_id: ACC_A, contact_id: null, billing_entity_id: null, payment_category: null, installment: null, notes: null, is_test: false, updated_at: T0, ...over })
+  const people = [
+    { id: 'c1', full_name: 'Franco Owner', email: 'franco@example.test' },
+    { id: 'c2', full_name: 'Paolo Owner', email: 'paolo@example.test' },
+  ]
+  const links = [
+    { account_id: ACC_A, contact_id: 'c1', role: 'Owner', access_revoked_at: null },
+    { account_id: ACC_B, contact_id: 'c2', role: 'Owner', access_revoked_at: null },
+  ]
+
+  it('pins the old company\'s owner on the invoice, so the email does NOT switch to the new company\'s owner', async () => {
+    h.db = miniDb(seed({ payments: [noPerson()], extra: { contacts: people, account_contacts: links } }))
+    const r = await changeInvoiceBillTo({ paymentId: 'p1', billTo: { type: 'company', account_id: ACC_B }, by: 'by staff in Finance' })
+    expect(r).toMatchObject({ accountChanged: true, emailKeptWith: 'Franco Owner' })
+    expect(pay()).toMatchObject({ account_id: ACC_B, contact_id: 'c1' })
+    expect(String(pay().notes)).toContain('the invoice email stays with Franco Owner')
+  })
+
+  it('does nothing of the kind when the invoice already has a person', async () => {
+    h.db = miniDb(seed({ payments: [noPerson({ contact_id: 'c1' })], extra: { contacts: people, account_contacts: links } }))
+    const r = await changeInvoiceBillTo({ paymentId: 'p1', billTo: { type: 'company', account_id: ACC_B }, by: 'x' })
+    expect(r.emailKeptWith).toBeNull()
+    expect(pay().contact_id).toBe('c1')
+    expect(String(pay().notes)).not.toContain('email stays')
+  })
+
+  it('refuses when nobody at the old company has an email to keep sending to (the move would switch the recipient)', async () => {
+    h.db = miniDb(seed({ payments: [noPerson()], extra: { contacts: [{ id: 'c1', full_name: 'No Email', email: null }, people[1]], account_contacts: links } }))
+    await expect(changeInvoiceBillTo({ paymentId: 'p1', billTo: { type: 'company', account_id: ACC_B }, by: 'x' })).rejects.toThrow(/no person on it/i)
+    expect(pay()).toMatchObject({ account_id: ACC_A, contact_id: null })
+  })
+
+  it('a payer (print-only) on a no-person invoice does not need a pin and leaves the recipient alone', async () => {
+    h.db = miniDb(seed({ payments: [noPerson()], extra: { contacts: people, account_contacts: links } }))
+    const r = await changeInvoiceBillTo({ paymentId: 'p1', billTo: typed('Payer Ltd'), by: 'x' })
+    expect(r.emailKeptWith).toBeNull()
+    expect(pay()).toMatchObject({ account_id: ACC_A, contact_id: null })
+  })
+})
+
+describe('changeInvoiceBillTo — card autopay and the test flag follow the company', () => {
+  const inv = (over: Row = {}): Row => ({ id: 'p1', invoice_number: 'INV-8', invoice_status: 'Sent', total: 400, account_id: ACC_A, contact_id: 'c1', billing_entity_id: null, payment_category: null, installment: null, notes: null, is_test: false, updated_at: T0, ...over })
+  const accounts = (b: Row) => [{ id: ACC_A, company_name: 'Haxton Capital LLC', is_test: false, autopay_card_enabled: false }, { id: ACC_B, company_name: 'Paolo Srl', is_test: false, autopay_card_enabled: false, ...b }]
+
+  it('refuses to move an UNPAID invoice into a company whose saved card is on autopay, and changes nothing', async () => {
+    h.db = miniDb(seed({ payments: [inv()], extra: { accounts: accounts({ autopay_card_enabled: true }) } }))
+    await expect(changeInvoiceBillTo({ paymentId: 'p1', billTo: { type: 'company', account_id: ACC_B }, by: 'x' })).rejects.toThrow(/automatic card payment/i)
+    expect(pay()).toMatchObject({ account_id: ACC_A, notes: null })
+    expect(h.db.tables.client_expenses[0].account_id).toBeNull()
+  })
+
+  it('a Draft is refused too (it can be sent, then charged); a PAID invoice may move there', async () => {
+    h.db = miniDb(seed({ payments: [inv({ invoice_status: 'Draft' })], extra: { accounts: accounts({ autopay_card_enabled: true }) } }))
+    await expect(changeInvoiceBillTo({ paymentId: 'p1', billTo: { type: 'company', account_id: ACC_B }, by: 'x' })).rejects.toThrow(/automatic card payment/i)
+    h.db = miniDb(seed({ payments: [inv({ invoice_status: 'Paid' })], extra: { accounts: accounts({ autopay_card_enabled: true }) } }))
+    await expect(changeInvoiceBillTo({ paymentId: 'p1', billTo: { type: 'company', account_id: ACC_B }, by: 'x' })).resolves.toMatchObject({ accountChanged: true })
+  })
+
+  it('a print-only payer is never blocked by autopay (the company does not change)', async () => {
+    h.db = miniDb(seed({ payments: [inv()], extra: { accounts: accounts({ autopay_card_enabled: true }) } }))
+    await expect(changeInvoiceBillTo({ paymentId: 'p1', billTo: typed('Payer Ltd'), by: 'x' })).resolves.toMatchObject({ changed: true })
+  })
+
+  it('moving into a TEST company makes the invoice a test invoice, on the invoice and on the client\'s copy', async () => {
+    h.db = miniDb(seed({ payments: [inv()], extra: { accounts: accounts({ is_test: true }) } }))
+    await changeInvoiceBillTo({ paymentId: 'p1', billTo: { type: 'company', account_id: ACC_B }, by: 'x' })
+    expect(pay().is_test).toBe(true)
+    expect(h.db.tables.client_expenses[0]).toMatchObject({ account_id: ACC_B, is_test: true })
+  })
+
+  it('moving out of a test company into a real one makes it a real invoice', async () => {
+    h.db = miniDb(seed({ payments: [inv({ is_test: true })], extra: { accounts: accounts({}) } }))
+    await changeInvoiceBillTo({ paymentId: 'p1', billTo: { type: 'company', account_id: ACC_B }, by: 'x' })
+    expect(pay().is_test).toBe(false)
+  })
+
+  it('a print-only payer leaves the test flag alone', async () => {
+    h.db = miniDb(seed({ payments: [inv({ is_test: true })], extra: { accounts: accounts({}) } }))
+    await changeInvoiceBillTo({ paymentId: 'p1', billTo: typed('Payer Ltd'), by: 'x' })
+    expect(pay().is_test).toBe(true)
+  })
+
+  it('a failed copy-move puts the test flag back too', async () => {
+    h.db = miniDb(seed({ payments: [inv()], extra: { accounts: accounts({ is_test: true }) } }), { failOps: { 'client_expenses:update': 'boom' } })
+    await expect(changeInvoiceBillTo({ paymentId: 'p1', billTo: { type: 'company', account_id: ACC_B }, by: 'x' })).rejects.toThrow(/nothing was changed/i)
+    expect(pay()).toMatchObject({ account_id: ACC_A, is_test: false })
+  })
+})
+
+describe('changeInvoiceBillTo — roll-back, with production\'s updated_at trigger (it stamps updated_at itself)', () => {
+  const one = (): Row => ({ id: 'p1', invoice_number: 'INV-7', invoice_status: 'Sent', total: 100, account_id: null, contact_id: 'c1', billing_entity_id: null, payment_category: null, installment: null, notes: null, updated_at: T0 })
+
+  it('a second change right after the first still works (it compares against the stamp the database gave)', async () => {
+    h.db = miniDb(seed({ payments: [one()] }), { stampUpdatedAt: ['payments'] })
+    await changeInvoiceBillTo({ paymentId: 'p1', billTo: typed('First Ltd'), by: 'x' })
+    await expect(changeInvoiceBillTo({ paymentId: 'p1', billTo: typed('Second Ltd'), by: 'x' })).resolves.toMatchObject({ changed: true, to: 'Second Ltd' })
+  })
+
+  it('puts the invoice back when the client\'s copy fails — even though the database re-stamped updated_at', async () => {
+    h.db = miniDb(seed({ payments: [one()] }), { stampUpdatedAt: ['payments'], failOps: { 'client_expenses:update': 'boom' } })
+    await expect(changeInvoiceBillTo({ paymentId: 'p1', billTo: { type: 'company', account_id: ACC_B }, by: 'x' })).rejects.toThrow(/nothing was changed/i)
+    expect(pay()).toMatchObject({ account_id: null, notes: null })
+  })
+})
+
+describe('changeInvoiceBillTo — when even the roll-back cannot be done', () => {
+  it('says so loudly instead of pretending nothing changed', async () => {
+    const inner = miniDb(seed({ payments: [{ id: 'p1', invoice_number: 'INV-7', invoice_status: 'Sent', total: 100, account_id: null, contact_id: 'c1', billing_entity_id: null, payment_category: null, installment: null, notes: null, updated_at: T0 }] }), { stampUpdatedAt: ['payments'], failOps: { 'client_expenses:update': 'boom' } })
+    // Somebody else touches the invoice right after our write: the undo (which only undoes OUR write) then matches nothing.
+    h.db = { ...inner, from: (t: string) => { if (t === 'client_expenses') inner.tables.payments[0].updated_at = '2026-11-22T21:00:00.000000+00:00'; return inner.from(t) } }
+    await expect(changeInvoiceBillTo({ paymentId: 'p1', billTo: { type: 'company', account_id: ACC_B }, by: 'x' })).rejects.toThrow(/putting the invoice back failed too/i)
+  })
+})

@@ -128,3 +128,51 @@ describe('POST /api/offers/payer — get', () => {
     expect((await json(await call({ action: 'get' }))).editable).toBe(false)
   })
 })
+
+describe('POST /api/offers/payer — company invoices and failures (bug-hunter pass, job e62bc2b6)', () => {
+  const ACC = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+  const onCompany = () => miniDb(seed({
+    offers: [{ token: 'andrea-2026', status: 'signed', bill_to: null, account_id: ACC }],
+    payments: [{ id: 'p1', invoice_number: 'INV-1', invoice_status: 'Draft', total: 100, account_id: ACC, contact_id: 'c1', billing_entity_id: null, payment_category: null, installment: null, notes: null, updated_at: T0 }],
+    accounts: [{ id: ACC, company_name: 'Haxton Capital LLC' }],
+    account_contacts: [{ account_id: ACC, contact_id: 'c1', role: 'Owner', access_revoked_at: null }],
+  }))
+
+  it('on an invoice that sits on a company the payer prints on that invoice, and the offer\'s own Invoice to is LEFT ALONE (later parts follow part 1)', async () => {
+    h.db = onCompany()
+    h.access = { ...h.access, offer: { token: 'andrea-2026', status: 'signed', bill_to: null, account_id: ACC, contact_id: 'c1' } }
+    const res = await call({ action: 'set', payer: { name: 'Mother Rossi' } })
+    expect(res.status).toBe(200)
+    expect(h.db.tables.payments[0]).toMatchObject({ account_id: ACC, billing_entity_id: h.db.tables.billing_entities[0].id })
+    expect(h.db.tables.offers[0].bill_to).toBeNull()
+  })
+
+  it('before any invoice exists, an offer made under a company also keeps its own Invoice to; an offer with no company records the payer', async () => {
+    h.db = miniDb(seed({ pending_activations: [], offers: [{ token: 'andrea-2026', status: 'signed', bill_to: null, account_id: ACC }] }))
+    h.access = { ...h.access, offer: { token: 'andrea-2026', status: 'signed', bill_to: null, account_id: ACC, contact_id: 'c1' } }
+    await call({ action: 'set', payer: { name: 'Early Payer Ltd' } })
+    expect(h.db.tables.offers[0].bill_to).toBeNull()
+    h.db = miniDb(seed({ pending_activations: [] }))
+    h.access = { ...h.access, offer: { token: 'andrea-2026', status: 'signed', bill_to: null, account_id: null, contact_id: 'c1' } }
+    await call({ action: 'set', payer: { name: 'Early Payer Ltd' } })
+    expect(h.db.tables.offers[0].bill_to).toEqual({ type: 'entity', entity: expect.objectContaining({ name: 'Early Payer Ltd' }) })
+  })
+
+  it('a database that cannot be read is an error answer — never "Saved", and nothing is written', async () => {
+    for (const failing of ['pending_activations', 'payments']) {
+      h.db = miniDb(seed(), { failing: { [failing]: 'db down' } })
+      const res = await call({ action: 'set', payer: { name: 'Nobody Ltd' } })
+      expect(res.status).toBe(500)
+      expect(String((await json(res)).error)).toMatch(/could not load this right now/i)
+      expect(h.db.tables.billing_entities ?? []).toHaveLength(0)
+      expect(h.db.tables.offers[0].bill_to).toBeNull()
+    }
+  })
+
+  it('"get" on an unreadable payer answers an error too, so the box hides itself instead of showing a blank payer', async () => {
+    h.db = miniDb(seed({ payments: [{ id: 'p1', invoice_number: 'INV-1', invoice_status: 'Draft', total: 1, account_id: null, contact_id: 'c1', billing_entity_id: 'be1', notes: null, updated_at: T0 }] }), { failing: { billing_entities: 'db down' } })
+    const res = await call({ action: 'get' })
+    expect(res.status).toBe(500)
+  })
+})
+
