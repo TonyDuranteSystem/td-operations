@@ -1,5 +1,6 @@
 -- UNDO of 20261117-2000-merge-contacts-copy-details-and-document-owners.sql: back to the 3-argument merge_contacts() as it ran before (no detail copy, no document owners).
 BEGIN;
+DROP FUNCTION IF EXISTS public.contact_reference_report_fast(uuid);
 DROP FUNCTION IF EXISTS public.merge_contacts(uuid, uuid, text, jsonb, uuid[]);
 CREATE OR REPLACE FUNCTION public.merge_contacts(p_loser uuid, p_winner uuid, p_merged_by text DEFAULT NULL::text)
  RETURNS jsonb

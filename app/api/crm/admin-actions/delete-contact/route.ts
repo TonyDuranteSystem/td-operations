@@ -31,34 +31,34 @@ import { createClient } from "@/lib/supabase/server"
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { canPerform } from "@/lib/permissions"
 import { logAction } from "@/lib/mcp/action-log"
-import { findAuthUsersByContactId } from "@/lib/auth-admin-helpers"
+import { findAuthUsersByContactId, findAuthUsersByContactIds } from "@/lib/auth-admin-helpers"
+import { getContactReferenceReport, plainMergeError } from "@/lib/operations/contact-reference"
 import type { DryRunResult } from "@/lib/operations/destructive"
 
 interface ReferenceReport {
   total_blocking: number
   breakdown: Record<string, number>
+  /** the database's own count, before the storage-owner row is added */
+  dbTotal: number
 }
 
 async function getReport(contactId: string): Promise<ReferenceReport> {
-  const { data, error } = await supabaseAdmin.rpc("contact_reference_report", {
-    p_contact_id: contactId,
-  })
-  if (error) throw new Error(`reference report failed: ${error.message}`)
-  const r = (data ?? {}) as Partial<ReferenceReport>
-  const breakdown = { ...(r.breakdown ?? {}) }
-  let total = r.total_blocking ?? 0
-  // A person's storage-owner record is a RESTRICT foreign key, which the database report
-  // does not count — without this the preview said "clean orphan" and the delete then failed.
-  const { count: storeOwnerRows, error: storeOwnerErr } = await supabaseAdmin
-    .from("store_owners")
-    .select("id", { count: "exact", head: true })
-    .eq("contact_id", contactId)
-  if (storeOwnerErr) throw new Error(`storage-owner check failed: ${storeOwnerErr.message}`)
-  if ((storeOwnerRows ?? 0) > 0) {
-    breakdown.store_owners = storeOwnerRows ?? 0
-    total += storeOwnerRows ?? 0
+  // the two reads are independent: one slow call used to be followed by another
+  const [base, owners] = await Promise.all([
+    getContactReferenceReport(contactId),
+    // A person's storage-owner record is a RESTRICT foreign key, which the database report did not count at first —
+    // without this the preview said "clean orphan" and the delete then failed.
+    supabaseAdmin.from("store_owners").select("id", { count: "exact", head: true }).eq("contact_id", contactId),
+  ])
+  if (owners.error) throw new Error(`storage-owner check failed: ${owners.error.message}`)
+  const breakdown = { ...base.breakdown }
+  let total = base.total_blocking
+  const storeOwnerRows = owners.count ?? 0
+  if (storeOwnerRows > 0) {
+    breakdown.store_owners = storeOwnerRows
+    total += storeOwnerRows
   }
-  return { total_blocking: total, breakdown }
+  return { total_blocking: total, breakdown, dbTotal: base.total_blocking }
 }
 
 export async function POST(request: Request) {
@@ -97,19 +97,26 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Contact not found" }, { status: 404 })
     }
 
-    const report = await getReport(contact_id)
-    const portalUsers = await findAuthUsersByContactId(contact_id)
+    // For a merge both contacts' logins come from ONE scan of the users (it used to be one scan per call, four in all).
+    const logins = mode === "merge" && merge_into_contact_id ? await findAuthUsersByContactIds([contact_id, merge_into_contact_id]) : null
+    const [report, portalUsers] = await Promise.all([
+      getReport(contact_id),
+      logins ? Promise.resolve(logins.get(contact_id) ?? []) : findAuthUsersByContactId(contact_id),
+    ])
     const actor = `dashboard:${user?.email?.split("@")[0] ?? "unknown"}`
 
     // ── Dry-run preview of a MERGE (the person picked the contact to keep) ───
     if (dry_run && mode === "merge") {
       const { buildMergePreview } = await import("@/lib/operations/contact-merge-preview")
-      const preview = await buildMergePreview({ loserId: contact_id, winnerId: merge_into_contact_id ?? null, report, portalLoginCount: portalUsers.length })
+      const winnerLoginCount = merge_into_contact_id ? logins?.get(merge_into_contact_id)?.length : undefined
+      const previewPromise = buildMergePreview({ loserId: contact_id, winnerId: merge_into_contact_id ?? null, report, portalLoginCount: portalUsers.length, winnerLoginCount })
       // The side-by-side report (both people, details, documents, logins). Reads only — the dry run never writes.
       let mergeReport = null
-      if (merge_into_contact_id) {
-        const { buildMergeReport } = await import("@/lib/operations/contact-merge-report")
-        const built = await buildMergeReport(contact_id, merge_into_contact_id, body.wanted_email ?? null)
+      const reportPromise = merge_into_contact_id
+        ? (await import("@/lib/operations/contact-merge-report")).buildMergeReport(contact_id, merge_into_contact_id, body.wanted_email ?? null, { removedRecords: report.dbTotal, users: logins ?? undefined })
+        : Promise.resolve(null)
+      const [preview, built] = await Promise.all([previewPromise, reportPromise])
+      if (built) {
         if ("error" in built) return NextResponse.json({ error: built.error }, { status: 400 })
         mergeReport = built
       }
@@ -171,14 +178,14 @@ export async function POST(request: Request) {
       // The same checks the preview showed (both storages, the same person owning one company twice, an already-merged contact) run again
       // here, so a merge that the preview refused can never be forced by calling this route directly.
       const { buildMergePreview } = await import("@/lib/operations/contact-merge-preview")
-      const checked = await buildMergePreview({ loserId: contact_id, winnerId: merge_into_contact_id, report, portalLoginCount: portalUsers.length })
+      const checked = await buildMergePreview({ loserId: contact_id, winnerId: merge_into_contact_id, report, portalLoginCount: portalUsers.length, winnerLoginCount: logins?.get(merge_into_contact_id)?.length })
       if (checked.blocker) return NextResponse.json({ error: checked.blocker }, { status: 409 })
 
       // Personal details and owner-less documents: re-read here (never trust the screen). Identity details that differ need an
       // explicit choice; only documents the report really offers can be given to the kept contact.
       const { buildMergeReport } = await import("@/lib/operations/contact-merge-report")
       const { cleanChoices, unresolvedIdentityConflicts } = await import("@/lib/contacts/merge-details")
-      const mergeReport = await buildMergeReport(contact_id, merge_into_contact_id, null)
+      const mergeReport = await buildMergeReport(contact_id, merge_into_contact_id, null, { removedRecords: report.dbTotal, users: logins ?? undefined })
       if ("error" in mergeReport) return NextResponse.json({ error: mergeReport.error }, { status: 400 })
       const choices = cleanChoices(mergeReport.details, body.field_choices)
       const missing = unresolvedIdentityConflicts(mergeReport.details, choices)
@@ -319,6 +326,8 @@ export async function POST(request: Request) {
     })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    return NextResponse.json({ error: msg }, { status: 500 })
+    console.error("[delete-contact]", msg)
+    // never show raw database text to staff
+    return NextResponse.json({ error: plainMergeError(msg) }, { status: 500 })
   }
 }

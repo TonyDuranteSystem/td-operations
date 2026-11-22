@@ -88,7 +88,7 @@ BEGIN
   -- ── Personal details: decide everything BEFORE changing anything ───────────
   SELECT string_agg(k, ', ') INTO v_bad_choice
   FROM jsonb_object_keys(coalesce(p_field_choices, '{}'::jsonb)) k
-  WHERE NOT (k = ANY (c_plain || c_identity || ARRAY['address_line1']));
+  WHERE NOT (k = ANY (c_plain || c_identity || ARRAY['address_line1'])) OR k IN ('passport_expiry_date','itin_issue_date');
   IF v_bad_choice IS NOT NULL THEN
     RAISE EXCEPTION 'merge_contacts: not a personal detail that can be chosen: %', v_bad_choice;
   END IF;
@@ -105,7 +105,9 @@ BEGIN
     v_lv := nullif(regexp_replace(v_lj ->> v_field, '^\s+|\s+$', '', 'g'), '');
     v_wv := nullif(regexp_replace(v_wj ->> v_field, '^\s+|\s+$', '', 'g'), '');
     v_choice := p_field_choices ->> v_field;
-    IF v_lv IS NULL THEN
+    IF v_field IN ('passport_expiry_date','itin_issue_date') THEN
+      CONTINUE;                                   -- handled below, together with its own number
+    ELSIF v_lv IS NULL THEN
       CONTINUE;                                   -- nothing on the removed contact to copy
     ELSIF v_field IN ('phone','phone_2','phone_3','phone_4') AND EXISTS (
       SELECT 1 FROM unnest(ARRAY['phone','phone_2','phone_3','phone_4']) pf
@@ -161,15 +163,24 @@ BEGIN
     END IF;
   END IF;
 
-  -- A date that belongs to a passport / ITIN number goes with THAT number: when the kept contact keeps its own (different)
-  -- number, the other person's expiry / issue date is not copied next to it.
+  -- A passport expiry / ITIN issue date goes WITH its own number and is never chosen on its own:
+  --   number taken from the removed contact (copied or chosen) -> its date comes too (the kept date is replaced);
+  --   same number on both -> the date is copied only when the kept one has none;
+  --   removed contact has no number -> its date is copied only when the kept one has none;
+  --   the kept contact's number stays (conflict) -> the other person's date is not copied.
   FOREACH v_dep SLICE 1 IN ARRAY ARRAY[ARRAY['passport_expiry_date','passport_number'], ARRAY['itin_issue_date','itin_number']] LOOP
-    IF v_copied ? v_dep[1]
-       AND nullif(regexp_replace(v_lj ->> v_dep[2], '^\s+|\s+$', '', 'g'), '') IS NOT NULL
-       AND nullif(regexp_replace(v_wj ->> v_dep[2], '^\s+|\s+$', '', 'g'), '') IS NOT NULL
-       AND NOT (v_from_loser ? v_dep[2])
-       AND lower(regexp_replace(v_lj ->> v_dep[2], '[^[:alnum:]]', '', 'g')) <> lower(regexp_replace(v_wj ->> v_dep[2], '[^[:alnum:]]', '', 'g')) THEN
-      v_copied := v_copied - v_dep[1];
+    v_lv := nullif(regexp_replace(v_lj ->> v_dep[1], '^\s+|\s+$', '', 'g'), '');   -- removed date
+    v_wv := nullif(regexp_replace(v_wj ->> v_dep[1], '^\s+|\s+$', '', 'g'), '');   -- kept date
+    v_l_norm := lower(regexp_replace(coalesce(v_lj ->> v_dep[2], ''), '[^[:alnum:]]', '', 'g'));  -- removed number
+    v_w_norm := lower(regexp_replace(coalesce(v_wj ->> v_dep[2], ''), '[^[:alnum:]]', '', 'g'));  -- kept number
+    IF (v_copied ? v_dep[2]) OR (v_from_loser ? v_dep[2]) THEN
+      IF v_lv IS NOT NULL THEN
+        v_from_loser := v_from_loser || jsonb_build_object(v_dep[1], v_lj -> v_dep[1]);
+      ELSIF v_wv IS NOT NULL AND v_w_norm <> '' THEN
+        v_from_loser := v_from_loser || jsonb_build_object(v_dep[1], NULL::text);   -- the kept date belonged to the number that is replaced
+      END IF;
+    ELSIF v_lv IS NOT NULL AND v_wv IS NULL AND (v_l_norm = '' OR v_l_norm = v_w_norm) THEN
+      v_copied := v_copied || jsonb_build_object(v_dep[1], v_lj -> v_dep[1]);
     END IF;
   END LOOP;
 
@@ -281,5 +292,45 @@ BEGIN
     'fields_copied', (SELECT coalesce(jsonb_agg(k), '[]'::jsonb) FROM (SELECT jsonb_object_keys(v_copied) k UNION SELECT jsonb_object_keys(v_from_loser)) u),
     'documents_assigned', jsonb_array_length(v_doc_snap)
   );
+END;
+$function$;
+
+-- ── Fast reference count (same answer as contact_reference_report, ~10x faster) ───────────────────────────────
+-- contact_reference_report finds the foreign keys through information_schema (slow: about 4.5 s per call in the sandbox, so the
+-- merge preview hit the 8 s statement limit). Same counting, same result shape, but the keys are read from pg_constraint,
+-- exactly like merge_contacts() does. The old function stays untouched (other callers, rollback).
+CREATE OR REPLACE FUNCTION public.contact_reference_report_fast(p_contact_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  v_fk        record;
+  v_count     bigint;
+  v_total     bigint := 0;
+  v_breakdown jsonb := '{}'::jsonb;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM contacts WHERE id = p_contact_id) THEN
+    RAISE EXCEPTION 'contact_reference_report: contact % not found', p_contact_id;
+  END IF;
+
+  FOR v_fk IN
+    SELECT cl.relname AS table_name, a.attname AS column_name
+    FROM pg_constraint con
+    JOIN pg_class cl ON cl.oid = con.conrelid
+    JOIN pg_namespace n ON n.oid = cl.relnamespace AND n.nspname = 'public'
+    JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = ANY (con.conkey)
+    WHERE con.contype = 'f'
+      AND con.confrelid = 'public.contacts'::regclass
+    ORDER BY cl.relname, a.attname
+  LOOP
+    EXECUTE format('SELECT count(*) FROM public.%I WHERE %I = $1', v_fk.table_name, v_fk.column_name)
+      INTO v_count USING p_contact_id;
+    IF v_count > 0 THEN
+      v_breakdown := v_breakdown || jsonb_build_object(v_fk.table_name || '.' || v_fk.column_name, v_count);
+      v_total := v_total + v_count;
+    END IF;
+  END LOOP;
+
+  RETURN jsonb_build_object('total_blocking', v_total, 'breakdown', v_breakdown);
 END;
 $function$;

@@ -12,6 +12,8 @@ export interface MergePreviewInput {
   winnerId: string | null
   report: { total_blocking: number; breakdown: Record<string, number> }
   portalLoginCount: number
+  /** logins of the kept contact, when the caller already read them (saves a full scan of the users) */
+  winnerLoginCount?: number
 }
 
 /** PURE: companies where BOTH contacts are individual owners — merging would leave the same person twice in one company. */
@@ -72,9 +74,12 @@ export async function buildMergePreview(i: MergePreviewInput): Promise<DryRunRes
   const warnings: string[] = []
   if (nameKey(loser.full_name) !== nameKey(winner.full_name)) warnings.push(`The two names differ: kept "${label(winner.full_name)}", merged away "${label(loser.full_name)}". Check you are keeping the right one.`)
   if (i.portalLoginCount > 0) {
-    const { findAuthUsersByContactId } = await import("@/lib/auth-admin-helpers")
-    const winnerLogins = await findAuthUsersByContactId(i.winnerId).catch(() => [])
-    if (winnerLogins.length === 0) warnings.push("The kept contact has no portal login but the merged-away one does. The login will be removed — the kept contact will need a portal login created.")
+    let winnerLoginCount = i.winnerLoginCount
+    if (winnerLoginCount === undefined) {
+      const { findAuthUsersByContactId } = await import("@/lib/auth-admin-helpers")
+      winnerLoginCount = (await findAuthUsersByContactId(i.winnerId).catch(() => [])).length
+    }
+    if (winnerLoginCount === 0) warnings.push("The kept contact has no portal login but the merged-away one does. The login will be removed — the kept contact will need a portal login created.")
   }
   warnings.push("A merge cannot be undone from the screen.")
   return {

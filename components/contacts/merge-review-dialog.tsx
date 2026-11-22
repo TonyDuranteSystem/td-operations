@@ -9,11 +9,30 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Loader2, X, GitMerge, ArrowLeftRight } from "lucide-react"
 import type { MergeReport, PersonView } from "@/lib/operations/contact-merge-report"
 import type { DryRunResult } from "@/lib/operations/destructive"
-import { unresolvedIdentityConflicts, type DetailChoice } from "@/lib/contacts/merge-details"
+import { followsCopies, unresolvedIdentityConflicts, type DetailChoice } from "@/lib/contacts/merge-details"
 
 interface Person { id: string; full_name: string | null; email: string | null }
 
 type Loaded = { preview: DryRunResult; report: MergeReport | null }
+
+// The same report asked for twice at once (React runs effects twice in development) is fetched once.
+const inflight = new Map<string, Promise<Loaded>>()
+function fetchReport(rem: string, keep: string, wantedEmail: string): Promise<Loaded> {
+  const key = `${rem}|${keep}|${wantedEmail}`
+  const existing = inflight.get(key)
+  if (existing) return existing
+  const p = (async (): Promise<Loaded> => {
+    const res = await fetch("/api/crm/admin-actions/delete-contact", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contact_id: rem, dry_run: true, mode: "merge", merge_into_contact_id: keep, wanted_email: wantedEmail || undefined }),
+    })
+    const j = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(j.error || "Could not load the merge report. Please try again.")
+    return { preview: j.preview as DryRunResult, report: (j.report ?? null) as MergeReport | null }
+  })().finally(() => { inflight.delete(key) })
+  inflight.set(key, p)
+  return p
+}
 
 function PersonCard({ p, kind }: { p: PersonView; kind: "keep" | "drop" }) {
   const working = p.logins.filter((l) => l.working).length
@@ -59,16 +78,11 @@ export function MergeReviewDialog({
     const mine = ++loadSeq.current                       // only the newest request may change the screen
     setLoading(true); setLoadError(null); setData(null)   // never leave the old report on screen while (or after) a reload fails
     try {
-      const res = await fetch("/api/crm/admin-actions/delete-contact", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contact_id: rem, dry_run: true, mode: "merge", merge_into_contact_id: keep, wanted_email: wantedEmail || undefined }),
-      })
-      const j = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(j.error || "Could not load the merge report")
+      const loaded = await fetchReport(rem, keep, wantedEmail)
       if (mine !== loadSeq.current) return
-      setData({ preview: j.preview as DryRunResult, report: (j.report ?? null) as MergeReport | null })
+      setData(loaded)
     } catch (e) {
-      if (mine === loadSeq.current) setLoadError(e instanceof Error ? e.message : "Could not load the merge report")
+      if (mine === loadSeq.current) setLoadError(e instanceof Error && e.message ? e.message : "Could not load the merge report. Please try again.")
     } finally { if (mine === loadSeq.current) setLoading(false) }
   }, [])
 
@@ -191,10 +205,12 @@ export function MergeReviewDialog({
                                 <td className="py-2">
                                   {r.status === "same" && <span className="text-emerald-700">Same on both</span>}
                                   {r.status === "only_kept" && <span className="text-zinc-500">Kept contact already has it</span>}
-                                  {r.status === "copy" && r.dependsOn && report.details.some((d) => d.field === r.dependsOn && d.status === "conflict" && choices[d.field] !== "loser") && (
-                                    <span className="text-zinc-500">Not copied: it belongs to the other person&apos;s number, which is not used</span>
+                                  {r.status === "follows" && (
+                                    followsCopies(report.details, r.field, choices)
+                                      ? <span className="text-emerald-700">Copied with its number{r.kept ? " (replaces the kept date)" : ""}</span>
+                                      : <span className="text-zinc-500">Not copied: it goes with the other number, which is not used</span>
                                   )}
-                                  {r.status === "copy" && !(r.dependsOn && report.details.some((d) => d.field === r.dependsOn && d.status === "conflict" && choices[d.field] !== "loser")) && (
+                                  {r.status === "copy" && (
                                     <label className="flex items-center gap-1.5 cursor-pointer">
                                       <input type="checkbox" checked={choices[r.field] !== "winner"} onChange={(e) => setChoices((c) => ({ ...c, [r.field]: e.target.checked ? "loser" : "winner" }))} /> Copy to the kept contact
                                     </label>
@@ -219,7 +235,7 @@ export function MergeReviewDialog({
                 {/* 3. Documents */}
                 <section className="space-y-2">
                   <h3 className="font-semibold text-zinc-900">3. Documents</h3>
-                  {report.documents.movingFromRemoved > 0 && <p className="text-zinc-600">{report.documents.movingFromRemoved} file{report.documents.movingFromRemoved === 1 ? "" : "s"} owned by the removed contact move to {keptName} automatically.</p>}
+                  {report.documents.movingFromRemoved > 0 && <p className="text-zinc-600">{report.documents.movingFromRemoved} file{report.documents.movingFromRemoved === 1 ? "" : "s"} owned by the removed contact {report.documents.movingFromRemoved === 1 ? "moves" : "move"} to {keptName} automatically.</p>}
                   {report.documents.ownerless.length === 0 ? <p className="text-zinc-600">No personal document is waiting for an owner on these contacts&apos; companies.</p> : (
                     <>
                       <p className="text-zinc-600">{report.documents.ownerless.length} personal file{report.documents.ownerless.length === 1 ? " has" : "s have"} no owner (red warning in Documents). Pick who they belong to. The tool never guesses from file names — a company with other people may hold files that are not {keptName}&apos;s.</p>

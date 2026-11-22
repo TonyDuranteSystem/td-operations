@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest"
 import {
   isEmptyValue, normalizeForCompare, diffPersonalDetails, unresolvedIdentityConflicts, cleanChoices,
-  suggestKeep, eligibleOwnerlessDocs, cleanDocumentIds, DETAIL_FIELDS, IDENTITY_DETAIL_FIELDS,
+  suggestKeep, followsCopies, countFilledDetails, eligibleOwnerlessDocs, cleanDocumentIds, DETAIL_FIELDS, IDENTITY_DETAIL_FIELDS,
 } from "@/lib/contacts/merge-details"
 
 describe("isEmptyValue", () => {
@@ -69,12 +69,36 @@ describe("address block, dependent dates, odd values", () => {
   })
   it("marks the dates that belong to a passport / ITIN number", () => {
     const rows = diffPersonalDetails({ passport_number: "X1" }, { passport_number: "Y2", passport_expiry_date: "2031-01-01", itin_issue_date: "2022-06-02" })
-    expect(rows.find((r) => r.field === "passport_expiry_date")).toMatchObject({ status: "copy", dependsOn: "passport_number" })
+    expect(rows.find((r) => r.field === "passport_expiry_date")).toMatchObject({ status: "follows", dependsOn: "passport_number" })
     expect(rows.find((r) => r.field === "itin_issue_date")?.dependsOn).toBe("itin_number")
   })
   it("two values made only of punctuation are not the same, and tabs count as empty", () => {
     expect(diffPersonalDetails({ phone: "-" }, { phone: "." })[0].status).toBe("conflict")
     expect(diffPersonalDetails({ phone: "\t\n" }, { phone: "+1" })[0].status).toBe("copy")
+  })
+})
+
+describe("dates that follow their number", () => {
+  const rows = diffPersonalDetails({ passport_number: "X1", passport_expiry_date: "2030-01-01" }, { passport_number: "Y2", passport_expiry_date: "2031-01-01" })
+  it("are never a choice of their own", () => {
+    expect(rows.find((r) => r.field === "passport_expiry_date")?.status).toBe("follows")
+    expect(unresolvedIdentityConflicts(rows, {}).map((r) => r.field)).toEqual(["passport_number"])
+    expect(cleanChoices(rows, { passport_expiry_date: "loser", passport_number: "loser" })).toEqual({ passport_number: "loser" })
+  })
+  it("are copied exactly when their number is taken from the removed contact", () => {
+    expect(followsCopies(rows, "passport_expiry_date", { passport_number: "loser" })).toBe(true)
+    expect(followsCopies(rows, "passport_expiry_date", { passport_number: "winner" })).toBe(false)
+    expect(followsCopies(rows, "passport_expiry_date", {})).toBe(false)
+  })
+  it("same number: a missing kept date is copied, a different kept date stays", () => {
+    const r1 = diffPersonalDetails({ itin_number: "9XX" }, { itin_number: "9-XX", itin_issue_date: "2022-06-02" })
+    expect(r1.find((r) => r.field === "itin_issue_date")?.status).toBe("follows")
+    expect(followsCopies(r1, "itin_issue_date", {})).toBe(true)
+    const r2 = diffPersonalDetails({ itin_number: "9XX", itin_issue_date: "2020-01-01" }, { itin_number: "9XX", itin_issue_date: "2022-06-02" })
+    expect(r2.find((r) => r.field === "itin_issue_date")?.status).toBe("only_kept")
+  })
+  it("counts the filled details", () => {
+    expect(countFilledDetails({ phone: "1", passport_number: " ", gender: null, address_city: "x" })).toBe(2)
   })
 })
 
@@ -107,8 +131,8 @@ describe("identity choices", () => {
 })
 
 describe("suggestKeep", () => {
-  const A = { id: "a", email: "info@x.com", workingLogin: false, companies: 1, records: 5 }
-  const B = { id: "b", email: "me@gmail.com", workingLogin: true, companies: 2, records: 50 }
+  const A = { id: "a", email: "info@x.com", workingLogin: false, companies: 1, details: 4, records: 5 }
+  const B = { id: "b", email: "me@gmail.com", workingLogin: true, companies: 2, details: 4, records: 50 }
   it("the wanted email comes first, even against a working login", () => {
     expect(suggestKeep(A, B, " INFO@x.com ", "b")).toMatchObject({ keepId: "a", decidedBy: "wanted_email" })
   })
@@ -125,8 +149,14 @@ describe("suggestKeep", () => {
     expect(suggestKeep({ ...a, companies: 2 }, B, null, "a")).toMatchObject({ keepId: "b", decidedBy: "most_data" })
     expect(suggestKeep({ ...a, companies: 2, records: 99 }, B, null, "b")).toMatchObject({ keepId: "a", decidedBy: "most_data" })
   })
+  it("then the one holding more personal details, then more records", () => {
+    const a = { ...A, workingLogin: true, companies: 2, details: 6, records: 1 }
+    expect(suggestKeep(a, { ...B, details: 2, records: 999 }, null, "b")).toMatchObject({ keepId: "a", decidedBy: "most_data" })
+    expect(suggestKeep(a, { ...B, details: 2, records: 999 }, null, "b").reasons[0]).toMatch(/more of the person's details/)
+    expect(suggestKeep({ ...a, details: 4 }, { ...B, details: 4, records: 999 }, null, "a").keepId).toBe("b")
+  })
   it("a tie keeps the picked one", () => {
-    expect(suggestKeep({ ...A, workingLogin: true, companies: 2, records: 50 }, B, null, "a")).toMatchObject({ keepId: "a", decidedBy: "tie" })
+    expect(suggestKeep({ ...A, workingLogin: true, companies: 2, details: 4, records: 50 }, B, null, "a")).toMatchObject({ keepId: "a", decidedBy: "tie" })
   })
   it("never says a missing email matches an empty wanted email", () => {
     expect(suggestKeep({ ...A, email: null }, { ...B, email: null }, "", "a").decidedBy).toBe("working_login")

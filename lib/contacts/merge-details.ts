@@ -40,7 +40,8 @@ export const DETAIL_LABELS: Record<string, string> = {
 }
 
 export type DetailChoice = "loser" | "winner"
-export type DetailStatus = "same" | "copy" | "conflict" | "only_kept"
+/** "follows" = a passport expiry / ITIN issue date: it goes with its own number and is never chosen on its own */
+export type DetailStatus = "same" | "copy" | "conflict" | "only_kept" | "follows"
 
 export interface DetailRow {
   field: string
@@ -87,12 +88,11 @@ export function diffPersonalDetails(kept: Record<string, unknown>, removed: Reco
     if (r === null) status = "only_kept"
     else if (k === null) status = "copy"
     else status = sameValue(k, r) ? "same" : "conflict"
-    const row: DetailRow = { field, label: DETAIL_LABELS[field] ?? field, identity, kept: k, removed: r, status }
-    if (DEPENDS_ON[field]) row.dependsOn = DEPENDS_ON[field]
-    rows.push(row)
+    rows.push({ field, label: DETAIL_LABELS[field] ?? field, identity, kept: k, removed: r, status })
   }
   const keptPhones = PHONE_FIELDS.map((f) => text(kept[f])).filter((x): x is string => x !== null)
   for (const field of [...IDENTITY_DETAIL_FIELDS, ...PLAIN_DETAIL_FIELDS]) {
+    if (DEPENDS_ON[field]) continue
     const k = text(kept[field])
     const r = text(removed[field])
     // a number the kept contact already has in ANY phone slot is the same number, not something to copy again
@@ -103,7 +103,34 @@ export function diffPersonalDetails(kept: Record<string, unknown>, removed: Reco
     add(field, (IDENTITY_DETAIL_FIELDS as readonly string[]).includes(field), k, r)
   }
   add(ADDRESS_KEY, false, addressText(kept), addressText(removed))
+  // the dates that belong to a number: decided by the number's own choice, never chosen separately
+  for (const [dep, num] of Object.entries(DEPENDS_ON)) {
+    const k = text(kept[dep])
+    const r = text(removed[dep])
+    if (k === null && r === null) continue
+    const numStatus = rows.find((x) => x.field === num)?.status
+    let status: DetailStatus
+    if (r === null) status = "only_kept"
+    else if (k === null || numStatus === "conflict" || numStatus === "copy") status = "follows"
+    else status = sameValue(k, r) ? "same" : "only_kept"
+    rows.push({ field: dep, label: DETAIL_LABELS[dep] ?? dep, identity: true, kept: k, removed: r, status, dependsOn: num })
+  }
   return rows
+}
+
+/** Will the removed contact's date (passport expiry / ITIN issue date) be copied, given the choice made on its number? */
+export function followsCopies(rows: DetailRow[], depField: string, choices: Record<string, string | undefined>): boolean {
+  const num = DEPENDS_ON[depField]
+  const numRow = rows.find((x) => x.field === num)
+  if (!numRow) return true
+  if (numRow.status === "copy") return choices[num] !== "winner"
+  if (numRow.status === "conflict") return choices[num] === "loser"
+  return true
+}
+
+/** How many of the person's details are filled in (used to suggest which contact holds more). */
+export function countFilledDetails(c: Record<string, unknown>): number {
+  return DETAIL_FIELDS.filter((f) => !isEmptyValue(c[f])).length
 }
 
 /** Identity details where the two differ and nobody has chosen yet: the merge cannot go ahead until they are chosen. */
@@ -133,6 +160,8 @@ export interface KeepCandidate {
   workingLogin: boolean
   /** companies linked (account_contacts) */
   companies: number
+  /** personal details filled in (passport, ITIN, date of birth, phones, address ...) */
+  details: number
   /** other linked records (a rough measure of how much history it holds) */
   records: number
 }
@@ -146,7 +175,7 @@ export interface KeepSuggestion {
 
 /**
  * Rules in order: (1) the email the person wants, (2) the record with a working login, (3) the record with the most
- * companies / data. On a tie it keeps `fallbackKeepId` (the one the staff member picked).
+ * companies, then the one holding more personal details, then the one with more linked records. On a tie it keeps `fallbackKeepId` (the one the staff member picked).
  */
 export function suggestKeep(a: KeepCandidate, b: KeepCandidate, wantedEmail: string | null | undefined, fallbackKeepId: string): KeepSuggestion {
   const wanted = (wantedEmail ?? "").trim().toLowerCase()
@@ -162,15 +191,22 @@ export function suggestKeep(a: KeepCandidate, b: KeepCandidate, wantedEmail: str
     const win = a.workingLogin ? a : b
     return { keepId: win.id, decidedBy: "working_login", reasons: ["It has a login that works. The other one does not, so keeping it avoids locking the person out."] }
   }
-  if (a.companies !== b.companies || a.records !== b.records) {
-    const win = a.companies !== b.companies ? (a.companies > b.companies ? a : b) : (a.records > b.records ? a : b)
+  if (a.companies !== b.companies) {
+    const win = a.companies > b.companies ? a : b
     const lose = win === a ? b : a
-    const why = win.companies !== lose.companies
-      ? `It is linked to more companies (${win.companies} against ${lose.companies}).`
-      : `It holds more linked records (${win.records} against ${lose.records}).`
-    return { keepId: win.id, decidedBy: "most_data", reasons: [why] }
+    return { keepId: win.id, decidedBy: "most_data", reasons: [`It is linked to more companies (${win.companies} against ${lose.companies}).`] }
   }
-  return { keepId: fallbackKeepId, decidedBy: "tie", reasons: ["The two look equal, so the one you picked stays."] }
+  if (a.details !== b.details) {
+    const win = a.details > b.details ? a : b
+    const lose = win === a ? b : a
+    return { keepId: win.id, decidedBy: "most_data", reasons: [`It holds more of the person's details (${win.details} filled in against ${lose.details}).`] }
+  }
+  if (a.records !== b.records) {
+    const win = a.records > b.records ? a : b
+    const lose = win === a ? b : a
+    return { keepId: win.id, decidedBy: "most_data", reasons: [`It holds more linked records (${win.records} against ${lose.records}).`] }
+  }
+  return { keepId: fallbackKeepId, decidedBy: "tie", reasons: ["Nothing tells them apart (same companies, details and records), so the one you picked stays."] }
 }
 
 // ── Documents with no owner ──────────────────────────────────────────────────

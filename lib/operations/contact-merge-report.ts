@@ -7,12 +7,14 @@
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import {
-  DETAIL_FIELDS, diffPersonalDetails, eligibleOwnerlessDocs, suggestKeep, unresolvedIdentityConflicts,
+  DETAIL_FIELDS, countFilledDetails, diffPersonalDetails, eligibleOwnerlessDocs, suggestKeep, unresolvedIdentityConflicts,
   type DetailRow, type KeepSuggestion,
 } from "@/lib/contacts/merge-details"
 import { storeMergeBlocker } from "@/lib/crm-store/merge-guard"
 import { memberRowsOf } from "@/lib/operations/contact-name-follow"
 import { sharedMemberAccounts } from "@/lib/operations/contact-merge-preview"
+import { getContactReferenceReport } from "@/lib/operations/contact-reference"
+import type { User } from "@supabase/supabase-js"
 
 export interface LoginView {
   id: string
@@ -104,8 +106,8 @@ export function assembleMergeReport(raw: MergeRaw): MergeReport {
   const companyIds = [...raw.companies.removed, ...raw.companies.kept].map((c) => c.id)
   const docs = eligibleOwnerlessDocs(raw.ownerlessDocs, companyIds)
 
-  const cand = (p: PersonView) => ({ id: p.id, email: p.email, workingLogin: p.logins.some((l) => l.working), companies: p.companies.length, records: p.records })
-  const suggestion = suggestKeep(cand(kept), cand(removed), raw.wantedEmail, kept.id)
+  const cand = (p: PersonView, c: RawContact) => ({ id: p.id, email: p.email, workingLogin: p.logins.some((l) => l.working), companies: p.companies.length, details: countFilledDetails(c), records: p.records })
+  const suggestion = suggestKeep(cand(kept, raw.kept), cand(removed, raw.removed), raw.wantedEmail, kept.id)
 
   return {
     removed, kept, suggestion,
@@ -119,9 +121,7 @@ export function assembleMergeReport(raw: MergeRaw): MergeReport {
   }
 }
 
-async function loginViews(contactId: string): Promise<LoginView[]> {
-  const { findAuthUsersByContactId } = await import("@/lib/auth-admin-helpers")
-  const users = await findAuthUsersByContactId(contactId).catch(() => [])
+function toLoginViews(users: User[]): LoginView[] {
   return users.map((u) => {
     const bannedUntil = (u as unknown as { banned_until?: string | null }).banned_until
     const banned = !!bannedUntil && new Date(bannedUntil).getTime() > Date.now()
@@ -138,9 +138,7 @@ async function companiesOf(contactId: string): Promise<RawCompany[]> {
 }
 
 async function recordCount(contactId: string): Promise<number> {
-  const { data, error } = await supabaseAdmin.rpc("contact_reference_report", { p_contact_id: contactId })
-  if (error) throw new Error(`reference report failed: ${error.message}`)
-  return ((data ?? {}) as { total_blocking?: number }).total_blocking ?? 0
+  return (await getContactReferenceReport(contactId)).total_blocking
 }
 
 async function hasStorageOwner(contactId: string): Promise<boolean> {
@@ -149,7 +147,14 @@ async function hasStorageOwner(contactId: string): Promise<boolean> {
 }
 
 /** Everything the report needs, read fresh. Returns a message instead when the pair cannot be shown at all. */
-export async function loadMergeRaw(removedId: string, keptId: string, wantedEmail: string | null): Promise<MergeRaw | { error: string }> {
+export interface MergeRawOptions {
+  /** already read by the caller (saves a slow call) */
+  removedRecords?: number
+  /** logins of the two contacts, already read in ONE scan (contact id -> logins) */
+  users?: Map<string, User[]>
+}
+
+export async function loadMergeRaw(removedId: string, keptId: string, wantedEmail: string | null, opts: MergeRawOptions = {}): Promise<MergeRaw | { error: string }> {
   if (removedId === keptId) return { error: "A contact cannot be merged into itself." }
   const cols = ["id", "full_name", "email", "alt_emails", "merged_into", "passport_on_file", "portal_tier", ...DETAIL_FIELDS].join(", ")
   const { data: pair, error } = await supabaseAdmin.from("contacts").select(cols).in("id", [removedId, keptId])
@@ -171,10 +176,18 @@ export async function loadMergeRaw(removedId: string, keptId: string, wantedEmai
     blockers.push(`Both contacts are listed as owners of ${(accts ?? []).map((a) => a.company_name).join(", ")}. Remove the duplicate owner entry there first, then merge.`)
   }
 
-  const [cRem, cKept, rRem, rKept, lRem, lKept, sRem, sKept] = await Promise.all([
-    companiesOf(removedId), companiesOf(keptId), recordCount(removedId), recordCount(keptId),
-    loginViews(removedId), loginViews(keptId), hasStorageOwner(removedId), hasStorageOwner(keptId),
+  let users = opts.users
+  if (!users) {
+    const { findAuthUsersByContactIds } = await import("@/lib/auth-admin-helpers")
+    users = await findAuthUsersByContactIds([removedId, keptId]).catch(() => new Map<string, User[]>())
+  }
+  const [cRem, cKept, rRem, rKept, sRem, sKept] = await Promise.all([
+    companiesOf(removedId), companiesOf(keptId),
+    opts.removedRecords !== undefined ? Promise.resolve(opts.removedRecords) : recordCount(removedId), recordCount(keptId),
+    hasStorageOwner(removedId), hasStorageOwner(keptId),
   ])
+  const lRem = toLoginViews(users.get(removedId) ?? [])
+  const lKept = toLoginViews(users.get(keptId) ?? [])
 
   const companyIds = Array.from(new Set([...cRem, ...cKept].map((c) => c.id)))
   let ownerlessDocs: RawDoc[] = []
@@ -197,8 +210,8 @@ export async function loadMergeRaw(removedId: string, keptId: string, wantedEmai
   }
 }
 
-export async function buildMergeReport(removedId: string, keptId: string, wantedEmail: string | null): Promise<MergeReport | { error: string }> {
-  const raw = await loadMergeRaw(removedId, keptId, wantedEmail)
+export async function buildMergeReport(removedId: string, keptId: string, wantedEmail: string | null, opts: MergeRawOptions = {}): Promise<MergeReport | { error: string }> {
+  const raw = await loadMergeRaw(removedId, keptId, wantedEmail, opts)
   if ("error" in raw) return raw
   return assembleMergeReport(raw)
 }
