@@ -27,6 +27,7 @@ import { reanchorLeadConversations } from "@/lib/team/reanchor-conversations"
 import { advanceServiceDelivery } from "@/lib/service-delivery"
 import { taxYearFromServiceName } from "@/lib/flows/resolve-flows"
 import { nominalDeadline } from "@/lib/tax/ensure-tax-return"
+import { isStandaloneTaxReturnPipelines, STANDALONE_TR_STAGES } from "@/lib/tax/standalone-tax-return"
 import { updateJobProgress, type Job, type JobResult } from "../queue"
 
 interface TaxReturnIntakePayload {
@@ -257,10 +258,13 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
   let taxReturnSdId: string | null = null
   // The tax year the Tax Return SD is named for ("Tax Return 2026 - <company>"), or null (a plain "Tax Return - <company>" = this year, as before).
   let sdTaxYear: number | null = null
+  // True when the offer behind this job sells ONLY the Tax Return (a standalone company return): its tax form opens as soon as the company
+  // information is in, instead of stopping at "Paid - Awaiting Data" with the form still closed (Antonio, 22 Nov 2026).
+  let standaloneReturn = false
   try {
     const { data: sd } = await supabaseAdmin
       .from("service_deliveries")
-      .select("id, stage, service_name")
+      .select("id, stage, service_name, source_offer_token")
       .eq("service_type", "Tax Return")
       .eq("contact_id", contact_id)
       .eq("status", "active")
@@ -279,6 +283,14 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
 
     taxReturnSdId = sd.id
     sdTaxYear = taxYearFromServiceName(sd.service_name)
+    if (sd.source_offer_token) {
+      const { data: srcOffer } = await supabaseAdmin
+        .from("offers")
+        .select("bundled_pipelines")
+        .eq("token", sd.source_offer_token)
+        .maybeSingle()
+      standaloneReturn = isStandaloneTaxReturnPipelines(srcOffer?.bundled_pipelines)
+    }
     // eslint-disable-next-line no-restricted-syntax -- deferred migration, dev_task 7ebb1e0c
     await supabaseAdmin
       .from("service_deliveries")
@@ -320,6 +332,8 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
           tax_year: currentYear,
           data_received: false,
           paid: true,
+          // A standalone return's record is born open: the tax wizard needs an OPEN record to show the form.
+          ...(standaloneReturn ? { status: STANDALONE_TR_STAGES.open as never } : {}),
         })
         .select("id")
         .single()
@@ -343,11 +357,12 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
   }
   await updateJobProgress(job.id, result)
 
-  // ─── 7. ADVANCE SD: "Company Data Pending" → "Paid - Awaiting Data" (CRITICAL) ───
+  // ─── 7. ADVANCE SD: "Company Data Pending" → "Paid - Awaiting Data" — or, for a standalone return, straight to "Wizard Available" (CRITICAL) ───
+  // The move into "Wizard Available" sends the client their "Complete your tax form" notice itself (chat + email + bell).
   try {
     const advResult = await advanceServiceDelivery({
       delivery_id: taxReturnSdId!,
-      target_stage: "Paid - Awaiting Data",
+      target_stage: standaloneReturn ? STANDALONE_TR_STAGES.open : STANDALONE_TR_STAGES.paidAwaitingData,
       notes: `Company info received from ${companyName}. Account created.`,
       actor: "tax_return_intake",
       skip_tasks: true,
@@ -416,21 +431,26 @@ export async function handleTaxReturnIntake(job: Job): Promise<JobResult> {
   }
 
   // ─── 11. NOTIFICATION (NON-CRITICAL) ───
-  try {
-    const { createPortalNotification } = await import("@/lib/portal/notifications")
-    await createPortalNotification({
-      account_id: accountId!,
-      contact_id: contact_id,
-      type: "info",
-      title: "Company Information Received",
-      body: "Your company information has been processed. You can now complete your Tax Return questionnaire.",
-    })
-    result.steps.push(step("notification", "ok", "Portal notification sent"))
-  } catch (e) {
-    result.steps.push(step("notification", "skipped", `Non-critical: ${e instanceof Error ? e.message : String(e)}`))
+  // A standalone return's advance already told the client to complete the tax form (one message, never a second).
+  if (standaloneReturn) {
+    result.steps.push(step("notification", "skipped", "the move to Wizard Available already sent the client their 'Complete your tax form' notice"))
+  } else {
+    try {
+      const { createPortalNotification } = await import("@/lib/portal/notifications")
+      await createPortalNotification({
+        account_id: accountId!,
+        contact_id: contact_id,
+        type: "info",
+        title: "Company Information Received",
+        body: "Your company information has been processed. You can now complete your Tax Return questionnaire.",
+      })
+      result.steps.push(step("notification", "ok", "Portal notification sent"))
+    } catch (e) {
+      result.steps.push(step("notification", "skipped", `Non-critical: ${e instanceof Error ? e.message : String(e)}`))
+    }
   }
 
-  result.summary = `Tax Return intake complete for ${companyName}. Account created, SD advanced to Paid - Awaiting Data.`
+  result.summary = `Tax Return intake complete for ${companyName}. Account created, SD advanced to ${standaloneReturn ? STANDALONE_TR_STAGES.open : STANDALONE_TR_STAGES.paidAwaitingData}.`
   return result
 }
 
