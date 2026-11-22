@@ -92,22 +92,28 @@ export async function recipientHasPush(opts: {
 }): Promise<boolean> {
   const { contactId, accountId, singleRecipient, ownLoginId } = opts
   if (contactId && (await personHasPush(contactId))) return true
-  if (accountId && singleRecipient) {
-    // A device stamped with the company only counts when it is NOT another team login's device: a team login's alerts reach that login, never
-    // the person the email goes to (team-login device bug, dev job e59dd470). Every login of the company counts here — removed or switched off
-    // too, because their devices stay registered — except the recipient's own. Any lookup error answers "no app": the email goes out.
-    const { data: devices, error: devicesError } = await supabaseAdmin
-      .from('push_subscriptions')
-      .select('user_id')
-      .eq('account_id', accountId)
-    if (devicesError || !devices || devices.length === 0) return false
-    const { data: logins, error: loginsError } = await supabaseAdmin
-      .from('portal_team_members')
-      .select('auth_user_id')
-      .eq('account_id', accountId)
-    if (loginsError) return false
-    const otherLoginIds = new Set((logins ?? []).map((l) => l.auth_user_id).filter((id) => id !== ownLoginId))
-    return devices.some((d) => !d.user_id || !otherLoginIds.has(d.user_id))
-  }
+  if (accountId && singleRecipient) return companyHasDeviceBesidesTeamLogins(accountId, ownLoginId ?? null)
   return false
+}
+
+/**
+ * Does the COMPANY have a device that is not another team login's? A company-wide email goes to a person (the owner, or one team login who
+ * is the only recipient), and a team login's alerts reach that login, never the person who gets the email — so a team login's device must not
+ * count as "the person has the app". `ownLoginId`: when the email goes to a team login, that login's own device does count.
+ * Every login of the company counts here — removed or switched off too, because their devices stay registered. Any lookup error answers
+ * "no app": the email goes out (dev job e59dd470).
+ */
+export async function companyHasDeviceBesidesTeamLogins(accountId: string, ownLoginId: string | null = null): Promise<boolean> {
+  const { data: devices, error: devicesError } = await supabaseAdmin
+    .from('push_subscriptions')
+    .select('user_id')
+    .eq('account_id', accountId)
+  if (devicesError || !devices || devices.length === 0) return false
+  const { data: logins, error: loginsError } = await supabaseAdmin
+    .from('portal_team_members')
+    .select('auth_user_id')
+    .eq('account_id', accountId)
+  if (loginsError) return false
+  const otherLoginIds = new Set((logins ?? []).map((l) => l.auth_user_id).filter((id) => id !== ownLoginId))
+  return devices.some((d) => !d.user_id || !otherLoginIds.has(d.user_id))
 }

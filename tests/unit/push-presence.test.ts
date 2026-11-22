@@ -63,7 +63,7 @@ vi.mock('@/lib/supabase-admin', () => ({
   },
 }))
 
-import { personHasPush, personHasCompanyPush, companyEmailRecipientContactId, stageNoticeRecipientHasApp, recipientHasPush } from '@/lib/portal/push-presence'
+import { personHasPush, personHasCompanyPush, companyEmailRecipientContactId, stageNoticeRecipientHasApp, recipientHasPush, companyHasDeviceBesidesTeamLogins } from '@/lib/portal/push-presence'
 
 beforeEach(() => {
   fx.subs = []; fx.teamLogins = []; fx.teamLookupFails = false; fx.links = []; fx.companyEmail = null; fx.queries = []; fx.fail = false; fx.emailLookupThrows = false
@@ -234,5 +234,24 @@ describe('recipientHasPush — a team login\'s device is NOT the owner\'s app (t
   it('with more than one person to reach, a company device never counts (unchanged)', async () => {
     fx.subs = [{ account_id: 'a1', user_id: 'legacy-owner-user' }]
     expect(await recipientHasPush({ contactId: 'owner', accountId: 'a1', singleRecipient: false })).toBe(false)
+  })
+})
+
+describe('companyHasDeviceBesidesTeamLogins (company-wide emails: the digest and the chat email)', () => {
+  it('only a team login has a device -> false (the owner still gets the email)', async () => {
+    fx.subs = [{ account_id: 'a1', user_id: 'team-user-1' }]
+    fx.teamLogins = [{ account_id: 'a1', auth_user_id: 'team-user-1' }]
+    expect(await companyHasDeviceBesidesTeamLogins('a1')).toBe(false)
+  })
+  it('a client device alongside a team login\'s -> true', async () => {
+    fx.subs = [{ account_id: 'a1', user_id: 'team-user-1' }, { account_id: 'a1', contact_id: 'c1', user_id: 'client-user' }]
+    fx.teamLogins = [{ account_id: 'a1', auth_user_id: 'team-user-1' }]
+    expect(await companyHasDeviceBesidesTeamLogins('a1')).toBe(true)
+  })
+  it('no device, or a lookup error -> false (the email goes out)', async () => {
+    expect(await companyHasDeviceBesidesTeamLogins('a1')).toBe(false)
+    fx.subs = [{ account_id: 'a1', user_id: 'x' }]
+    fx.teamLookupFails = true
+    expect(await companyHasDeviceBesidesTeamLogins('a1')).toBe(false)
   })
 })
