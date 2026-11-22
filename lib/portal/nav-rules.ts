@@ -14,6 +14,7 @@ import type { PortalNavVisibility, InProgressFormation, InProgressOnboarding } f
 import { isTierFeatureVisible, isPartnerPortal } from '@/lib/portal/tier-config'
 import { hubAccess } from '@/lib/portal/invoice-hub'
 import { hasCapability, teammateNavCapability, type TeamCapability } from '@/lib/portal/team/capabilities'
+import { isServiceScopedLogin, scopedNavKeyHidden } from '@/lib/portal/service-scope'
 
 export interface PortalNavItemDef {
   key: string
@@ -110,6 +111,11 @@ export interface NavRuleContext {
   teammateCapabilities?: Record<string, boolean>
   /** The client has at least one company (account). */
   hasCompany: boolean
+  /**
+   * Menu entries the services this company holds add back for a service-scoped login (catalog `metadata.portal_nav_keys`, e.g. Bank Applications for a
+   * banking buyer). Computed on the server (lib/portal/service-scope-server.ts); only read for a service-scoped login.
+   */
+  extraNavKeys?: string[]
 }
 
 /** Same rule as the Invoices page (lib/portal/invoice-hub.ts hubAccess): a team member gets the hub only through the capabilities the owner granted. */
@@ -130,6 +136,10 @@ export function isNavItemVisible(item: PortalNavItemDef, ctx: NavRuleContext): b
   const teammateCapabilities = (ctx.teammateCapabilities ?? {}) as Partial<Record<TeamCapability, boolean>>
   const { portalTier, accountType, portalRole, navVisibility, hasWizardPending } = ctx
   const isPartner = isPartnerPortal(portalRole)
+
+  // A service-scoped login (a "One-Time" company: one bought service) never has the entries that are not part of that service, unless a bought service
+  // adds one back. Checked first so it also covers Team. Partners and team members are never service-scoped (lib/portal/service-scope.ts).
+  if (isServiceScopedLogin({ accountType, hasCompany: ctx.hasCompany, portalRole, isTeammate, portalTier }) && scopedNavKeyHidden(item.key, ctx.extraNavKeys)) return false
 
   if (item.teamAdminOnly) return canManageTeam
   // Teammate (Portal Team Access): nav is governed solely by granted capabilities.
@@ -205,9 +215,12 @@ export function visiblePartnerItems(ctx: NavRuleContext): PortalNavItemDef[] {
 export function visibleMainItems(ctx: NavRuleContext): PortalNavItemDef[] {
   if (isPartnerPortal(ctx.portalRole)) return []
   const companies = showCompaniesSection(ctx)
+  // A service-scoped person with NO company (an individual's personal service) keeps Documents: that page works without a company. Sign Documents stays
+  // out: it needs a company (its page says "No company found"), so it would be a dead end.
+  const scopedPerson = !companies && isServiceScopedLogin({ accountType: ctx.accountType, hasCompany: false, portalRole: ctx.portalRole, isTeammate: ctx.isTeammate, portalTier: ctx.portalTier })
   return MAIN_NAV_ITEMS
     .map(item => (item.key === 'nav.invoices' && !companies ? PERSONAL_INVOICES_NAV_ITEM : item))
-    .filter(item => (!item.needsCompany || companies) && isNavItemVisible(item, ctx))
+    .filter(item => (!item.needsCompany || companies || (scopedPerson && item.key === 'nav.documents')) && isNavItemVisible(item, ctx))
 }
 
 /**

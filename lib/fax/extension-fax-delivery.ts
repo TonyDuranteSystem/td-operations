@@ -34,10 +34,12 @@ import {
   EXTENSION_RECEIPT_GRACE_MINUTES,
   EXTENSION_STAGES,
   extensionFiledMessage,
+  extensionMovesJob,
   extensionReceiptName,
   FILING_CLAIM_MINUTES,
   faxDigits,
   form7004OnlyName,
+  isExtensionBoxStage,
   mergedDocumentName,
 } from '@/lib/fax/extension-fax'
 
@@ -84,6 +86,11 @@ export interface ExtensionFaxDeps {
   /** route 'drive' = the company has no storage to hold it */
   saveDocument(p: { accountId: string; sdId: string; name: string; bytes: Buffer; year: number | null; key: string; visibleToClient: boolean; documentType: string; typeLabel: string }): Promise<{ route: 'store' | 'drive'; fileId?: string }>
   advanceToFiled(sdId: string, notes: string): Promise<{ ok: boolean; error?: string }>
+  /**
+   * A delivered extension at a LATER step (the tax form is already open: a standalone return) — write it on the tax record of the job's year
+   * (extension filed + today's date) and leave the job where it is. Moving it to "Extension Filed" would send it backwards. Safe to repeat.
+   */
+  recordFiledInPlace(job: ExtensionJob, year: number | null): Promise<{ ok: boolean; error?: string }>
   /** the client's language and the topic/message plumbing; `posted` false = nobody to address */
   clientIsItalian(job: ExtensionJob): Promise<boolean>
   extensionDeadline(job: ExtensionJob, year: number | null): Promise<string | null>
@@ -112,9 +119,10 @@ export async function processExtensionFaxDelivery(sdId: string, d: ExtensionFaxD
     const job = loaded.job
     if (!job) return { outcome: 'not_applicable', reason: 'job not found' }
     if (job.service_type !== 'Tax Return') return { outcome: 'not_applicable', reason: 'not a Tax Return job' }
-    // the job waits at the first step; a crash after the move leaves it at "Extension Filed" with the message still to post
-    if (job.stage !== EXTENSION_STAGES.waiting && job.stage !== EXTENSION_STAGES.filed) {
-      return { outcome: 'not_applicable', reason: `the job is at "${job.stage ?? 'no step'}", not "${EXTENSION_STAGES.waiting}"` }
+    // the job waits at the first step (or, for a standalone return whose form is already open, sits at a later step); a crash after the move leaves
+    // it at "Extension Filed" with the message still to post
+    if (!isExtensionBoxStage(job.stage) && job.stage !== EXTENSION_STAGES.filed) {
+      return { outcome: 'not_applicable', reason: `the job is at "${job.stage ?? 'no step'}", not "${EXTENSION_STAGES.waiting}" or a step where the extension box works` }
     }
     if (job.status === 'cancelled') return { outcome: 'not_applicable', reason: 'the job is cancelled' }
 
@@ -241,7 +249,14 @@ export async function processExtensionFaxDelivery(sdId: string, d: ExtensionFaxD
     }
 
     // 2. the move to "Extension Filed" (the tax record follows: extension filed + today's date). Our own message below replaces the generic notice.
-    if (job.stage !== EXTENSION_STAGES.filed) {
+    if (job.stage !== EXTENSION_STAGES.filed && !extensionMovesJob(job.stage)) {
+      // a later step: record the extension on the tax record and leave the job where it is (never backwards)
+      const rec = await d.recordFiledInPlace(job, year)
+      if (!rec.ok) {
+        await d.alert(`The Form 7004 fax was delivered (fax job ${faxJobId}) but the extension could not be written on the tax record: ${rec.error ?? 'refused'}. Mark it filed by hand (the job stays at "${job.stage}").`, context)
+        return { outcome: 'error', error: rec.error ?? 'the extension could not be recorded on the tax record' }
+      }
+    } else if (job.stage !== EXTENSION_STAGES.filed) {
       let moved = await d.advanceToFiled(sdId, `Extension fax delivered to the IRS (Faxage job ${faxJobId}); the Form 7004 + receipt document is ${documentSaved ? 'saved in the company Tax folder' : 'NOT saved'}`)
       if (!moved.ok) {
         // a second check may have moved it a moment ago
@@ -428,6 +443,21 @@ export async function realExtensionFaxDeps(): Promise<ExtensionFaxDeps> {
       // skip_notify: the client gets the message below (in their language, with the deadline), not the generic stage notice
       const res = await advanceServiceDelivery({ delivery_id: sdId, target_stage: EXTENSION_STAGES.filed, actor: 'extension-fax-delivered', notes, skip_notify: true })
       return res && res.success === false ? { ok: false, error: res.error ?? 'refused' } : { ok: true }
+    },
+    recordFiledInPlace: async (job, year) => {
+      if (!job.account_id) return { ok: false, error: 'the job has no company' }
+      if (!year) return { ok: false, error: 'the job has no tax year to find the tax record by' }
+      const { data: rows, error: selErr } = await db.from('tax_returns').select('id, status, tax_year').eq('account_id', job.account_id)
+      if (selErr) return { ok: false, error: msg(selErr) ?? 'could not read the tax records' }
+      const { pickTaxRecordForPipeline } = await import('@/lib/tax/pick-tax-record')
+      const picked = pickTaxRecordForPipeline((rows ?? []) as Array<{ id: string; status: string | null; tax_year: number | null }>, year)
+      if (picked.kind === 'none') return { ok: false, error: picked.reason }
+      const today = new Date().toISOString().slice(0, 10)
+      const base = { extension_filed: true, extension_confirmed_date: today, updated_at: new Date().toISOString() }
+      // a "no extension needed" choice made earlier no longer holds once the extension is filed (the columns may not exist on an older database: then there is nothing to clear)
+      let { error } = await db.from('tax_returns').update({ ...base, extension_skipped_at: null, extension_skipped_by: null }).eq('id', picked.row.id)
+      if (error && /extension_skipped/.test(error.message ?? '')) ({ error } = await db.from('tax_returns').update(base).eq('id', picked.row.id))
+      return error ? { ok: false, error: msg(error) ?? 'update failed' } : { ok: true }
     },
     clientIsItalian: async (job) => {
       const contactId = await contactOf(job)

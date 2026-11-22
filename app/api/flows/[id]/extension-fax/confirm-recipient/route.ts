@@ -15,7 +15,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { isDashboardUser } from '@/lib/auth'
 import { processExtensionFaxDelivery, realExtensionFaxDeps } from '@/lib/fax/extension-fax-delivery'
-import { EXTENSION_FAX_MARKERS, EXTENSION_STAGES, faxDigits } from '@/lib/fax/extension-fax'
+import { EXTENSION_BOX_WHERE_TEXT, EXTENSION_FAX_MARKERS, faxDigits, isExtensionBoxStage } from '@/lib/fax/extension-fax'
 
 export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
   const supabase = createClient()
@@ -31,8 +31,8 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
   const job = loaded.job
   if (!job) return NextResponse.json({ success: false, error: 'Flow not found' }, { status: 404 })
   if (job.service_type !== 'Tax Return') return NextResponse.json({ success: false, error: 'This box belongs to a Tax Return job.' }, { status: 400 })
-  if (job.status === 'cancelled' || job.stage !== EXTENSION_STAGES.waiting) {
-    return NextResponse.json({ success: false, error: `Nothing to confirm: the job is not waiting at "${EXTENSION_STAGES.waiting}".` }, { status: 409 })
+  if (job.status === 'cancelled' || !isExtensionBoxStage(job.stage)) {
+    return NextResponse.json({ success: false, error: `Nothing to confirm: the job is not at ${EXTENSION_BOX_WHERE_TEXT}.` }, { status: 409 })
   }
 
   const fax = await deps.latestFax(sdId)

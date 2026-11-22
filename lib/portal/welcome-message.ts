@@ -27,6 +27,9 @@ import { localeFromLanguage } from "@/lib/locale"
 
 const WELCOME_MESSAGES_CATALOG_ID = "welcome_messages" as const
 
+/** The catalog slug of the standalone company tax return's welcome (its form is open from the moment of payment). */
+export const STANDALONE_TAX_RETURN_WELCOME_SLUG = "tax_return_standalone" as const
+
 /**
  * Map pipeline display name (as stored in `offers.bundled_pipelines`) to the
  * `welcome_messages` catalog slug to look up. Mirrors the values produced by
@@ -126,6 +129,8 @@ export async function getWelcomeMessage(opts: {
   contractType: string
   pipelines: string[]
   language: string | null | undefined
+  /** A standalone company tax return whose form is already open (lib/tax/standalone-tax-return.ts): its own welcome is a candidate. */
+  standaloneTaxForm?: boolean
 }): Promise<WelcomeMessageTemplate | null> {
   const lang: "en" | "it" = localeFromLanguage(opts.language)
 
@@ -135,6 +140,9 @@ export async function getWelcomeMessage(opts: {
     const slug = PIPELINE_TO_WELCOME_SLUG[p]
     if (slug) slugs.add(slug)
   }
+  // The standalone return's welcome outranks the plain tax-return one (priority 75 vs 70). While its catalog row does not exist yet the plain
+  // one still wins, exactly as before — nothing breaks if the row is applied after the code.
+  if (opts.standaloneTaxForm && slugs.has("tax_return")) slugs.add(STANDALONE_TAX_RETURN_WELCOME_SLUG)
   if (slugs.size === 0) {
     const fallback = CONTRACT_TYPE_TO_WELCOME_SLUG[opts.contractType]
     if (fallback) slugs.add(fallback)

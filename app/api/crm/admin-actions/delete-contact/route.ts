@@ -222,6 +222,19 @@ export async function POST(request: Request) {
         )
       }
 
+      // Personal documents an owner shared with a team login belong to the owner: the shares table has no foreign key (on purpose), so the
+      // merge function above skipped it. Give the removed contact's shares to the kept one, or the login would silently lose them.
+      let sharesMoved = 0
+      try {
+        const { moveSharesToContact } = await import("@/lib/portal/team/personal-docs-server")
+        sharesMoved = (await moveSharesToContact(contact_id, merge_into_contact_id, user?.email ?? null)).moved
+      } catch (shareErr) {
+        const detail = shareErr instanceof Error ? shareErr.message : String(shareErr)
+        console.error("[delete-contact] could not move document shares", detail)
+        logAction({ actor, action_type: "merge", table_name: "contacts", record_id: contact_id, summary: `Merge of "${contact.full_name}" into "${target.full_name}": team document sharing was NOT moved`, details: { detail, mergeResult } })
+        return NextResponse.json({ error: `The merge ran, but the "share my personal documents" setting of "${contact.full_name}" could not be moved to "${target.full_name}". Nothing was deleted — tell support.` }, { status: 500 })
+      }
+
       // The merge moves the loser's storage to the winner, but the name on the winner did not change, so nothing else would rename
       // the folder: make the surviving person's top folder carry the winner's name. Best-effort, never throws.
       const { syncPersonRootName } = await import("@/lib/crm-store/person-root-name")
@@ -253,7 +266,7 @@ export async function POST(request: Request) {
         table_name: "contacts",
         record_id: contact_id,
         summary: `Merged contact "${contact.full_name}" into "${target.full_name}"`,
-        details: { loser: contact_id, winner: merge_into_contact_id, mergeResult, removedLogins, field_choices: choices, document_ids: documentIds },
+        details: { loser: contact_id, winner: merge_into_contact_id, mergeResult, removedLogins, field_choices: choices, document_ids: documentIds, document_shares_moved: sharesMoved },
       })
 
       return NextResponse.json({

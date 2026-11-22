@@ -191,7 +191,7 @@ _Regenerated 2026-11-22. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [bofa-intake.md](bofa-intake.md) — Bank Application Intake (Bank of America, one-time link) _(verified 2026-11-06)_
 - [booking.md](booking.md) — Booking page — Calendly links per audience (Stage 1a engine + Stage 1b screens + Stage 3 paid links) _(verified 2026-11-16)_
 - [captures.md](captures.md) — Capture / Share (screenshot tool) _(verified 2026-11-05)_
-- [client-app.md](client-app.md) — Client iPhone App (MyLLC Manager 2.0) _(verified 2026-11-18)_
+- [client-app.md](client-app.md) — Client iPhone App (MyLLC Manager 2.0) _(verified 2026-11-22)_
 - [client-decision-requests.md](client-decision-requests.md) — Client Decision Requests _(verified 2026-11-18)_
 - [client-threads.md](client-threads.md) — Client Threads _(verified 2026-09-03)_
 - [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-11-21)_
@@ -201,8 +201,8 @@ _Regenerated 2026-11-22. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [documents.md](documents.md) — Documents & Storage _(verified 2026-11-20)_
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
 - [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-11-21)_
-- [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-11-10)_
-- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-11-21)_
+- [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-11-22)_
+- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-11-22)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-11-21)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-11-21)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-11-20)_
@@ -237,7 +237,7 @@ _Regenerated 2026-11-22. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [storage.md](storage.md) — CRM Storage _(verified 2026-11-22)_
 - [supabase-status.md](supabase-status.md) — Supabase status (the "it is Supabase, not you" message) _(verified 2026-11-05)_
 - [talk.md](talk.md) — TD Talk (standalone Team Chat app) _(verified 2026-11-18)_
-- [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-11-21)_
+- [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-11-22)_
 - [td-books-ledger-plan.md](td-books-ledger-plan.md) — TD Books — 2025 filing, then the ledger, then the agent _(no date recorded)_
 - [td-books.md](td-books.md) — TD Books (My Finances — the owner's company books) _(verified 2026-11-06)_
 - [td-communication.md](td-communication.md) — TD Communication _(verified 2026-11-18)_

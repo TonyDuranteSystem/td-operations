@@ -54,6 +54,15 @@ interface ApiState {
   past_due: boolean
   default_reason: string
   default_cover: string
+  /** false at a later step (the tax form is already open): a delivered fax is recorded and the job stays where it is */
+  moves_job: boolean
+  /** the job's tax record of its year: what the box shows when the extension is already filed or was marked "no extension needed" */
+  record: {
+    extension_filed: boolean
+    extension_confirmed_date: string | null
+    skipped_at: string | null
+    skipped_by: string | null
+  } | null
 }
 
 function formatWhen(iso: string | null | undefined): string {
@@ -109,6 +118,8 @@ export function ExtensionFaxPanel({
   const [showAgain, setShowAgain] = useState(false)
   const [lateOk, setLateOk] = useState(false)
   const [confirmingRecipient, setConfirmingRecipient] = useState(false)
+  const [askSkip, setAskSkip] = useState(false)
+  const [skipping, setSkipping] = useState(false)
   const [historyError, setHistoryError] = useState<string | null>(null)
   const sendId = useRef(crypto.randomUUID()) // one Send = one fax (the server refuses a second try with the same id)
   const sendGuard = useRef(createOnceGuard()) // three clicks in one instant = one request
@@ -157,7 +168,7 @@ export function ExtensionFaxPanel({
       const body = await res.json().catch(() => ({}))
       if (!res.ok || !body.success) throw new Error(body.error || 'Could not check the fax.')
       const outcome = body.result?.outcome as string | undefined
-      if (outcome === 'filed') toast.success(body.result?.documentSaved === false ? 'The fax was delivered and the job moved to Extension Filed, but the document was not saved. Staff were alerted.' : 'The fax was delivered. The document is saved and the job moved to Extension Filed.')
+      if (outcome === 'filed') toast.success(body.result?.documentSaved === false ? 'The fax was delivered and the extension is recorded, but the document was not saved. Staff were alerted.' : 'The fax was delivered. The document is saved and the extension is recorded.')
       else if (outcome === 'already_done') toast.success('This extension was already delivered and filed.')
       else if (outcome === 'needs_recipient_check') toast.warning('Delivered, but to a number not confirmed as the IRS. Say whether it was the IRS.')
       else if (outcome === 'failed') toast.error('Faxage reports that the fax was not delivered.')
@@ -171,13 +182,34 @@ export function ExtensionFaxPanel({
     }
   }
 
+  // "No extension needed" (and its undo): written on the tax record with who and when; refused with a plain sentence when it cannot apply.
+  async function setSkip(skip: boolean) {
+    setSkipping(true)
+    try {
+      const res = await fetch(`/api/flows/${serviceDeliveryId}/extension-skip`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skip }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok || !body.success) throw new Error(body.error || 'Could not save the choice.')
+      toast.success(skip ? 'Marked: no extension needed.' : 'Undone: the extension is open again.')
+      setAskSkip(false)
+      await load()
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Could not save the choice.')
+    } finally {
+      setSkipping(false)
+    }
+  }
+
   async function confirmRecipient() {
     setConfirmingRecipient(true)
     try {
       const res = await fetch(`/api/flows/${serviceDeliveryId}/extension-fax/confirm-recipient`, { method: 'POST' })
       const body = await res.json().catch(() => ({}))
       if (!res.ok || !body.success) throw new Error(body.error || 'Could not confirm the number.')
-      toast.success(body.result?.outcome === 'filed' ? 'Confirmed. The document is saved and the job moved to Extension Filed.' : 'Confirmed.')
+      toast.success(body.result?.outcome === 'filed' ? 'Confirmed. The document is saved and the extension is recorded.' : 'Confirmed.')
       await load()
     } catch (err) {
       toast.error(err instanceof Error && err.message ? err.message : 'Could not confirm the number.')
@@ -287,6 +319,9 @@ export function ExtensionFaxPanel({
   }
 
   const s = data.state
+  // A later step (the tax form is already open — a standalone return): nothing moves the job, and "no extension needed" is an allowed choice.
+  const later = data.moves_job === false
+  const rec = data.record ?? null
   const einLine = isIrsEinFaxNumber(faxno)
   const yearText = data.year ? ` ${data.year}` : ''
   const differentNumber = digitsOf(faxno) !== digitsOf(data.fax_number)
@@ -298,7 +333,7 @@ export function ExtensionFaxPanel({
       </div>
       <div className="flex-1 min-w-0">
         <p className="text-sm font-semibold text-zinc-900">File the extension{yearText} (Form 7004)</p>
-        <p className="text-xs text-zinc-500 mt-1">Generate the Form 7004, look at it, fax it to the IRS. When Faxage confirms delivery, the Form 7004 and the fax receipt are merged into one document in the company’s Tax folder, the job moves to “Extension Filed” and the client is told in the chat.</p>
+        <p className="text-xs text-zinc-500 mt-1">Generate the Form 7004, look at it, fax it to the IRS. When Faxage confirms delivery, the Form 7004 and the fax receipt are merged into one document in the company’s Tax folder, {later ? 'the extension is recorded on the tax record (the job stays at its step) and the client is told in the chat.' : 'the job moves to “Extension Filed” and the client is told in the chat.'}</p>
       </div>
     </div>
   )
@@ -443,13 +478,56 @@ export function ExtensionFaxPanel({
     </div>
   )
 
-  if (s.mode === 'manual') return <div className="space-y-3">{plainUpload}</div>
+  // "No extension needed" was chosen: say who and when, and let staff undo it (nothing else of the box is shown).
+  if (later && rec?.skipped_at) {
+    return (
+      <div className={`${card} border-zinc-300 bg-zinc-50`}>
+        <div className="flex items-center gap-2"><CheckCircle2 className="h-5 w-5 text-zinc-500" /><p className="text-sm font-semibold text-zinc-800">No extension needed</p></div>
+        <p className="text-xs text-zinc-600 mt-1">Marked{rec.skipped_by ? ` by ${rec.skipped_by}` : ''}{formatWhen(rec.skipped_at) ? ` on ${formatWhen(rec.skipped_at)}` : ''}. This return is not on the extension list.</p>
+        <button onClick={() => setSkip(false)} disabled={skipping} className="mt-3 inline-flex items-center gap-1.5 rounded-md border border-zinc-300 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-white disabled:opacity-50">
+          {skipping ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Undo — the extension is needed after all
+        </button>
+      </div>
+    )
+  }
+
+  // The extension is already on the record (filed before this step, by the old way or by another job's fax): shown, never offered again.
+  if (later && rec?.extension_filed && (s.mode === 'manual' || s.mode === 'generate' || s.mode === 'ready')) {
+    return (
+      <div className={`${card} border-green-200 bg-green-50`}>
+        <div className="flex items-center gap-2"><CheckCircle2 className="h-5 w-5 text-green-600" /><p className="text-sm font-semibold text-green-800">Extension already filed</p></div>
+        <p className="text-xs text-green-700 mt-1">The extension{rec.extension_confirmed_date ? ` was filed on ${rec.extension_confirmed_date}` : ' is on the tax record as filed'}. Nothing more to do here.</p>
+      </div>
+    )
+  }
+
+  // "No extension needed": offered at a later step while nothing is filed and no fax is in flight (two clicks, so it is never one slip).
+  const skipBar = later && rec && !rec.extension_filed && (s.mode === 'manual' || s.mode === 'generate' || s.mode === 'ready' || s.mode === 'failed') ? (
+    <div className="mt-4 border-t border-zinc-200 pt-3">
+      {!askSkip ? (
+        <button onClick={() => setAskSkip(true)} className="text-xs font-medium text-zinc-500 hover:text-zinc-800 underline">No extension needed for this return</button>
+      ) : (
+        <div className="rounded-md border border-zinc-300 bg-zinc-50 p-3">
+          <p className="text-xs font-medium text-zinc-800">Mark this return as not needing an extension? It is recorded with your name and the date, and you can undo it.</p>
+          <div className="mt-2 flex items-center gap-2">
+            <button onClick={() => setSkip(true)} disabled={skipping} className="inline-flex items-center gap-2 rounded-md bg-zinc-800 px-3 py-1.5 text-xs font-semibold text-white hover:bg-zinc-900 disabled:opacity-50">
+              {skipping ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />} Yes, no extension needed
+            </button>
+            <button onClick={() => setAskSkip(false)} disabled={skipping} className="rounded-md border px-3 py-1.5 text-xs font-medium text-zinc-600 hover:bg-white disabled:opacity-50">Cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
+  ) : null
+
+  if (s.mode === 'manual') return <div className="space-y-3">{plainUpload}{skipBar}</div>
 
   if (s.mode === 'generate') {
     return (
       <div className={card}>
         {header}
         {generateForm}
+        {skipBar}
       </div>
     )
   }
@@ -460,6 +538,7 @@ export function ExtensionFaxPanel({
         {header}
         {historyError && <p role="alert" className="mt-2 text-xs font-medium text-red-700">{historyError}</p>}
         {editing ? generateForm : sendForm(s.documentId, s.fileName, false, true)}
+        {skipBar}
       </div>
     )
   }
@@ -482,7 +561,7 @@ export function ExtensionFaxPanel({
     return (
       <div className={`${card} border-green-200 bg-green-50`}>
         <div className="flex items-center gap-2"><CheckCircle2 className="h-5 w-5 text-green-600" /><p className="text-sm font-semibold text-green-800">Form 7004 delivered to the IRS</p></div>
-        <p className="text-xs text-green-700 mt-1">Faxage confirmed delivery{formatWhen(s.at) ? ` (sent ${formatWhen(s.at)})` : ''}. The document is saved in the company’s Tax folder and the job is at “Extension Filed”.</p>
+        <p className="text-xs text-green-700 mt-1">Faxage confirmed delivery{formatWhen(s.at) ? ` (sent ${formatWhen(s.at)})` : ''}. The document is saved in the company’s Tax folder{later ? ' and the extension is recorded on the tax record (the job stays where it is).' : ' and the job is at “Extension Filed”.'}</p>
         <button onClick={load} className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-green-700 hover:text-green-800"><RefreshCw className="h-3.5 w-3.5" /> Refresh</button>
       </div>
     )
@@ -522,8 +601,8 @@ export function ExtensionFaxPanel({
           <div className="flex items-center gap-1.5 font-medium"><Clock className="h-3.5 w-3.5" /> Fax sent{formatWhen(s.at) ? ` on ${formatWhen(s.at)}` : ''}{s.faxJobId ? ` (job ${s.faxJobId})` : ''}{s.faxno ? ` to ${prettyNumber(s.faxno)}` : ''}</div>
           <p className="mt-1">
             {s.waitingTooLong
-              ? `Faxage has not confirmed delivery after more than 2 hours. Check it in Fax History; the job stays at “1st Installment Paid” until it is delivered.`
-              : 'Waiting for Faxage to confirm delivery. It is checked every few minutes; when the fax is delivered the document is saved, the job moves to “Extension Filed” and the client is told in the chat.'}
+              ? `Faxage has not confirmed delivery after more than 2 hours. Check it in Fax History; the extension is not recorded until it is delivered.`
+              : `Waiting for Faxage to confirm delivery. It is checked every few minutes; when the fax is delivered the document is saved, ${later ? 'the extension is recorded on the tax record (the job stays at its step)' : 'the job moves to “Extension Filed”'} and the client is told in the chat.`}
           </p>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-4">

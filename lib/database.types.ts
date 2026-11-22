@@ -24210,6 +24210,23 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      store_combine_blocker: {
+        Args: { p_from: string; p_to: string }
+        Returns: string
+      }
+      store_combine_owners: {
+        Args: {
+          p_actor?: string
+          p_dry?: boolean
+          p_from: string
+          p_to: string
+        }
+        Returns: Json
+      }
+      store_combine_plan: {
+        Args: { p_loser_contact: string; p_winner_contact: string }
+        Returns: Json
+      }
       store_company_contacts: {
         Args: { p_account_id: string }
         Returns: {

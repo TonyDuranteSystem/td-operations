@@ -12,11 +12,15 @@ import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
 import { hasCapability } from '@/lib/portal/team/capabilities'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { ServiceRequestClient } from './service-request-client'
+import { redirectIfHiddenForServiceScope } from '@/lib/portal/service-scope-server'
+import { SERVICE_SCOPED_PAGE_KEYS } from '@/lib/portal/service-scope'
 
 export default async function ServiceRequestPage() {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/portal/login')
+  // A service-scoped login (one bought service) never opens this page; the menu hides it too (lib/portal/service-scope.ts).
+  await redirectIfHiddenForServiceScope(user, SERVICE_SCOPED_PAGE_KEYS.requestService)
 
   const contactId = getClientContactId(user)
   const userName = user.user_metadata?.full_name || user.email?.split('@')[0] || ''

@@ -50,6 +50,8 @@ import { APP_BASE_URL } from '@/lib/config'
 import { resolveExtensionDeadline, formatDeadlineForDisplay } from '@/lib/tax/extension-deadline'
 import { parseISO, format } from 'date-fns'
 import { getRenewalBannerMinYear } from '@/lib/settings'
+import { isServiceScopedLogin } from '@/lib/portal/service-scope'
+import { activeServiceTypesOf, navKeysUnlockedByServices } from '@/lib/portal/service-scope-server'
 
 function formatEin(ein: string | null): string {
   if (!ein) return '\u2014'
@@ -940,7 +942,13 @@ export default async function PortalDashboardPage() {
 
   // Team Access announcement is shown only to owners and members (the only users
   // who can invite teammates). Same resolver the sidebar/layout uses.
-  const canManageTeam = !!contactId && !!selectedAccountId
+  // A service-scoped login (a "One-Time" company: one bought service) is not shown announcements about things it did not buy: no "invite your team"
+  // (the Team page is hidden from it), and the Relay guide only when it bought banking (lib/portal/service-scope.ts).
+  const serviceScoped = isServiceScopedLogin({ accountType: accounts.find(a => a.id === selectedAccountId)?.account_type ?? null, hasCompany: accounts.length > 0, portalTier })
+  const scopedUnlockedNavKeys = serviceScoped && selectedAccountId
+    ? await activeServiceTypesOf(selectedAccountId).then(navKeysUnlockedByServices).catch(() => [] as string[])
+    : []
+  const canManageTeam = !!contactId && !!selectedAccountId && !serviceScoped
     ? await isAccountAdmin(contactId, selectedAccountId)
     : false
 
@@ -1055,7 +1063,7 @@ export default async function PortalDashboardPage() {
       {!inClientApp && (
         <>
           {/* Relay Wire guide announcement — dismissible per device via localStorage */}
-          <GuideAnnouncementBanner locale={locale} />
+          {(!serviceScoped || scopedUnlockedNavKeys.includes('nav.bankApplications')) && <GuideAnnouncementBanner locale={locale} />}
 
           {/* Team Access feature announcement — owners and members only, dismissible per device */}
           {canManageTeam && <TeamAccessAnnouncementBanner locale={locale} />}

@@ -6,11 +6,12 @@
  * accepted (the saved words), last sign-in, state — plus a SILENT Switch off / Switch on with a reason.
  * No email or message goes to anyone. A person TD switches off cannot be switched back on by the owner.
  * The card draws nothing for a company that has no team logins. It never touches the company's members list.
+ * A load that FAILS is said so ("could not load") — never drawn as "no team logins" (the card would simply vanish).
  */
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Loader2, Users } from 'lucide-react'
-import type { CardMember, CardState } from '@/lib/portal/team/crm-view'
+import { teamCardMode, type CardMember, type CardState } from '@/lib/portal/team/crm-view'
 
 interface TeamResponse { ready: boolean; members: CardMember[] }
 
@@ -30,6 +31,7 @@ function when(iso: string | null | undefined): string {
 
 export function TeamSection({ accountId }: { accountId: string }) {
   const [data, setData] = useState<TeamResponse | null>(null)
+  const [loadFailed, setLoadFailed] = useState(false)
   const [openNotice, setOpenNotice] = useState<string | null>(null)
   const [openHistory, setOpenHistory] = useState<string | null>(null)
   const [switching, setSwitching] = useState<{ id: string; action: 'off' | 'on' } | null>(null)
@@ -42,9 +44,10 @@ export function TeamSection({ accountId }: { accountId: string }) {
       const j = await r.json().catch(() => ({}))
       if (!r.ok) throw new Error((j as { error?: string }).error || 'Could not load the team.')
       setData(j as TeamResponse)
+      setLoadFailed(false)
     } catch {
-      /* the card is a help, never an error on the company page */
-      setData(null)
+      // Keep what was on screen (it may be out of date) and say the load failed; never turn a failure into "no team logins".
+      setLoadFailed(true)
     }
   }, [accountId])
 
@@ -78,7 +81,22 @@ export function TeamSection({ accountId }: { accountId: string }) {
     }
   }
 
-  if (!data || data.members.length === 0) return null
+  const mode = teamCardMode({ hasData: !!data, memberCount: data?.members.length ?? 0, failed: loadFailed })
+  if (mode === 'hidden' || (mode === 'list' && !data)) return null
+  if (mode === 'failed') {
+    return (
+      <div className="bg-white rounded-lg border p-5 space-y-2 lg:col-span-2" data-testid="team-section-failed">
+        <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground flex items-center gap-2">
+          <Users className="h-4 w-4" /> Team logins
+        </h3>
+        <p className="text-xs rounded border border-amber-200 bg-amber-50 text-amber-800 p-2">
+          Could not load this company&apos;s team logins right now — this does NOT mean there are none. Nothing was changed.{' '}
+          <button onClick={() => void load()} className="underline" data-testid="team-section-retry">Try again</button>
+        </p>
+      </div>
+    )
+  }
+  if (!data) return null
 
   return (
     <div className="bg-white rounded-lg border p-5 space-y-3 lg:col-span-2" data-testid="team-section">
@@ -88,6 +106,12 @@ export function TeamSection({ accountId }: { accountId: string }) {
       <p className="text-xs text-muted-foreground">
         People this company&apos;s owners gave their own sign-in. They are never contacts. Switching someone off or on here is silent: no email is sent, and the reason is saved in the team record.
       </p>
+      {loadFailed && (
+        <p className="text-xs rounded border border-amber-200 bg-amber-50 text-amber-800 p-2" data-testid="team-section-stale">
+          Could not refresh this list — what you see may be out of date.{' '}
+          <button onClick={() => void load()} className="underline">Try again</button>
+        </p>
+      )}
       {!data.ready && (
         <p className="text-xs rounded border border-amber-200 bg-amber-50 text-amber-800 p-2">
           The team record is not available on this system yet, so this list is read-only and switching is disabled.
