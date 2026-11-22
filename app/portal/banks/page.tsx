@@ -21,6 +21,8 @@ import { redirect } from 'next/navigation'
 import { getLocale } from '@/lib/portal/i18n'
 import { getBankPageOptions, bankTileHref } from '@/lib/bank-referrals'
 import { Landmark, FileText, ShieldAlert, PencilLine, ExternalLink, ArrowRight } from 'lucide-react'
+import { redirectIfHiddenForServiceScope } from '@/lib/portal/service-scope-server'
+import { SERVICE_SCOPED_PAGE_KEYS } from '@/lib/portal/service-scope'
 
 export const dynamic = 'force-dynamic'
 
@@ -69,6 +71,8 @@ export default async function PortalBanksPage() {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/portal/login')
+  // A service-scoped login (one bought service) never opens this page; the menu hides it too (lib/portal/service-scope.ts).
+  await redirectIfHiddenForServiceScope(user, SERVICE_SCOPED_PAGE_KEYS.banks)
 
   const locale = getLocale(user)
   const c = COPY[locale] ?? COPY.en

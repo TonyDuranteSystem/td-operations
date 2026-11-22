@@ -239,3 +239,50 @@ describe("Company Change Name welcome (dev job bb64c417, B2)", () => {
     expect(sql).toContain("{{companyName}}")
   })
 })
+
+describe("standalone company tax return welcome", () => {
+  const plain = {
+    slug: "tax_return", display_name: "Welcome — your Tax Return is being set up", display_name_translations: null,
+    description: "We'll reach out when we need documents.", description_translations: null, status: "active", metadata: { priority: 70, wizard_path: "/portal" },
+  }
+  const standalone = {
+    slug: "tax_return_standalone", display_name: "Welcome — your tax return is ready to start", display_name_translations: { it: "Benvenuto — la tua dichiarazione è pronta per iniziare" },
+    description: "Your tax form is open in your portal now.", description_translations: null, status: "active", metadata: { priority: 75, wizard_path: "/portal" },
+  }
+
+  it("the standalone welcome wins when the standalone flag is set", async () => {
+    CATALOG_ROWS = [plain, standalone]
+    const r = await getWelcomeMessage({ contractType: "tax_return", pipelines: ["Tax Return"], language: "English", standaloneTaxForm: true })
+    expect(r?.slug).toBe("tax_return_standalone")
+  })
+
+  it("the plain tax-return welcome stays when the flag is not set", async () => {
+    CATALOG_ROWS = [plain, standalone]
+    const r = await getWelcomeMessage({ contractType: "tax_return", pipelines: ["Tax Return"], language: "English" })
+    expect(r?.slug).toBe("tax_return")
+  })
+
+  it("falls back to the plain welcome when the standalone row is not in the catalog yet", async () => {
+    CATALOG_ROWS = [plain]
+    const r = await getWelcomeMessage({ contractType: "tax_return", pipelines: ["Tax Return"], language: "English", standaloneTaxForm: true })
+    expect(r?.slug).toBe("tax_return")
+  })
+
+  it("the flag adds nothing for a bundle that has no tax return", async () => {
+    CATALOG_ROWS = [plain, standalone]
+    const r = await getWelcomeMessage({ contractType: "", pipelines: ["EIN"], language: "English", standaloneTaxForm: true })
+    expect(r?.slug).not.toBe("tax_return_standalone")
+  })
+
+  it("the migration adds the row once, never overwrites an edited one, in both languages", async () => {
+    const { readFileSync } = await import("node:fs")
+    const { join } = await import("node:path")
+    const sql = readFileSync(join(process.cwd(), "scripts/migrations/20261122-1800-standalone-tax-return-welcome.sql"), "utf8")
+    expect(sql).toContain("'welcome_messages', 'tax_return_standalone'")
+    expect(sql).toContain("NOT EXISTS (SELECT 1 FROM public.catalog_entries WHERE catalog_id = 'welcome_messages' AND slug = 'tax_return_standalone')")
+    expect(sql).toContain('"priority": 75')
+    expect(sql).toContain("{{firstName}}")
+    expect(sql).toContain("{{companyName}}")
+    expect(sql).toContain("'it'")
+  })
+})

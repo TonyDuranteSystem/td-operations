@@ -20,6 +20,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { taxReturnYear } from '@/lib/flows/resolve-flows'
+import { pickTaxRecordForPipeline } from '@/lib/tax/pick-tax-record'
 import type { FaxLogRow, MarkerRow } from '@/lib/fax/return-fax'
 import {
   buildExtensionFaxState,
@@ -28,6 +29,7 @@ import {
   DEFAULT_EXTENSION_FAX_NUMBER,
   extensionFaxCover,
   extensionFaxReason,
+  extensionMovesJob,
   isPastOriginalDueDate,
   lastDeliveredNumber,
   originalDueDateIso,
@@ -53,7 +55,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
 
   const sdRes = await db
     .from('service_deliveries')
-    .select('id, account_id, service_type, service_name, due_date, created_at, stage_entered_at')
+    .select('id, account_id, service_type, service_name, stage, status, due_date, created_at, stage_entered_at')
     .eq('id', sdId)
     .maybeSingle()
   if (sdRes.error) return NextResponse.json({ success: false, error: NOT_CHECKED }, { status: 503 })
@@ -133,10 +135,36 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   })
   const address = prefillAddress(mailing, suite)
 
+  // The tax record of this job's year: what the box shows once the extension is already filed or was marked "no extension needed". The two "skipped"
+  // columns may not exist yet on an older database: then the choice simply cannot have been made.
+  let record: { extension_filed: boolean; extension_confirmed_date: string | null; skipped_at: string | null; skipped_by: string | null } | null = null
+  if (accountId) {
+    let trRes = await db.from('tax_returns').select('id, status, tax_year, extension_filed, extension_confirmed_date, extension_skipped_at, extension_skipped_by').eq('account_id', accountId)
+    if (trRes.error && /extension_skipped/.test(trRes.error.message ?? '')) {
+      trRes = await db.from('tax_returns').select('id, status, tax_year, extension_filed, extension_confirmed_date').eq('account_id', accountId)
+    }
+    if (trRes.error) return NextResponse.json({ success: false, error: NOT_CHECKED }, { status: 503 })
+    const rows = (trRes.data ?? []) as Array<{ id: string; status: string | null; tax_year: number | null; extension_filed?: boolean | null; extension_confirmed_date?: string | null; extension_skipped_at?: string | null; extension_skipped_by?: string | null }>
+    const picked = pickTaxRecordForPipeline(rows, year)
+    const row = picked.kind === 'record' ? rows.find((r) => r.id === picked.row.id) : null
+    if (row) {
+      record = {
+        extension_filed: row.extension_filed === true,
+        extension_confirmed_date: row.extension_confirmed_date ?? null,
+        skipped_at: row.extension_skipped_at ?? null,
+        skipped_by: row.extension_skipped_by ?? null,
+      }
+    }
+  }
+
   return NextResponse.json(
     {
       success: true,
       state,
+      // false at a later step (the tax form is already open): a delivered fax is recorded and the job stays where it is
+      moves_job: extensionMovesJob(sd.stage as string | null),
+      stage: (sd.stage as string | null) ?? null,
+      record,
       account_id: accountId,
       company,
       year,

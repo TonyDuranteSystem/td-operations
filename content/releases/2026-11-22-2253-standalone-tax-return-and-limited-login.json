@@ -1,0 +1,33 @@
+{
+  "title": "A tax return sold on its own opens the client's tax form at payment, and the extension is optional",
+  "tag": "new",
+  "text": "When a client buys only a tax return, their tax form opens as soon as the payment is confirmed: no waiting for installments. They are told in the portal chat and by email. On the tax return workspace, from the form step to Preparation, you can file the extension or press \"No extension needed for this return\" (your name and the date are saved and you can undo it); a return marked that way leaves the Exceptions list. A client who bought only one service now sees a short portal menu with just that service: Overview, Chat, Documents, Sign Documents, billing and the Guide.",
+  "points": [
+    "Open a tax return job that is at the form step: the extension box is there",
+    "Press \"No extension needed for this return\", then confirm, to skip it (Undo brings it back)",
+    "Log in as a one-time client: the portal menu is short"
+  ],
+  "stepsTitle": "A tax return sold on its own",
+  "steps": [
+    {
+      "name": "The client pays",
+      "detail": "Only a tax return is bought: no installments.",
+      "flag": "new"
+    },
+    {
+      "name": "The tax form opens",
+      "detail": "The client is told in the chat and by email.",
+      "flag": "new"
+    },
+    {
+      "name": "The extension is optional",
+      "detail": "File it, or mark \"No extension needed\". You can undo it.",
+      "flag": "new"
+    },
+    {
+      "name": "The client sees only what they bought",
+      "detail": "Overview, Chat, Documents, Sign Documents, billing, Guide.",
+      "flag": "new"
+    }
+  ]
+}

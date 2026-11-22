@@ -49,6 +49,8 @@ import { CompanySwitcher } from '@/components/portal/company-switcher'
 import { CompanySync } from '@/components/portal/company-sync'
 import { isPartnerPortal } from '@/lib/portal/tier-config'
 import { selectionQuery } from '@/lib/portal-app/selection-query'
+import { isServiceScopedLogin } from '@/lib/portal/service-scope'
+import { activeServiceTypesOf, navKeysUnlockedByServices } from '@/lib/portal/service-scope-server'
 
 export const viewport: Viewport = {
   width: 'device-width',
@@ -321,6 +323,13 @@ export default async function PortalLayout({
         contactId ? getUnreadChatCount(contactId) : Promise.resolve(0),
       ])
 
+  // A service-scoped login (a "One-Time" company: one bought service) sees only that service's entries; a bought service can add one back (Bank Applications
+  // for a banking buyer) — catalog data, read here on the server because the side menu is a client component. Only looked up when the limit applies.
+  const selectedAccountType = accounts.find(a => a.id === selectedAccountId)?.account_type ?? null
+  const extraNavKeys: string[] = selectedAccountId && isServiceScopedLogin({ accountType: selectedAccountType, hasCompany: accounts.length > 0, portalRole: effectivePortalRole, portalTier })
+    ? await activeServiceTypesOf(selectedAccountId).then(navKeysUnlockedByServices).catch(() => [] as string[])
+    : []
+
   // Tab counts, in parallel to avoid adding a serial round-trip to every page:
   //  - unreadDocsCount   → Documents tab pulse + count (unopened client docs)
   //  - toSignCount       → Sign Documents tab "new" blink (lease, OA, SS-4, e-sign…)
@@ -402,7 +411,8 @@ export default async function PortalLayout({
             unpaidInvoiceCount={unpaidInvoiceCount}
             unseenReactionCount={unseenReactions.count}
             unseenReactionToken={unseenReactions.latestAt ?? ''}
-            accountType={accounts.find(a => a.id === selectedAccountId)?.account_type ?? null}
+            accountType={selectedAccountType}
+            extraNavKeys={extraNavKeys}
             contactId={contactId || undefined}
             portalRole={effectivePortalRole}
             dualRole={portalModeCtx.dual}

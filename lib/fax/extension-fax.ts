@@ -34,6 +34,65 @@ export const EXTENSION_STAGES = {
   filed: 'Extension Filed',
 } as const
 
+/**
+ * The steps AFTER the tax form opens where the extension can still be filed or skipped (a standalone return's form is open from the moment of payment,
+ * so it never waits at "1st Installment Paid" — Antonio, 22 Nov 2026). At the first step a delivered fax moves the job to "Extension Filed"; at these
+ * later steps the job is NEVER moved (it would go backwards): the extension is recorded on the tax record and the job stays where it is.
+ */
+export const EXTENSION_LATER_STAGES = [
+  'Wizard Available',
+  'Data Submitted',
+  'Under Review',
+  'Revision Requested',
+  'Approved',
+  'Confirmed',
+  'Data Received',
+  'Preparation',
+] as const
+
+/** Where the box works, in words, for the refusals of the routes below. */
+export const EXTENSION_BOX_WHERE_TEXT = `"${EXTENSION_STAGES.waiting}" or a step from "${EXTENSION_LATER_STAGES[0]}" to "${EXTENSION_LATER_STAGES[EXTENSION_LATER_STAGES.length - 1]}"`
+
+/** Can the extension be faxed from the box while the job is at this step? (the first step, or any later step up to "Preparation"). Pure. */
+export function isExtensionBoxStage(stage: string | null | undefined): boolean {
+  return stage === EXTENSION_STAGES.waiting || (EXTENSION_LATER_STAGES as readonly string[]).includes(stage ?? '')
+}
+
+/** Does a delivered extension fax move the job to "Extension Filed"? Only from the first step; at a later step it is recorded and the job stays put. Pure. */
+export function extensionMovesJob(stage: string | null | undefined): boolean {
+  return stage === EXTENSION_STAGES.waiting
+}
+
+/** One flat shape (the project's TypeScript is not strict, so a two-variant union would not narrow on `ok`): `error` is set exactly when `ok` is false. */
+export interface ExtensionSkipDecision { ok: boolean; noop?: boolean; error?: string }
+
+/**
+ * "No extension needed" (skip) and its undo — the rules, pure so every refusal is tested on its own.
+ *  - only once the tax form is open (a later step): every annual client's extension is filed at the first step, so nothing is skipped there;
+ *  - never when the extension is already filed, or while a Form 7004 fax is on its way / was never confirmed (it could still file it);
+ *  - never without the tax record of the job's year (it is where the choice is written);
+ *  - choosing it twice, or undoing what is not set, is harmless (no change).
+ */
+export function decideExtensionSkip(p: {
+  stage: string | null | undefined
+  status: string | null | undefined
+  hasRecord: boolean
+  extensionFiled: boolean
+  alreadySkipped: boolean
+  faxInProgress: boolean
+  skip: boolean
+}): ExtensionSkipDecision {
+  if (p.status === 'cancelled') return { ok: false, error: 'The job is cancelled.' }
+  if (!p.hasRecord) return { ok: false, error: 'This job has no tax record for its year, so there is nowhere to write the choice. Create the tax record first.' }
+  if (!p.skip) return p.alreadySkipped ? { ok: true } : { ok: true, noop: true }
+  if (!(EXTENSION_LATER_STAGES as readonly string[]).includes(p.stage ?? '')) {
+    return { ok: false, error: `"No extension needed" can be chosen once the tax form is open (from "${EXTENSION_LATER_STAGES[0]}" to "${EXTENSION_LATER_STAGES[EXTENSION_LATER_STAGES.length - 1]}"). At "${EXTENSION_STAGES.waiting}" the extension is filed for every annual client.` }
+  }
+  if (p.extensionFiled) return { ok: false, error: 'The extension is already filed, so there is nothing to skip.' }
+  if (p.faxInProgress) return { ok: false, error: 'A Form 7004 fax is on its way or was never confirmed. Check Fax History first: it could still file the extension.' }
+  return p.alreadySkipped ? { ok: true, noop: true } : { ok: true }
+}
+
 /** The activity-log markers the delivery check writes (one per fax job id, so a re-run never repeats an alert or a filing). */
 export const EXTENSION_FAX_MARKERS = {
   confirmed: 'extension_fax_confirmed',

@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { isTierFeatureVisible, isPartnerPortal } from '@/lib/portal/tier-config'
+import { isServiceScopedLogin } from '@/lib/portal/service-scope'
 import { hubAccess } from '@/lib/portal/invoice-hub'
 import { hasCapability, teammateNavCapability, TEAM_CAPABILITIES, type TeamCapability } from '@/lib/portal/team/capabilities'
 import {
@@ -196,9 +197,12 @@ function forEachContext(visit: (c: GridContext) => void) {
 const shape = (items: Array<{ key: string; href: string; hintKey?: string }>) => items.map(i => `${i.key}|${i.href}|${i.hintKey ?? ''}`)
 
 describe('parity: the shared rule gives exactly the menu the old side menu gave', () => {
-  it('matches for every kind of login (tier x role x account type x team member x flags x company)', () => {
+  it('matches for every kind of login EXCEPT the service-scoped one (tier x role x account type x team member x flags x company)', () => {
     let checked = 0
     forEachContext(c => {
+      // Antonio, 22 Nov 2026: a "One-Time" company login is limited to the service it bought, so the OLD list no longer describes it on purpose.
+      // Its new menu is pinned by the 'service-scoped login' checks below, and everything else must still match the old menu exactly.
+      if (isServiceScopedLogin({ accountType: c.accountType, hasCompany: c.hasCompany, portalRole: c.portalRole, isTeammate: c.isTeammate, portalTier: c.portalTier })) return
       const old = legacyMenu({
         navVisibility: c.navVisibility,
         portalTier: c.portalTier,
@@ -308,6 +312,60 @@ describe('spot checks', () => {
     const chat = MAIN_NAV_ITEMS.find(i => i.key === 'nav.chat')!
     expect(isNavItemVisible(chat, active())).toBe(true)
     expect(isNavItemVisible(chat, active({ isTeammate: true, teammateCapabilities: {} }))).toBe(false)
+  })
+})
+
+describe('service-scoped login (a "One-Time" company: one bought service)', () => {
+  const oneTime = (extra: Partial<NavRuleContext> = {}) => active({ accountType: 'One-Time', ...extra })
+
+  it('sees only the overview, chat, documents, documents to sign and billing', () => {
+    expect(keysOf(oneTime())).toEqual(['nav.overview', 'nav.chat', 'nav.documents', 'nav.signDocuments', 'nav.tdBilling'])
+  })
+  it('never sees Referrals, Generate Documents, Team, My Company, Bank Applications, Request a Service or Customers — not even a company admin', () => {
+    const keys = keysOf(oneTime({ canManageTeam: true }))
+    for (const k of ['nav.referrals', 'nav.generateDocuments', 'nav.team', 'nav.myCompany', 'nav.bankApplications', 'nav.requestService', 'nav.myClients', 'nav.invoices']) {
+      expect(keys, k).not.toContain(k)
+    }
+  })
+  it('a bought service can add one entry back (Bank Applications for banking) — and nothing else comes with it', () => {
+    const keys = keysOf(oneTime({ extraNavKeys: ['nav.bankApplications'] }))
+    expect(keys).toContain('nav.bankApplications')
+    expect(keys).not.toContain('nav.referrals')
+    expect(keys).not.toContain('nav.requestService')
+  })
+  it('an added entry still follows its normal rule (Bank Applications is only for the active tier)', () => {
+    expect(keysOf(oneTime({ portalTier: 'onboarding', extraNavKeys: ['nav.bankApplications'] }))).not.toContain('nav.bankApplications')
+  })
+  it('a person with NO company at the active level (an individual\'s personal service) sees Overview, Chat, Documents and their personal invoices — no Referrals, no Request a Service', () => {
+    const keys = keysOf({ portalTier: 'active', hasCompany: false })
+    expect(keys).toEqual(['nav.overview', 'nav.chat', 'nav.invoices', 'nav.documents'])
+    expect(visibleMainItems({ portalTier: 'active', hasCompany: false }).find(i => i.key === 'nav.invoices')?.hintKey).toBe('invoicesPersonal')
+  })
+  it('Sign Documents is NOT offered to a person with no company (its page needs a company: it would be a dead end)', () => {
+    expect(keysOf({ portalTier: 'active', hasCompany: false })).not.toContain('nav.signDocuments')
+  })
+  it('a lead, a formation or an onboarding person with no company is NOT limited (they are being set up)', () => {
+    for (const portalTier of ['lead', 'formation', 'onboarding']) {
+      const keys = keysOf({ portalTier, hasCompany: false })
+      expect(keys, portalTier).toContain('nav.requestService')
+    }
+  })
+  it('a "Client" company (annual management) is NOT limited: the limit lifts', () => {
+    expect(keysOf(active({ accountType: 'Client' }))).toContain('nav.referrals')
+    expect(keysOf(active({ accountType: 'Client' }))).toContain('nav.requestService')
+  })
+  it('a team member of a One-Time company still follows only the capabilities the owner granted (never this rule)', () => {
+    const ctx = oneTime({ isTeammate: true, teammateCapabilities: { chat: true, documents: true } })
+    expect(keysOf(ctx)).toEqual(expect.arrayContaining(['nav.overview', 'nav.chat', 'nav.documents']))
+  })
+  it('a partner is never service-scoped', () => {
+    expect(visiblePartnerItems({ portalRole: 'partner', accountType: 'One-Time', portalTier: 'active', hasCompany: true }).map(i => i.key)).toContain('nav.partnerClients')
+  })
+  it('the same menu answer reaches the website side menu and the app (both read nav-rules)', () => {
+    const side = readFileSync('components/portal/portal-sidebar.tsx', 'utf8')
+    expect(side).toContain('extraNavKeys')
+    expect(readFileSync('lib/portal-app/load.ts', 'utf8')).toContain('extraNavKeys')
+    expect(readFileSync('app/portal/layout.tsx', 'utf8')).toContain('extraNavKeys={extraNavKeys}')
   })
 })
 
