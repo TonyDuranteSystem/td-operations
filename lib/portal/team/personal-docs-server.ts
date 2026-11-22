@@ -10,7 +10,7 @@ import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
 import { hasCapability } from '@/lib/portal/team/capabilities'
 import { mayManageTeam } from '@/lib/portal/team/may-manage'
 import { recordTeamEvent, recordTeamEventBestEffort, type TeamActor } from '@/lib/portal/team/events'
-import type { ShareDeps, ShareMemberRow } from '@/lib/portal/team/personal-docs-share'
+import { planShareMove, type ShareDeps, type ShareMemberRow, type ShareRef } from '@/lib/portal/team/personal-docs-share'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const sb = () => supabaseAdmin as any
@@ -62,6 +62,50 @@ export async function endSharesOfLogin(teamMemberId: string, accountId: string, 
     })
   }
   return owners.length
+}
+
+/**
+ * A contact merge: the removed contact's shares (its personal documents shared with team logins) go to the KEPT contact. The shares table has no
+ * foreign key on purpose, so the database merge function never touches it and the shares would stay on the removed contact — where the
+ * viewing rule ignores them (it only honours a share whose owner is still an owner or member of the company), so the login would silently lose
+ * the documents. A login that already has a share from the kept contact keeps that one; the removed contact's duplicate row is dropped.
+ * Each moved share leaves a line in the team record (best effort). THROWS when the shares cannot be read or changed — the caller says so.
+ * Returns how many shares moved and how many duplicates were dropped.
+ */
+export async function moveSharesToContact(
+  removedContactId: string,
+  keptContactId: string,
+  staffEmail: string | null,
+): Promise<{ moved: number; dropped: number }> {
+  if (!removedContactId || !keptContactId || removedContactId === keptContactId) return { moved: 0, dropped: 0 }
+  const { data: removedRows, error: readError } = await sb().from('portal_team_document_shares').select('team_member_id, account_id').eq('owner_contact_id', removedContactId)
+  if (readError) throw new Error(readError.message)
+  const removed = (removedRows ?? []) as ShareRef[]
+  if (removed.length === 0) return { moved: 0, dropped: 0 }
+  const { data: keptRows, error: keptError } = await sb().from('portal_team_document_shares').select('team_member_id').eq('owner_contact_id', keptContactId).in('team_member_id', removed.map((r) => r.team_member_id))
+  if (keptError) throw new Error(keptError.message)
+  const plan = planShareMove(removed, ((keptRows ?? []) as { team_member_id: string }[]).map((r) => r.team_member_id))
+
+  if (plan.drop.length > 0) {
+    const { error } = await sb().from('portal_team_document_shares').delete().eq('owner_contact_id', removedContactId).in('team_member_id', plan.drop.map((r) => r.team_member_id))
+    if (error) throw new Error(error.message)
+  }
+  if (plan.move.length > 0) {
+    const { error } = await sb().from('portal_team_document_shares').update({ owner_contact_id: keptContactId }).eq('owner_contact_id', removedContactId).in('team_member_id', plan.move.map((r) => r.team_member_id))
+    if (error) throw new Error(error.message)
+    if (staffEmail) {
+      for (const row of plan.move) {
+        await recordTeamEventBestEffort(sb(), {
+          teamMemberId: row.team_member_id,
+          accountId: row.account_id,
+          event: 'powers_changed',
+          actor: { kind: 'td', staffEmail },
+          detail: { personal_documents: true, owner_contact_id: keptContactId, moved_from_contact_id: removedContactId, because: 'contact_merged' },
+        })
+      }
+    }
+  }
+  return { moved: plan.move.length, dropped: plan.drop.length }
 }
 
 /** Which team logins of this company has THIS owner shared their personal documents with (for the Team screen). */
