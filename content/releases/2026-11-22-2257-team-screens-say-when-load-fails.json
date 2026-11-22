@@ -1,0 +1,6 @@
+{
+  "title": "The Team screens now say when they cannot load, instead of looking empty",
+  "tag": "behind-the-scenes",
+  "text": "If the system briefly cannot read the team during a database hiccup, the owner's Team page used to show an empty team, or every personal-documents sharing switch as off, and the staff Team card on a company page simply disappeared. They now say in plain words that they could not load, with a Try again link on the staff card, and nothing is changed. You only see this during a hiccup; normal use looks the same.",
+  "points": []
+}

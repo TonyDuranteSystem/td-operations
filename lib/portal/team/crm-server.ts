@@ -30,6 +30,8 @@ export async function loadTeamCard(accountId: string): Promise<TeamCardData> {
     ready = false
     res = await sb().from('portal_team_members').select(OLD_COLUMNS).eq('account_id', accountId).order('created_at', { ascending: true })
   }
+  // Both reads failed: that is "could not read", never "no team logins" (the card would simply vanish).
+  if (res.error) throw new Error('Could not read the team logins.')
   const members = (res.data ?? []) as CardMemberRow[]
   if (members.length === 0) return { ready, members: [] }
 

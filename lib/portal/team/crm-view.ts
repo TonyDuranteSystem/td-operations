@@ -159,3 +159,14 @@ export function buildTeamCard(input: {
 
   return out.sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state] || (a.addedAt ?? '').localeCompare(b.addedAt ?? ''))
 }
+
+export type TeamCardMode = 'hidden' | 'failed' | 'list'
+
+/**
+ * Pure: what the staff Team card draws. A company with no team logins draws nothing; a load that FAILED draws a notice (never the same as
+ * "no team logins"); a list that loaded earlier and could not be refreshed stays on screen (the card then says it may be out of date).
+ */
+export function teamCardMode(input: { hasData: boolean; memberCount: number; failed: boolean }): TeamCardMode {
+  if (!input.hasData) return input.failed ? 'failed' : 'hidden'
+  return input.memberCount === 0 ? 'hidden' : 'list'
+}

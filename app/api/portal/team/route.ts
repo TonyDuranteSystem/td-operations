@@ -21,8 +21,12 @@ export async function GET(request: NextRequest) {
   const adminContactId = await assertAccountAdmin(user, accountId)
   if (!adminContactId) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
-  const teammates = await listTeammates(accountId)
-  return NextResponse.json({ teammates })
+  try {
+    const teammates = await listTeammates(accountId)
+    return NextResponse.json({ teammates })
+  } catch {
+    return NextResponse.json({ error: 'We could not load your team right now. Nothing was changed. Please try again in a moment.' }, { status: 500 })
+  }
 }
 
 export async function POST(request: NextRequest) {

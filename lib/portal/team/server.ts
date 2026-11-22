@@ -175,6 +175,8 @@ export async function listTeammates(accountId: string) {
       .select('id, username, display_name, email, capabilities, status, created_at')
       .eq('account_id', accountId)
       .order('created_at', { ascending: true })
+    // Both reads failed: that is "could not read", never "this company has no team" (an empty list would look like one).
+    if (old.error) throw new Error('Could not read the team logins.')
     rows = old.data as Array<Record<string, unknown>> | null
   }
   return (rows ?? [])
