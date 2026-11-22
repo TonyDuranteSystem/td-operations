@@ -1,0 +1,6 @@
+{
+  "title": "The code's copy of the database layout is up to date again",
+  "tag": "behind-the-scenes",
+  "text": "The contact merge added a database function and changed another, and the code's copy of the database layout was not refreshed, which turned the automatic checks on the main version red. The copy is now refreshed. Nothing changes on screen and no company is affected.",
+  "points": []
+}
