@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest"
 
 vi.mock("@/lib/supabase-admin", () => ({ supabaseAdmin: {} }))
-vi.mock("@/lib/crm-store/merge-guard", () => ({ storeMergeBlocker: vi.fn() }))
+vi.mock("@/lib/crm-store/merge-guard", () => ({ storeMergeCheck: vi.fn() }))
 vi.mock("@/lib/operations/contact-name-follow", () => ({ memberRowsOf: vi.fn() }))
 vi.mock("@/lib/operations/contact-merge-preview", () => ({ sharedMemberAccounts: vi.fn() }))
 
@@ -21,7 +21,7 @@ function raw(over: Partial<MergeRaw> = {}): MergeRaw {
       { id: "d2", file_name: "Owned.pdf", document_type_name: "ID", category: 2, contact_id: "k", account_id: "co", account_name: "Zhang Holding LLC", portal_visible: false },
       { id: "d3", file_name: "Elsewhere.pdf", document_type_name: "ID", category: 2, contact_id: null, account_id: "zzz", account_name: "Other", portal_visible: false },
     ],
-    removedOwnedDocs: 2, blockers: [], wantedEmail: null,
+    removedOwnedDocs: 2, blockers: [], wantedEmail: null, storagePlan: null,
     ...over,
   }
 }
@@ -58,5 +58,11 @@ describe("assembleMergeReport", () => {
     const r = assembleMergeReport(raw({ blockers: ["Both contacts already have their own files"] }))
     expect(r.blockers).toHaveLength(1)
     expect(r.kept.hasStorage).toBe(true)
+  })
+  it("carries the storage plan to the window, and nothing when the storages are not combined", () => {
+    expect(assembleMergeReport(raw()).storage).toBeNull()
+    const plan = { combined: true, files_moved: 2, files_renamed: [], folders_merged: [], folders_moved: [] }
+    expect(assembleMergeReport(raw({ storagePlan: plan })).storage?.plan).toEqual(plan)
+    expect(assembleMergeReport(raw({ storagePlan: plan })).storage?.summary.headline).toMatch(/2 files/)
   })
 })

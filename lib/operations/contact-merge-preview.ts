@@ -5,7 +5,8 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import type { DryRunResult } from "@/lib/operations/destructive"
 import { memberRowsOf, planMemberRenames, nameKey } from "@/lib/operations/contact-name-follow"
-import { storeMergeBlocker } from "@/lib/crm-store/merge-guard"
+import { storeMergeCheck } from "@/lib/crm-store/merge-guard"
+import { summarizePlan } from "@/lib/crm-store/merge-combine"
 
 export interface MergePreviewInput {
   loserId: string
@@ -38,8 +39,8 @@ export async function buildMergePreview(i: MergePreviewInput): Promise<DryRunRes
   if (winner.merged_into) return fail(`"${winner.full_name}" was already merged into another contact — choose the one that is kept.`)
   if (loser.merged_into) return fail(`"${loser.full_name}" was already merged into another contact.`)
 
-  const storeBlock = await storeMergeBlocker(i.loserId, i.winnerId)
-  if (storeBlock) return fail(storeBlock)
+  const storeCheck = await storeMergeCheck(i.loserId, i.winnerId)
+  if (storeCheck.blocker) return fail(storeCheck.blocker)
 
   const loserMembers = await memberRowsOf(i.loserId)
   const winnerMembers = await memberRowsOf(i.winnerId)
@@ -68,7 +69,9 @@ export async function buildMergePreview(i: MergePreviewInput): Promise<DryRunRes
     }
   }
   const { data: owners } = await supabaseAdmin.from("store_owners").select("id").eq("contact_id", i.loserId).eq("kind", "person").limit(1)
-  if ((owners ?? []).length > 0) items.push({ label: `The merged-away contact's storage (files and folders) moves to the kept contact; its top folder is renamed "${winner.full_name}"` })
+  const combined = summarizePlan(storeCheck.plan)
+  if (combined) items.push({ label: combined.headline })
+  else if ((owners ?? []).length > 0) items.push({ label: `The merged-away contact's storage (files and folders) moves to the kept contact; its top folder is renamed "${winner.full_name}"` })
   if (i.portalLoginCount > 0) items.push({ label: `portal login${i.portalLoginCount > 1 ? "s" : ""} of the merged-away contact: ${i.portalLoginCount} (will be removed)` })
 
   const warnings: string[] = []
