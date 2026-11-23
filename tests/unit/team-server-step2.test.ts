@@ -4,6 +4,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const { state } = vi.hoisted(() => ({
   state: {
     ops: [] as Array<{ table: string; op: string; payload?: unknown; filters: Array<[string, unknown]> }>,
+    /** Every database step and login-client update in the order it happened ("table:op", "auth:update"). */
+    order: [] as string[],
     answers: {} as Record<string, unknown>,
     authUser: null as null | { app_metadata?: Record<string, unknown>; user_metadata?: Record<string, unknown> },
     authUpdates: [] as Array<{ id: string; attrs: Record<string, unknown> }>,
@@ -15,6 +17,7 @@ function chain(table: string, op: string, payload?: unknown) {
   const rec = { table, op, payload, filters: [] as Array<[string, unknown]> }
   state.ops.push(rec)
   const key = `${table}:${op}`
+  state.order.push(key)
   const result = () => (key in state.answers ? state.answers[key] : { data: null, error: null })
   const c: Record<string, unknown> = {}
   const self = () => c
@@ -37,7 +40,7 @@ vi.mock('@/lib/supabase-admin', () => ({
     auth: {
       admin: {
         getUserById: async () => ({ data: { user: state.authUser }, error: null }),
-        updateUserById: async (id: string, attrs: Record<string, unknown>) => { state.authUpdates.push({ id, attrs }); return { error: state.authUpdateError } },
+        updateUserById: async (id: string, attrs: Record<string, unknown>) => { state.order.push('auth:update'); state.authUpdates.push({ id, attrs }); return { error: state.authUpdateError } },
         deleteUser: async () => ({ error: null }),
         createUser: async () => ({ data: { user: { id: 'u-new' } }, error: null }),
       },
@@ -59,6 +62,7 @@ const eventsWritten = () => state.ops.filter(o => o.table === 'portal_team_event
 
 beforeEach(() => {
   state.ops = []
+  state.order = []
   state.answers = {}
   state.authUser = teamAuth
   state.authUpdates = []
@@ -91,6 +95,58 @@ describe('resetTeammatePassword', () => {
     await expect(resetTeammatePassword('tm1', 'a1', owner)).rejects.toThrow(/removed or switched off/)
     state.answers['portal_team_members:select'] = { data: null, error: null }
     await expect(resetTeammatePassword('tm1', 'a1', owner)).rejects.toThrow(/not found/)
+  })
+})
+
+describe('resetTeammatePassword: personal-document shares end with the reset', () => {
+  const active = () => { state.answers['portal_team_members:select'] = { data: { auth_user_id: 'u1', username: 'mario', status: 'active' }, error: null } }
+  /** The shares table answers each delete in turn: the n-th call gets answers[n-1] (the last one repeats). */
+  const sharesAnswer = (answers: unknown[]) => {
+    let n = 0
+    Object.defineProperty(state.answers, 'portal_team_document_shares:delete', { get: () => answers[Math.min(n++, answers.length - 1)], configurable: true })
+  }
+  const steps = () => state.order.filter((x) => x === 'portal_team_document_shares:delete' || x === 'auth:update')
+  const lines = () => state.ops.filter((o) => o.table === 'portal_team_events' && o.op === 'insert').map((o) => o.payload as { event: string; detail?: Record<string, unknown> })
+
+  it('ends the login\'s shares BEFORE the password changes and again after, with a "Stopped sharing" line per owner, then the reset line', async () => {
+    active()
+    sharesAnswer([{ data: [{ owner_contact_id: 'c2' }], error: null }, { data: [], error: null }])
+    const r = await resetTeammatePassword('tm1', 'a1', owner)
+    expect(r.password.length).toBeGreaterThan(8)
+    expect(steps()).toEqual(['portal_team_document_shares:delete', 'auth:update', 'portal_team_document_shares:delete'])
+    const del = state.ops.find((o) => o.table === 'portal_team_document_shares' && o.op === 'delete')!
+    expect(del.filters).toContainEqual(['team_member_id', 'tm1'])
+    expect(lines().map((l) => l.event)).toEqual(['powers_changed', 'password_reset'])
+    expect(lines()[0].detail).toMatchObject({ personal_documents: false, owner_contact_id: 'c2', ended_because: 'password_reset' })
+  })
+  it('a share made between the two passes is ended by the second one', async () => {
+    active()
+    sharesAnswer([{ data: [], error: null }, { data: [{ owner_contact_id: 'c3' }], error: null }])
+    await resetTeammatePassword('tm1', 'a1', owner)
+    expect(lines().map((l) => l.event)).toEqual(['powers_changed', 'password_reset'])
+    expect(lines()[0].detail).toMatchObject({ owner_contact_id: 'c3', ended_because: 'password_reset' })
+  })
+  it('REFUSES the reset, and changes nothing, when the shares cannot be ended', async () => {
+    active()
+    sharesAnswer([{ data: null, error: { message: 'db down' } }])
+    await expect(resetTeammatePassword('tm1', 'a1', owner)).rejects.toThrow(/password was not reset/)
+    expect(state.authUpdates).toEqual([])
+    expect(lines()).toEqual([])
+  })
+  it('if the second pass fails the password is already changed but is NOT returned, and no reset line says it was handed over', async () => {
+    active()
+    sharesAnswer([{ data: [], error: null }, { data: null, error: { message: 'db down' } }])
+    await expect(resetTeammatePassword('tm1', 'a1', owner)).rejects.toThrow(/new password is not shown/)
+    expect(state.authUpdates).toHaveLength(1)
+    expect(lines()).toEqual([])
+  })
+  it('a login that is removed, not a team login, or unknown never reaches the shares', async () => {
+    state.answers['portal_team_members:select'] = { data: { auth_user_id: 'u1', username: 'mario', status: 'revoked' }, error: null }
+    await expect(resetTeammatePassword('tm1', 'a1', owner)).rejects.toThrow(/removed or switched off/)
+    state.answers['portal_team_members:select'] = { data: { auth_user_id: 'u1', username: 'mario', status: 'active' }, error: null }
+    state.authUser = { app_metadata: { role: 'client', contact_id: 'c9' }, user_metadata: {} }
+    await expect(resetTeammatePassword('tm1', 'a1', owner)).rejects.toThrow(/not a team login/)
+    expect(state.order).not.toContain('portal_team_document_shares:delete')
   })
 })
 

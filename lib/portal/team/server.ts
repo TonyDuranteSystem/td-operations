@@ -406,6 +406,12 @@ export function switchTeammateOn(id: string, accountId: string, actor: TeamActor
  * Owner-managed password reset, no email involved. The SYSTEM makes the new password and returns it ONCE for the handover
  * message; the colleague must choose their own at the next login. Scoped to the account.
  * Refuses anything that is not a team login (so this can never change a real client's password).
+ *
+ * The person who presses Reset gets the new password and can sign in as that login. If an owner had shared their personal documents with the
+ * login, that person would see them without the owner being asked or told — so a reset ENDS every personal-document share of the login
+ * (the owner shares again when they trust whoever holds it). This is strict, unlike Remove (where the login is already refused): the login
+ * stays live, so (1) the shares are ended BEFORE the password changes and the reset is refused if they cannot be (nothing changes), and
+ * (2) ended AGAIN after it, to catch a share made in between; if that second pass fails the new password is NOT returned.
  */
 export async function resetTeammatePassword(id: string, accountId: string, actor: TeamActor): Promise<{ ok: true; username: string; password: string }> {
   const { data: row } = await sb()
@@ -421,6 +427,12 @@ export async function resetTeammatePassword(id: string, accountId: string, actor
   if (meta.kind !== 'team_member' || meta.role !== 'client' || meta.contact_id) {
     throw new Error('This login is not a team login, so its password cannot be reset here')
   }
+  // Before anything changes: end the document shares. If that cannot be done, refuse — a login that still holds someone's papers is never handed over.
+  try {
+    await endSharesOfLogin(id, accountId, actor, 'password_reset')
+  } catch {
+    throw new Error("The password was not reset: this login may share someone's personal documents and that sharing could not be stopped. Please try again.")
+  }
   const password = generatePassword()
   const { error } = await supabaseAdmin.auth.admin.updateUserById(row.auth_user_id, {
     password,
@@ -429,6 +441,13 @@ export async function resetTeammatePassword(id: string, accountId: string, actor
     app_metadata: { ...meta, must_change_password: true },
   })
   if (error) throw new Error(error.message)
+  // A share made between the first pass and the password change must not survive the reset. Strict: without a clean second pass the new
+  // password is not shown (the old one is already dead, so nobody can use the login until the owner presses Reset again).
+  try {
+    await endSharesOfLogin(id, accountId, actor, 'password_reset')
+  } catch {
+    throw new Error("The password was changed, but this login's personal-document sharing could not be stopped, so the new password is not shown. Please press Reset password again.")
+  }
   // The new password is already set, so the owner must get it even if the log line fails (best effort).
   await recordTeamEventBestEffort(sb(), { teamMemberId: id, accountId, event: 'password_reset', actor })
   return { ok: true, username: row.username, password }
