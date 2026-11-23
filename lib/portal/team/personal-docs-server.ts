@@ -40,11 +40,12 @@ export function shareDeps(): ShareDeps {
   }
 }
 
-export type ShareEndReason = 'switched_off' | 'switched_on' | 'removed'
+export type ShareEndReason = 'switched_off' | 'switched_on' | 'removed' | 'password_reset'
 
 /**
- * ENDS every share of one team login (an owner's personal documents shared with it) — used when the login is switched off, switched back on, or
- * removed, so a share never outlives the stretch of time the login was continuously active and never comes back by itself.
+ * ENDS every share of one team login (an owner's personal documents shared with it) — used when the login is switched off, switched back on,
+ * removed, or its password is reset (whoever presses Reset gets the new password and can sign in as that login, so the owner who shared must
+ * decide again), so a share never outlives the stretch of time the login was continuously active and never comes back by itself.
  * THROWS when the shares cannot be deleted (the caller decides what that means). Each ended share leaves a "Stopped sharing" line in the team
  * record (best effort) so staff see it in the history. Returns how many shares were ended.
  */

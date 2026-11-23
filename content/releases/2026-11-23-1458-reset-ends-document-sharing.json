@@ -1,0 +1,31 @@
+{
+  "title": "Resetting a team login's password now stops anyone's personal-document sharing with it",
+  "tag": "fixed",
+  "text": "An owner can share their own personal papers (passport, ID) with one team login. Until now, any other owner or member of the company could reset that login's password, sign in as it and see those papers, without the owner who shared them being asked. Now a password reset ends every personal-document sharing with that login first. The owner shares again when they trust whoever holds the login. The reset popup on the company's Team page says so. If the sharing cannot be stopped, the password is not reset. Staff see a \"Stopped sharing\" line in the Team card's record.",
+  "points": [
+    "Company Team page: press Reset password on a team login and read the popup",
+    "The owner who had shared sees the sharing switched off for that login",
+    "Staff Team card: a \"Stopped sharing their personal documents\" line, then \"Password reset\""
+  ],
+  "stepsTitle": "What a reset does now",
+  "steps": [
+    {
+      "name": "Press Reset password",
+      "detail": "An owner or member of the company, as before. The popup now says sharing stops."
+    },
+    {
+      "name": "Document sharing ends",
+      "detail": "Every owner's personal-document sharing with that login stops. If this fails, nothing is reset.",
+      "flag": "new"
+    },
+    {
+      "name": "New password is made",
+      "detail": "Shown once, to hand over. The colleague must choose their own at first sign-in."
+    },
+    {
+      "name": "Owner shares again",
+      "detail": "Only when they trust the person holding the login, with the notice and their own password.",
+      "flag": "new"
+    }
+  ]
+}

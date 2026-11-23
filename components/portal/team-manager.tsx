@@ -211,7 +211,7 @@ export function TeamManager({ accountId, companyName, teammates, loginUrl, defau
   }
 
   const resetPw = async (id: string, name: string) => {
-    if (!confirm(`Reset ${name}'s password? Their current password stops working at once and you get a new one to send them.`)) return
+    if (!confirm(`Reset ${name}'s password? Their current password stops working at once and you get a new one to send them. Anyone's personal documents shared with this login stop being shared (each person shares again when they are ready).`)) return
     setBusy(true); setError('')
     const r = await api(`/api/portal/team/${id}/reset-password`, 'POST', { account_id: accountId })
     setBusy(false)
@@ -219,6 +219,7 @@ export function TeamManager({ accountId, companyName, teammates, loginUrl, defau
     const d = (r.data ?? {}) as { username?: string; password?: string }
     setHandover({ kind: 'reset', displayName: name, username: d.username ?? '', password: d.password ?? '' })
     setCopied(false)
+    router.refresh() // the "sharing your documents" marks on the list now read the new state (a reset ends the sharing)
   }
 
   const switchPerson = async (id: string, name: string, action: 'off' | 'on') => {
