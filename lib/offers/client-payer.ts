@@ -13,11 +13,12 @@ import type { BillToEntityDetails } from "@/lib/offers/bill-to"
 
 export const CLIENT_PAYER_LIMITS = { name: 120, address: 200, country: 80, vat_number: 40 } as const
 
-/** Plain text: no control characters, no angle brackets, single spaces, trimmed, capped. */
+/** Plain text: no control or invisible direction characters, no angle brackets, single spaces, trimmed, capped. */
 export function cleanPayerText(v: unknown, max: number): string | null {
   if (typeof v !== "string") return null
   // eslint-disable-next-line no-control-regex -- stripping control characters is the point
-  const t = v.replace(/[\u0000-\u001F\u007F<>]/g, " ").replace(/\s+/g, " ").trim().slice(0, max).trim()
+  // Invisible direction / zero-width characters are removed too: they can flip or hide parts of a name on a PDF or in a staff list.
+  const t = v.replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g, "").replace(/[\u0000-\u001F\u007F<>]/g, " ").replace(/\s+/g, " ").trim().slice(0, max).trim()
   return t || null
 }
 

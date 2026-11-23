@@ -14,11 +14,14 @@
  * email would silently switch to the new company's owner. It writes a dated line to the
  * invoice's INTERNAL notes. Rules (what is allowed) live in lib/invoices/bill-to-change.ts.
  * Bug-hunter pass (job e62bc2b6, 2026-11-22): recipient pin, autopay refusal, is_test follows
- * the new company, and a checked roll-back.
+ * the new company, and a checked roll-back. Follow-up (2026-11-23): an invoice with credit netted into it cannot change
+ * company, the note's date is the New York date, and the person a payer hangs on is picked the same way every time.
  */
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { ensureBillingEntity } from "@/lib/offers/bill-to-server"
-import { appendNote, billToChangeNote, decideBillToChange, type BillToPaymentRow } from "@/lib/invoices/bill-to-change"
+import { appendNote, billToChangeNote, billToNoteDate, decideBillToChange, type BillToPaymentRow } from "@/lib/invoices/bill-to-change"
+import { pickPayerPerson } from "@/lib/invoices/payer-person"
+import { invoiceHasAppliedCredit } from "@/lib/invoices/applied-credit"
 
 export interface ChangeInvoiceBillToInput {
   paymentId: string
@@ -41,18 +44,20 @@ export interface ChangeInvoiceBillToResult {
   emailKeptWith: string | null
 }
 
-/** The person a payer hangs on: the invoice's own contact, else the company's owner. */
+/**
+ * The person a payer hangs on: the invoice's own contact, else the company's owner. The pick (lib/invoices/payer-person.ts) is
+ * the same on every call and the same one the Bill to dialog uses, so the payers it lists are the payers this saves.
+ */
 async function contactForPayer(row: { contact_id: string | null; account_id: string | null }): Promise<string | null> {
   if (row.contact_id) return row.contact_id
   if (!row.account_id) return null
-  const { data } = await supabaseAdmin
+  const { data, error } = await supabaseAdmin
     .from("account_contacts")
-    .select("contact_id, role")
+    .select("contact_id, role, is_primary")
     .eq("account_id", row.account_id)
     .is("access_revoked_at", null)
-    .limit(10)
-  const links = (data ?? []) as Array<{ contact_id: string; role: string | null }>
-  return (links.find((l) => l.role?.toLowerCase().includes("owner")) ?? links[0])?.contact_id ?? null
+  if (error) throw new Error(`Could not read the company's contacts: ${error.message}`)
+  return pickPayerPerson((data ?? []) as Array<{ contact_id: string; role: string | null; is_primary: boolean | null }>)
 }
 
 /**
@@ -113,6 +118,7 @@ export async function changeInvoiceBillTo(input: ChangeInvoiceBillToInput): Prom
     .limit(1)
   if (cnErr) throw new Error(`Could not check credit notes: ${cnErr.message}`)
   const creditNotes = creditNoteRows?.length ?? 0
+  const creditApplied = await invoiceHasAppliedCredit(pay.id)
 
   const row: BillToPaymentRow = {
     invoice_status: pay.invoice_status,
@@ -123,7 +129,7 @@ export async function changeInvoiceBillTo(input: ChangeInvoiceBillToInput): Prom
     payment_category: pay.payment_category,
     installment: pay.installment,
   }
-  const decision = decideBillToChange(row, input.billTo, { creditNotesReferencing: creditNotes })
+  const decision = decideBillToChange(row, input.billTo, { creditNotesReferencing: creditNotes, creditAppliedToThis: creditApplied })
   // `in` narrows reliably here (the project's TypeScript is not in strict mode).
   if ("error" in decision) throw new Error(decision.error)
   const { plan } = decision
@@ -198,7 +204,7 @@ export async function changeInvoiceBillTo(input: ChangeInvoiceBillToInput): Prom
 
   const now = new Date().toISOString()
   const byText = pinned ? `${input.by}; the invoice email stays with ${pinned.name ?? "the company's owner"}` : input.by
-  const notes = appendNote(pay.notes, billToChangeNote({ date: now.slice(0, 10), from, to, by: byText }))
+  const notes = appendNote(pay.notes, billToChangeNote({ date: billToNoteDate(new Date(now)), from, to, by: byText }))
   const patch: Record<string, unknown> = { account_id: plan.account_id, billing_entity_id: newEntityId, notes, updated_at: now }
   if (pinned) patch.contact_id = pinned.id
   if (isTestChanged) patch.is_test = targetIsTest

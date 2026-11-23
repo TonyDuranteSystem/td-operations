@@ -176,3 +176,35 @@ describe('POST /api/offers/payer — company invoices and failures (bug-hunter p
   })
 })
 
+
+describe('POST /api/offers/payer — once staff set the payer, the client box is closed', () => {
+  const staffNote = '2026-11-21: Bill to changed from "Andrea Guzzonato" to "Good Company LTD" — by staff in Finance.'
+  const clientNote = '2026-11-21: Bill to changed from "Andrea Guzzonato" to "Maria Rossi" — named by the client on the payment page.'
+  const withNotes = (notes: string | null) => seed({ payments: [{ id: 'p1', invoice_number: 'INV-002820', invoice_status: 'Draft', total: 3543, account_id: null, contact_id: 'c1', billing_entity_id: null, payment_category: null, installment: null, notes, updated_at: T0 }] })
+
+  it('"get" says it is no longer editable, and "set" is refused with a plain message and writes nothing', async () => {
+    h.db = miniDb(withNotes(staffNote))
+    expect((await json(await call({ action: 'get' }))).editable).toBe(false)
+    const res = await call({ action: 'set', payer: { name: 'Another Ltd' } })
+    expect(res.status).toBe(409)
+    expect(String((await json(res)).error)).toMatch(/already set who this invoice is billed to.*portal chat/i)
+    expect(h.db.tables.billing_entities ?? []).toHaveLength(0)
+    expect(h.db.tables.offers[0].bill_to).toBeNull()
+  })
+
+  it('a payer the CLIENT named earlier can still be corrected by the client', async () => {
+    h.db = miniDb(withNotes(clientNote))
+    expect((await json(await call({ action: 'get' }))).editable).toBe(true)
+    expect((await call({ action: 'set', payer: { name: 'Maria Rossi Jr' } })).status).toBe(200)
+  })
+
+  it('a staff change made AFTER the client\'s closes the box again', async () => {
+    h.db = miniDb(withNotes(`${clientNote}\n${staffNote}`))
+    expect((await call({ action: 'set', payer: { name: 'Third Ltd' } })).status).toBe(409)
+  })
+
+  it('an invoice with no Bill to change yet is open as before', async () => {
+    h.db = miniDb(withNotes('Auto-created at contract signing.'))
+    expect((await json(await call({ action: 'get' }))).editable).toBe(true)
+  })
+})
