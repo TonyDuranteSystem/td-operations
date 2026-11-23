@@ -19,6 +19,7 @@ import { FixSpellingButton } from './fix-spelling-button'
 import { SuiteAssignedField } from './suite-assigned-field'
 import { EntityActivitySummary } from '@/components/dashboard/entity-activity-summary'
 import { ReferralsGivenCard } from '@/components/referrals/referrals-given-card'
+import { ReferredByLine } from '@/components/referrals/referred-by-line'
 import { PortalUserButton } from './portal-user-button'
 import { ComposeEmailButton } from '@/components/inbox/compose-email-button'
 import { DocumentsPanel } from '@/app/(dashboard)/accounts/[id]/components/documents-panel'
@@ -2592,6 +2593,9 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
 
   return (
     <div className="grid gap-6 lg:grid-cols-2">
+      {/* Who referred THIS company (staff only) — a full-width line at the top, shown only when it was referred */}
+      <ReferredByLine accountId={account.id} />
+
       {loginEmailDialog && (
         <ChangeLoginEmailStaffDialog
           contactId={loginEmailDialog.contactId}

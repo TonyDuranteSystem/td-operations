@@ -61,6 +61,8 @@ export interface InvoiceRecord {
   last_reminder_at?: string | null
   reminders_auto?: number
   reminders_manual?: number
+  /** Staff-only: set when this invoice's signed offer has a referrer (name may be '' if the offer only points at them by id). */
+  referral?: { name: string } | null
   accounts: { company_name: string; dunning_pause?: boolean | null; dunning_pause_until?: string | null } | null
   contacts: { full_name: string } | null
 }
@@ -544,6 +546,11 @@ export function AllInvoicesTab({ invoices, legacyPayments = [], isAdmin = false 
                     Payer named by client
                   </span>
                 )}
+                {inv.referral && (
+                  <span data-testid="referral-chip" className="inline-block max-w-[12rem] truncate align-bottom px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700" title={inv.referral.name ? `Referred by ${inv.referral.name} (staff only)` : 'Referral (staff only)'}>
+                    {inv.referral.name ? `Referral · ${inv.referral.name}` : 'Referral'}
+                  </span>
+                )}
                 <InvoiceNoteDot note={inv.notes} />
               </div>
               <div className="flex items-center justify-between gap-2">
@@ -681,6 +688,13 @@ export function AllInvoicesTab({ invoices, legacyPayments = [], isAdmin = false 
                       }
                       <span className="truncate max-w-[200px]">{clientName}</span>
                     </div>
+                    {/* Staff-only: this invoice's signed offer has a referrer (read live from the offer). Shown here, under the name,
+                        because the Status column is too narrow to hold it. */}
+                    {inv.referral && (
+                      <span data-testid="referral-chip" className="mt-1 inline-block max-w-[220px] truncate align-bottom px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700" title={inv.referral.name ? `Referred by ${inv.referral.name} (staff only)` : 'Referral (staff only)'}>
+                        {inv.referral.name ? `Referral · ${inv.referral.name}` : 'Referral'}
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">
                     <span className="truncate block max-w-[200px]" title={inv.description ?? ''}>
