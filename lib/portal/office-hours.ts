@@ -1,6 +1,7 @@
 /**
  * Office hours utility for Tony Durante LLC.
- * Mon–Fri, 9 AM – 3 PM Eastern Time, excluding U.S. federal holidays.
+ * Mon–Fri, 9 AM – 3 PM Eastern Time, excluding U.S. federal holidays and the
+ * planned closures listed in lib/portal/office-closures.ts (a holiday week).
  *
  * Eastern Time is the office timezone (the company is in Largo, FL — Pinellas
  * County / Tampa Bay, which is Eastern, not Central). The browser/Node `Intl`
@@ -9,6 +10,8 @@
  * Accepts an optional `now` argument so callers can pass a fixed Date in tests
  * without mocking the system clock.
  */
+
+import { activeClosureOn, OFFICE_CLOSURES, type ActiveClosure, type OfficeClosure } from './office-closures'
 
 export const OFFICE_TZ = 'America/New_York'
 export const OFFICE_OPEN_HOUR = 9   // 9:00 AM
@@ -50,6 +53,8 @@ export type OfficeClosedReason =
   | 'after_hours'
   | 'weekend'
   | 'holiday'
+  /** A planned closure from lib/portal/office-closures.ts (holiday week, trip): closed all day, whatever the weekday. */
+  | 'closure'
 
 export interface OfficeStatus {
   open: boolean
@@ -133,17 +138,29 @@ export function isOfficeHoliday(now: Date = new Date()): boolean {
   return usFederalHolidays(year).has(key)
 }
 
+// ─── Planned closures ────────────────────────────────────────────────────────
+
+/**
+ * The planned closure (heads-up or closed phase) that applies on `now`'s New York day, or null. The portal clock draws its notice from this
+ * and the chat out-of-office reply picks its words from it; `getOfficeStatus` below reads the same list for the closed phase.
+ */
+export function getActiveClosure(now: Date = new Date(), closures: readonly OfficeClosure[] = OFFICE_CLOSURES): ActiveClosure | null {
+  return activeClosureOn(dateDtf.format(now), closures)
+}
+
 // ─── Status ──────────────────────────────────────────────────────────────────
 
 /**
  * Full open/closed status with the reason it's closed — drives the portal clock
  * and (via isOfficeOpen) the chat out-of-office auto-reply.
  */
-export function getOfficeStatus(now: Date = new Date()): OfficeStatus {
+export function getOfficeStatus(now: Date = new Date(), closures: readonly OfficeClosure[] = OFFICE_CLOSURES): OfficeStatus {
   const parts = dtf.formatToParts(now)
   const weekday = parts.find(p => p.type === 'weekday')?.value ?? ''
   const hour = parseInt(parts.find(p => p.type === 'hour')?.value ?? '0', 10)
 
+  // A planned closure beats everything else (it is closed ALL day, weekdays and the weekend inside it, even a federal holiday).
+  if (getActiveClosure(now, closures)?.phase === 'closed') return { open: false, reason: 'closure' }
   if (isOfficeHoliday(now)) return { open: false, reason: 'holiday' }
   if (!WEEKDAYS.has(weekday)) return { open: false, reason: 'weekend' }
   if (hour < OFFICE_OPEN_HOUR) return { open: false, reason: 'before_hours' }

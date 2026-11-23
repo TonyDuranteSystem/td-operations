@@ -3,9 +3,31 @@
 import { useEffect, useState } from 'react'
 import { Clock } from 'lucide-react'
 import { useLocale } from '@/lib/portal/use-locale'
-import { getOfficeStatus, OFFICE_TZ } from '@/lib/portal/office-hours'
+import { getActiveClosure, getOfficeStatus, OFFICE_TZ } from '@/lib/portal/office-hours'
+import { closureCopy, type ActiveClosure } from '@/lib/portal/office-closures'
+import { AnnouncementBanners, type PortalAnnouncement } from '@/components/portal/announcement-banners'
 import { resolveYourTimeZone } from '@/lib/portal/client-timezone'
 import { cn } from '@/lib/utils'
+
+/**
+ * The notice drawn right under the clock while a planned closure (lib/portal/office-closures.ts) is in its heads-up or closed phase. It reuses the
+ * portal's own announcement card (same look as the CRM-written banners) with NO close button, so every client on every page reads it. Both
+ * languages travel with it; AnnouncementBanners picks one from the portal language (anything but Italian reads English).
+ */
+function closureNotice(active: ActiveClosure): PortalAnnouncement {
+  const it = closureCopy(active.closure, 'it')
+  const en = closureCopy(active.closure, 'en')
+  const closed = active.phase === 'closed'
+  return {
+    id: `office-closure-${active.closure.id}-${active.phase}`,
+    title: closed ? it.closedTitle : it.noticeTitle,
+    message: closed ? it.closedMessage : it.noticeMessage,
+    title_en: closed ? en.closedTitle : en.noticeTitle,
+    message_en: closed ? en.closedMessage : en.noticeMessage,
+    type: 'warning',
+    dismissible: false,
+  }
+}
 
 function timeFmt(locale: string, timeZone?: string) {
   return new Intl.DateTimeFormat(locale === 'it' ? 'it-IT' : 'en-US', {
@@ -54,6 +76,10 @@ export function OfficeClock({
 
   const status = getOfficeStatus(now)
   const open = status.open
+  // Planned closure (holiday week): the same `now` decides the red "closed" state, the reopen-day line and the notice, so they never disagree.
+  const closure = getActiveClosure(now)
+  const noticeLocale = locale === 'it' ? 'it' : 'en'
+  const closedSub = status.reason === 'closure' && closure ? closureCopy(closure.closure, noticeLocale).clockSub : null
 
   const ourTime = timeFmt(locale, OFFICE_TZ).format(now)
   // "YOUR TIME": for a real visit, the device's own timezone (their actual
@@ -76,6 +102,7 @@ export function OfficeClock({
   const yourTz = resolvedTz.label
 
   return (
+    <>
     <div
       role="status"
       aria-live="polite"
@@ -105,7 +132,7 @@ export function OfficeClock({
             </span>
           </p>
           <p className={cn('mt-0.5 text-xs sm:text-sm', open ? 'text-emerald-700/90' : 'text-red-700/90')}>
-            {open ? t('officeClock.openSub') : t('officeClock.closedSub')}
+            {open ? t('officeClock.openSub') : closedSub ?? t('officeClock.closedSub')}
           </p>
         </div>
       </div>
@@ -124,5 +151,11 @@ export function OfficeClock({
         </div>
       </div>
     </div>
+    {closure && (
+      <div className="mt-3">
+        <AnnouncementBanners announcements={[closureNotice(closure)]} locale={noticeLocale} />
+      </div>
+    )}
+    </>
   )
 }
