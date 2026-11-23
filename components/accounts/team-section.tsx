@@ -4,6 +4,7 @@
  * Team card on a company's page (Team Powers step 5, STAFF ONLY).
  * Read-only list of the portal team logins of THIS company — person, powers, who added them and when, the notice the owner
  * accepted (the saved words), last sign-in, state — plus a SILENT Switch off / Switch on with a reason.
+ * Below the people, a read-only list of which owners share their personal documents with which login, and whether that login can see them now.
  * No email or message goes to anyone. A person TD switches off cannot be switched back on by the owner.
  * The card draws nothing for a company that has no team logins. It never touches the company's members list.
  * A load that FAILS is said so ("could not load") — never drawn as "no team logins" (the card would simply vanish).
@@ -12,8 +13,9 @@ import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { Loader2, Users } from 'lucide-react'
 import { teamCardMode, type CardMember, type CardState } from '@/lib/portal/team/crm-view'
+import { SHARING_STATUS_TEXT, sharingBlockMode, type SharingLine } from '@/lib/portal/team/sharing-list'
 
-interface TeamResponse { ready: boolean; members: CardMember[] }
+interface TeamResponse { ready: boolean; members: CardMember[]; sharing?: { available: boolean; lines: SharingLine[] } }
 
 const STATE_LABEL: Record<CardState, { text: string; cls: string }> = {
   active: { text: 'Active', cls: 'bg-green-100 text-green-800' },
@@ -228,6 +230,48 @@ export function TeamSection({ accountId }: { accountId: string }) {
           )
         })}
       </div>
+
+      <SharingBlock sharing={data.sharing} onRetry={() => void load()} />
+    </div>
+  )
+}
+
+/**
+ * Who shares their own personal documents (passport, ID) with which team login — the CURRENT list, with whether the login can see them now.
+ * A list that could not be read says so; it is never drawn as "nobody shares".
+ */
+function SharingBlock({ sharing, onRetry }: { sharing: TeamResponse['sharing']; onRetry: () => void }) {
+  if (!sharing) return null // an older server answered without the sharing list: draw nothing rather than a wrong "nobody"
+  const mode = sharingBlockMode({ available: sharing.available, lineCount: sharing.lines.length })
+  return (
+    <div className="border-t pt-3 space-y-2" data-testid="sharing-block">
+      <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Personal documents shared with team logins</h4>
+      <p className="text-xs text-muted-foreground">
+        An owner can let one team login see their own personal papers (such as a passport or ID). This is who shares with whom right now, and whether that login can really see them.
+      </p>
+      {mode === 'unavailable' && (
+        <p className="text-xs rounded border border-amber-200 bg-amber-50 text-amber-800 p-2" data-testid="sharing-unavailable">
+          Could not read the sharing list right now — this does NOT mean nobody shares. Nothing was changed.{' '}
+          <button onClick={onRetry} className="underline">Try again</button>
+        </p>
+      )}
+      {mode === 'empty' && (
+        <p className="text-xs" data-testid="sharing-empty">Nobody. No owner has shared their personal documents with a team login.</p>
+      )}
+      {mode === 'list' && (
+        <ul className="divide-y rounded border" data-testid="sharing-list">
+          {sharing.lines.map((l: SharingLine) => (
+            <li key={`${l.loginId}-${l.ownerContactId}`} className="p-2 text-xs space-y-0.5" data-testid={`sharing-line-${l.loginUsername || l.loginId}`}>
+              <div>
+                <span className="font-medium">{l.ownerName}</span> shares their personal documents with <span className="font-medium">{l.loginName}</span>
+                {l.loginUsername ? <span className="text-muted-foreground"> @{l.loginUsername}</span> : null}
+              </div>
+              <div className="text-muted-foreground">Since {when(l.since)}</div>
+              <div className={l.status === 'can_see' ? 'text-green-700' : 'text-amber-700'}>{SHARING_STATUS_TEXT[l.status]}</div>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }
