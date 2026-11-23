@@ -16,6 +16,7 @@ import { guessMimeType } from "@/lib/mcp/tools/drive"
 import { validateChatAttachment } from "@/lib/portal/chat-attachment"
 import { buildPortalChatLink } from "@/lib/portal/chat-link"
 import { resolveLoginTarget } from "@/lib/members/portal-access-refusal"
+import { PERSONAL_CATEGORY } from "@/lib/documents/visibility-guard"
 
 /**
  * Does this Drive file actually live inside the given account's own Drive
@@ -1056,9 +1057,21 @@ Requires account_id or contact_id — whichever thread the file is headed to —
           const inDrive = classifyPointer(file_id) === "drive"
           // A file in the new storage is not a Drive id: it must be one of THIS account's own recorded documents.
           if (!inDrive && account_id) {
-            const { data: own } = await supabaseAdmin.from("documents").select("id").eq("drive_file_id", file_id).eq("account_id", account_id).limit(1)
+            const { data: own } = await supabaseAdmin.from("documents").select("id, category").eq("drive_file_id", file_id).eq("account_id", account_id).limit(1)
             if (!own || own.length === 0) {
               return { content: [{ type: "text" as const, text: "Error: this stored file isn't one of that account's own documents. Double-check the file_id and account_id — if this is intentional, flag it to Antonio rather than attaching it directly." }] }
+            }
+            // A PERSONAL paper (passport, ID, ITIN…) must never be put in a COMPANY thread: every client of the company, and every team login
+            // with the Chat power, can open an attachment there (dev job e59dd470, 20 Nov hunt C#9).
+            if (own.some((d) => d.category === PERSONAL_CATEGORY)) {
+              return { content: [{ type: "text" as const, text: "Error: this stored file is a PERSONAL paper (passport, ID, ITIN…). It cannot be attached to a company chat, where every client of the company and every team login with chat can open it. Send it in that person's own thread (contact_id only), or leave it in their documents." }] }
+            }
+          }
+          // A contact-only thread (no account): the stored file must be one of THAT contact's own documents — never another person's or a company's.
+          if (!inDrive && !account_id && contact_id) {
+            const { data: mine } = await supabaseAdmin.from("documents").select("id").eq("drive_file_id", file_id).eq("contact_id", contact_id).limit(1)
+            if (!mine || mine.length === 0) {
+              return { content: [{ type: "text" as const, text: "Error: this stored file isn't one of that contact's own documents. Double-check the file_id and contact_id — if this is intentional, flag it to Antonio rather than attaching it directly." }] }
             }
           }
           if (inDrive && account_id && !(await driveFileBelongsToAccount(file_id, account_id))) {

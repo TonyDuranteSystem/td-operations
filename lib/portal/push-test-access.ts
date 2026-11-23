@@ -7,10 +7,13 @@
  * PURE, so it is unit-tested without a database.
  */
 import type { PortalIdentity } from '@/lib/portal/resolve-portal-identity'
+import { hasCapability } from '@/lib/portal/team/capabilities'
 
 export function mayTestPushForAccount(identity: PortalIdentity, accountId: unknown): accountId is string {
   if (typeof accountId !== 'string' || accountId.length === 0 || accountId.length > 64) return false
   if (identity.kind === 'contact') return identity.accountIds.includes(accountId)
-  if (identity.kind === 'teammate') return identity.accountId === accountId
+  // A team login needs the Chat power (the test buzzes every browser and phone of the company, and alerts are a chat feature): a login with
+  // no powers, or one still waiting for its own notice (its powers are held back), may not.
+  if (identity.kind === 'teammate') return identity.accountId === accountId && hasCapability(identity.capabilities, 'chat')
   return false
 }

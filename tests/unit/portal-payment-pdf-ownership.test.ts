@@ -29,7 +29,9 @@ vi.mock('@/lib/supabase/server', () => ({
   createClient: () => ({ auth: { getUser } }),
 }))
 vi.mock('@/lib/portal/team/gate', () => ({ canAccessAccount }))
-vi.mock('@/lib/portal-auth', () => ({ getClientContactId }))
+vi.mock('@/lib/portal-auth', () => ({ getClientContactId, getClientAccountIds: vi.fn(async () => []) }))
+// The route now asks who a team login is (to apply its start date); these cases are clients with a contact, so it is never reached.
+vi.mock('@/lib/portal/resolve-portal-identity', () => ({ resolvePortalIdentity: vi.fn(async () => ({ kind: 'none' })) }))
 vi.mock('@/lib/pdf/invoice-pdf', () => ({ generateInvoicePdf }))
 
 let paymentRow: Record<string, unknown> | null = null

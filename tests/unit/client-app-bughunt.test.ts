@@ -72,7 +72,8 @@ describe('finding 1: the page tells the app which company it shows', () => {
 
 describe('finding 8: who may send a test alert to a company', () => {
   const contact = { kind: 'contact', contactId: 'c1', accountIds: ['a1', 'a2'] } as const
-  const team = { kind: 'teammate', teamMemberId: 't1', accountId: 'a1', displayName: 'T', email: null, capabilities: {} } as never
+  const team = { kind: 'teammate', teamMemberId: 't1', accountId: 'a1', displayName: 'T', email: null, capabilities: { chat: true } } as never
+  const teamNoChat = { kind: 'teammate', teamMemberId: 't1', accountId: 'a1', displayName: 'T', email: null, capabilities: {} } as never
   it('lets a client test their own companies and refuses a company they are not linked to', () => {
     expect(mayTestPushForAccount(contact, 'a2')).toBe(true)
     expect(mayTestPushForAccount(contact, 'zzz')).toBe(false)
@@ -80,6 +81,9 @@ describe('finding 8: who may send a test alert to a company', () => {
   it('lets a team member test only the one company they belong to', () => {
     expect(mayTestPushForAccount(team, 'a1')).toBe(true)
     expect(mayTestPushForAccount(team, 'a2')).toBe(false)
+  })
+  it('a team member needs the Chat power: one with no powers (or still waiting for its own notice) may not (dev job e59dd470)', () => {
+    expect(mayTestPushForAccount(teamNoChat, 'a1')).toBe(false)
   })
   it('refuses every other kind of login, and anything that is not a plain company id', () => {
     expect(mayTestPushForAccount({ kind: 'none' }, 'a1')).toBe(false)
