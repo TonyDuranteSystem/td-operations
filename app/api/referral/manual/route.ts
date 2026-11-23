@@ -5,7 +5,8 @@
  *       Unified actor search for BOTH the referrer and referred pickers. Returns
  *       accounts (any type — Client, Partner, One-Time, …) AND contacts. Each
  *       result carries the setup-fee total of the relevant account so the form can
- *       pre-fill the default reward (10% of setup fee, USD — editable).
+ *       pre-fill the default reward (10% of setup fee, USD — editable). The setup fee
+ *       is read from the account's signed offer (fallback: the old setup-fee invoice code).
  *
  *  POST /api/referral/manual
  *       Body: { referrerContactId?, referrerAccountId?, referrerType?,
@@ -21,6 +22,8 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { NextRequest, NextResponse } from 'next/server'
 import { blockedByUnsettledPlan, createManualReferralCredit, defaultReferralCreditUsd } from '@/lib/operations/referral'
+import { signedOffersForAccounts } from '@/lib/referrals/referral-lookup'
+import { setupFeeFromSignedOffers } from '@/lib/referrals/referral-source'
 
 export const dynamic = 'force-dynamic'
 
@@ -31,7 +34,11 @@ async function requireDashboard() {
   return user
 }
 
-/** Sum of non-cancelled setup-fee payments per account id. */
+/**
+ * Setup fee per account id. The SIGNED OFFER is the source (it states the fee the client agreed to, the same figure
+ * the referrer's credit is computed from at first payment). The old "setup fee" invoice code is only the fallback for
+ * a company with no signed offer on file — it is set on almost no invoices, so on its own the suggestion was usually $0.
+ */
 async function setupFeeByAccount(accountIds: string[]): Promise<Map<string, number>> {
   const map = new Map<string, number>()
   if (accountIds.length === 0) return map
@@ -44,6 +51,16 @@ async function setupFeeByAccount(accountIds: string[]): Promise<Map<string, numb
   for (const f of data ?? []) {
     const aid = (f as { account_id: string }).account_id
     map.set(aid, (map.get(aid) ?? 0) + Number((f as { amount: number | null }).amount ?? 0))
+  }
+  try {
+    const offersByAccount = await signedOffersForAccounts(accountIds)
+    for (const [aid, offers] of Array.from(offersByAccount.entries())) {
+      const fee = setupFeeFromSignedOffers(offers)
+      if (fee > 0) map.set(aid, fee)
+    }
+  } catch (err) {
+    // The search must still work on the fallback figure if the offer lookup fails.
+    console.error('[referral/manual] signed-offer setup fee lookup failed', err instanceof Error ? err.message : err)
   }
   return map
 }

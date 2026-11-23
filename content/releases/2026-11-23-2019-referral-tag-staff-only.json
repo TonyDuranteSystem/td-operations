@@ -1,0 +1,12 @@
+{
+  "title": "Referred clients are now marked for staff: on the invoice, the company page and the reward",
+  "tag": "new",
+  "text": "When a client was referred to us, the team can now see it. In Finance, the invoice a referred client was billed for their setup (and each part of a payment plan) shows a \"Referral · name\" tag under the company name. The company page shows a \"Referred by\" line at the top. On the Add referral screen, the suggested reward now comes from the setup fee on the client's signed offer, so it is no longer $0 when the old invoice code was never set. The tag is read from the offer each time, so older signed clients show it too. Only staff see any of this: the client's portal, invoices, emails and offer page are unchanged.",
+  "points": [
+    "Finance → All Invoices: look under the company name on a referred client's setup invoice",
+    "Company page: the \"Referred by\" line sits above Company Info, only when the company was referred",
+    "Referrals → Add referral: pick the referred client and the 10% reward is filled in from their signed offer",
+    "If the referrer was only typed as a name, the tag shows that name but it does not link to a person"
+  ],
+  "screenshot": "finance-referral-tag.png"
+}

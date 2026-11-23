@@ -27,6 +27,7 @@ import { redirect } from 'next/navigation'
 import { FinanceDashboard } from './finance-dashboard'
 import type { OpenInvoice, BankFeedRecord } from './bank-feed-tab'
 import type { InvoiceRecord } from './all-invoices-tab'
+import { referrerNamesByInvoice } from '@/lib/referrals/referral-lookup'
 import { listRecurringInvoiceTemplates } from '@/app/(dashboard)/shared/recurring-invoice-actions'
 
 export const dynamic = 'force-dynamic'
@@ -164,13 +165,24 @@ export default async function FinancePage({
   // ── Fetch ALL invoices for flat list view (from payments) ──
   const flatQuery = supabaseAdmin
     .from('payments')
-    .select('id, invoice_number, invoice_status, total, amount_paid, amount_due, amount_currency, issue_date, due_date, paid_date, description, notes, message, account_id, contact_id, reminder_count, last_reminder_at, accounts:account_id(company_name, dunning_pause, dunning_pause_until), contacts:contact_id(full_name)')
+    .select('id, invoice_number, invoice_status, total, amount_paid, amount_due, amount_currency, issue_date, due_date, paid_date, description, notes, message, account_id, contact_id, reminder_count, last_reminder_at, idempotency_key, tranche_offer_token, accounts:account_id(company_name, dunning_pause, dunning_pause_until), contacts:contact_id(full_name)')
     .not('invoice_status', 'is', null)
     .not('invoice_status', 'in', '("Cancelled","Split")')
     .order('issue_date', { ascending: false })
     .limit(500)
   applyDept(flatQuery)
   const { data: allPaymentsFlat } = await flatQuery
+
+  // Staff-only "Referral" tag: read live from each invoice's signed offer (never stamped on the invoice).
+  // A failed lookup must never take the invoice list down — the tag just does not show.
+  let referralByInvoice = new Map<string, string>()
+  try {
+    referralByInvoice = await referrerNamesByInvoice(
+      (allPaymentsFlat ?? []).map(p => ({ id: p.id, idempotency_key: p.idempotency_key, tranche_offer_token: p.tranche_offer_token })),
+    )
+  } catch (err) {
+    console.error('[finance] referral tag lookup failed', err instanceof Error ? err.message : err)
+  }
 
   // Per-invoice auto/manual reminder breakdown from the history log (Phase 2).
   // One grouped read; empty until reminders start flowing post-deploy.
@@ -208,6 +220,7 @@ export default async function FinancePage({
     last_reminder_at: (p as { last_reminder_at?: string | null }).last_reminder_at ?? null,
     reminders_auto: reminderBreakdown[p.id]?.auto ?? 0,
     reminders_manual: reminderBreakdown[p.id]?.manual ?? 0,
+    referral: referralByInvoice.has(p.id) ? { name: referralByInvoice.get(p.id) ?? '' } : null,
     accounts: p.accounts as unknown as { company_name: string; dunning_pause: boolean | null; dunning_pause_until: string | null } | null,
     contacts: p.contacts as unknown as { full_name: string } | null,
   }))
