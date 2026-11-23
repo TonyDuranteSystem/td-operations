@@ -88,7 +88,6 @@ export function teammateNavCapability(navKey: string): TeamCapability | 'always'
     case 'nav.myCompany':
       return 'company_services'
     case 'nav.documents':
-    case 'nav.generateDocuments':
       return 'documents'
     case 'nav.invoices':
     case 'nav.tdBilling':
@@ -99,7 +98,8 @@ export function teammateNavCapability(navKey: string): TeamCapability | 'always'
       return 'sales_customers'
     case 'nav.requestService':
       return 'request_services'
-    // Owner-only / non-delegable: nav.team, nav.signDocuments,
+    // Owner-only / non-delegable: nav.team, nav.signDocuments, nav.generateDocuments (the page needs a person's own contact; a team login
+    // has none, so the entry used to lead back to the home page — dev job e59dd470, 20 Nov hunt F7),
     // nav.referrals, nav.profile, nav.offer, nav.wizard, partner items → hidden.
     default:
       return null

@@ -18,7 +18,7 @@ const offBy = (by: 'owner' | 'td'): SwitchRow => ({ ...active, status: 'revoked'
 const removed: SwitchRow = { ...active, status: 'revoked' }
 
 /** In-memory fake of the database + login, with switches to make each step fail. */
-function world(initial: SwitchRow | null, opts: { banFails?: boolean; strictLogFails?: boolean; bestLogFails?: boolean; markOffRace?: boolean; markOnRace?: boolean; takeOverRace?: boolean; restoreFails?: boolean; sharesFail?: boolean } = {}) {
+function world(initial: SwitchRow | null, opts: { banFails?: boolean; reBanFails?: boolean; strictLogFails?: boolean; bestLogFails?: boolean; markOffRace?: boolean; markOnRace?: boolean; takeOverRace?: boolean; restoreFails?: boolean; sharesFail?: boolean } = {}) {
   const state = {
     row: initial ? { ...initial } : null, banned: initial ? initial.status !== 'active' : false, events: [] as TeamEventInput[], order: [] as string[],
     /** each call to end the login's shares, with the steps that had already happened when it ran (kept apart from `order` so older order checks stay as they were) */
@@ -50,7 +50,7 @@ function world(initial: SwitchRow | null, opts: { banFails?: boolean; strictLogF
     restoreOff: async (row) => { state.order.push('restoreOff'); if (opts.restoreFails) throw new Error('db down'); state.row = { ...row } },
     setBan: async (_u, banned) => {
       state.order.push(banned ? 'ban' : 'unban')
-      if (opts.banFails) throw new Error('auth down')
+      if (opts.banFails || (banned && opts.reBanFails)) throw new Error('auth down')
       state.banned = banned
     },
     endShares: async (_i, _a, _actor, because) => {
@@ -98,10 +98,22 @@ describe('switchOffTeammate', () => {
     expect(w.state.row).toMatchObject({ switched_off_by: 'td', switched_off_reason: 'client asked' })
     expect(w.state.events[0].detail).toMatchObject({ reason: 'client asked' })
   })
-  it('refuses an unknown person, someone already off, someone removed for good', async () => {
+  it('refuses an unknown person and someone removed for good', async () => {
     expect(await code(switchOffTeammate('tm1', 'a1', owner, '', world(null).deps))).toBe('not_found')
-    expect(await code(switchOffTeammate('tm1', 'a1', owner, '', world(offBy('owner')).deps))).toBe('already_off')
     expect(await code(switchOffTeammate('tm1', 'a1', owner, '', world(removed).deps))).toBe('removed')
+  })
+  it('pressing Switch off again on someone the SAME side already switched off just re-blocks the sign-in (it finishes an earlier "ban_failed")', async () => {
+    const w = world(offBy('owner'))
+    w.state.banned = false // the earlier switch-off left the login unblocked
+    expect(await code(switchOffTeammate('tm1', 'a1', owner, '', w.deps))).toBe('ok')
+    expect(w.state.banned).toBe(true)
+    expect(w.state.events).toEqual([]) // no second "switched off" line for the same switch-off
+    expect(w.state.row?.switched_off_by).toBe('owner')
+  })
+  it('if the re-block fails again it says so (and the person stays off)', async () => {
+    const w = world(offBy('owner'), { banFails: true })
+    expect(await code(switchOffTeammate('tm1', 'a1', owner, '', w.deps))).toBe('ban_failed')
+    expect(w.state.row?.status).toBe('revoked')
   })
   it('refuses a "system" actor and a conflict with a concurrent change', async () => {
     expect(await code(switchOffTeammate('tm1', 'a1', { kind: 'system' }, '', world(active).deps))).toBe('conflict')
@@ -134,10 +146,18 @@ describe('TD can lock someone an owner switched off', () => {
     expect(await code(switchOffTeammate('tm1', 'a1', td, ' ', w.deps))).toBe('reason_required')
     expect(w.state.row?.switched_off_by).toBe('owner')
   })
-  it('an owner cannot "switch off" someone TD already switched off, and TD cannot do it twice', async () => {
+  it('an owner cannot "switch off" someone TD already switched off; TD pressing it again only re-blocks the sign-in', async () => {
     expect(await code(switchOffTeammate('tm1', 'a1', owner, '', world(offBy('td')).deps))).toBe('already_off')
-    expect(await code(switchOffTeammate('tm1', 'a1', td, 'again', world(offBy('td')).deps))).toBe('already_off')
-    expect(await code(switchOffTeammate('tm1', 'a1', owner, '', world(offBy('owner')).deps))).toBe('already_off')
+    const again = world(offBy('td'))
+    expect(await code(switchOffTeammate('tm1', 'a1', td, 'again', again.deps))).toBe('ok')
+    expect(again.state.row?.switched_off_by).toBe('td')
+    expect(again.state.events).toEqual([])
+  })
+  it('a take-over whose re-block fails still locks the person and says so in the record', async () => {
+    const w = world(offBy('owner'), { banFails: true })
+    expect(await code(switchOffTeammate('tm1', 'a1', td, 'x', w.deps))).toBe('ok')
+    expect(w.state.row?.switched_off_by).toBe('td')
+    expect(w.state.events[0].detail).toMatchObject({ took_over_from: 'owner', ban_failed: true })
   })
   it('a concurrent change while taking over is reported', async () => {
     expect(await code(switchOffTeammate('tm1', 'a1', td, 'x', world(offBy('owner'), { takeOverRace: true }).deps))).toBe('conflict')
@@ -200,6 +220,20 @@ describe('switchOnTeammate', () => {
     expect(msg).toMatch(/blocked from signing in/)
     expect(msg).toMatch(/contact support/)
     expect(w.state.banned).toBe(true)
+  })
+  it('if the put-back AND the re-block both fail, the message says the person may be able to sign in (it never claims "blocked")', async () => {
+    const w = world(offBy('owner'), { strictLogFails: true, restoreFails: true, reBanFails: true })
+    let msg = ''
+    try { await switchOnTeammate('tm1', 'a1', owner, w.deps) } catch (e) { msg = (e as Error).message }
+    expect(msg).toMatch(/may be able to sign in/)
+    expect(msg).not.toMatch(/is blocked from signing in/)
+    expect(msg).toMatch(/Switch them off again/)
+  })
+  it('a concurrent change after the unban whose re-block fails says the sign-in could not be blocked again', async () => {
+    const w = world(offBy('owner'), { markOnRace: true, reBanFails: true })
+    let msg = ''
+    try { await switchOnTeammate('tm1', 'a1', owner, w.deps) } catch (e) { msg = (e as Error).message }
+    expect(msg).toMatch(/could not be blocked again/)
   })
 })
 

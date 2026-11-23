@@ -171,9 +171,18 @@ describe('provisionTeammate: adding is all-or-nothing (step 2)', () => {
     expect(log).toEqual(['auth-created', 'row-inserted', 'row-deleted:t1', 'auth-deleted:u1'])
   })
 
-  it('an undo that itself fails does not hide the original problem', async () => {
+  it('an undo that itself fails does not hide the original problem — and the message no longer claims "nothing was created"', async () => {
     const r = await provisionTeammate(valid, base({ recordAdded: async () => { throw new Error('log down') }, deleteAuthUser: async () => { throw new Error('cannot delete') }, deleteTeamMember: async () => { throw new Error('cannot delete') } }))
     expect(r.ok).toBe(false)
+    expect(r.errors?.[0]).toContain('could not be fully removed')
+    expect(r.errors?.[0]).not.toContain('nothing was created')
+    expect(r.errors?.[0]).toContain('contact support')
+  })
+  it('one failed undo step is enough to stop saying "nothing was created"', async () => {
+    const onlyLogin = await provisionTeammate(valid, base({ recordAdded: async () => { throw new Error('log down') }, deleteAuthUser: async () => { throw new Error('cannot delete') } }))
+    expect(onlyLogin.errors?.[0]).toContain('could not be fully removed')
+    const onlyEntry = await provisionTeammate(valid, base({ recordAdded: async () => { throw new Error('log down') }, deleteTeamMember: async () => { throw new Error('cannot delete') } }))
+    expect(onlyEntry.errors?.[0]).toContain('could not be fully removed')
   })
 
   it('the database "already exists" refusal is recognised by code or by text', () => {

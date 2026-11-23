@@ -215,11 +215,11 @@ describe('the "who am I" answer', () => {
 
   it('shows a team member only what their permissions allow, with Chat only if granted', () => {
     const withChat = assembleAppMe(input({ kind: 'teammate', counts: { chat: 0, documents: 0, sign: 0, billing: 0 }, ctx: { portalTier: 'active', hasCompany: true, isTeammate: true, teammateCapabilities: { chat: true, documents: true }, navVisibility: ACTIVE_FLAGS } }))
-    // (Generate Documents rides on the same 'documents' permission for a team member, exactly as in the website's menu.)
-    expect(withChat.items.map(i => i.key)).toEqual(['nav.overview', 'nav.chat', 'nav.documents', 'nav.generateDocuments', 'nav.guide'])
+    // (Generate Documents is never shown to a team member: its page needs a person's own contact, which a team login does not have.)
+    expect(withChat.items.map(i => i.key)).toEqual(['nav.overview', 'nav.chat', 'nav.documents', 'nav.guide'])
     expect(withChat.lockedKey).toBe('nav.chat')
     const noChat = assembleAppMe(input({ kind: 'teammate', counts: { chat: 0, documents: 0, sign: 0, billing: 0 }, ctx: { portalTier: 'active', hasCompany: true, isTeammate: true, teammateCapabilities: { documents: true }, navVisibility: ACTIVE_FLAGS } }))
-    expect(noChat.items.map(i => i.key)).toEqual(['nav.overview', 'nav.documents', 'nav.generateDocuments', 'nav.guide'])
+    expect(noChat.items.map(i => i.key)).toEqual(['nav.overview', 'nav.documents', 'nav.guide'])
     expect(noChat.lockedKey).toBeNull()
   })
 

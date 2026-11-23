@@ -62,7 +62,8 @@ describe('canAccessAccount (default-deny, fixes the if(contactId) skip-leak)', (
 describe('teammateNavCapability', () => {
   it('maps granted sections to their capability', () => {
     expect(teammateNavCapability('nav.documents')).toBe('documents')
-    expect(teammateNavCapability('nav.generateDocuments')).toBe('documents')
+    // Generate Documents is never a tick: the page needs a person's own contact, which a team login does not have (dev job e59dd470, hunt F7).
+    expect(teammateNavCapability('nav.generateDocuments')).toBeNull()
     expect(teammateNavCapability('nav.invoices')).toBe('invoices_billing')
     expect(teammateNavCapability('nav.tdBilling')).toBe('invoices_billing')
     expect(teammateNavCapability('nav.chat')).toBe('chat')

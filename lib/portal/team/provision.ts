@@ -212,9 +212,17 @@ export async function provisionTeammate(input: TeammateInput, deps: ProvisionDep
         ip: input.ip ?? null,
       })
     } catch {
-      await deps.deleteTeamMember?.(row.id).catch(() => undefined)
-      await deps.deleteAuthUser?.(authUser.id).catch(() => undefined)
-      return { ok: false, errors: ['We could not save the record of this change, so nothing was created. Please try again.'] }
+      // Say what really happened: "nothing was created" is only true when BOTH undo steps worked.
+      const entryGone = await Promise.resolve(deps.deleteTeamMember?.(row.id)).then(() => true, () => false)
+      const loginGone = await Promise.resolve(deps.deleteAuthUser?.(authUser.id)).then(() => true, () => false)
+      return {
+        ok: false,
+        errors: [
+          entryGone && loginGone
+            ? 'We could not save the record of this change, so nothing was created. Please try again.'
+            : 'We could not save the record of this change, and the new login could not be fully removed. Please contact support before adding this person again.',
+        ],
+      }
     }
   }
 

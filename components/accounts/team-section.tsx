@@ -15,7 +15,7 @@ import { Loader2, Users } from 'lucide-react'
 import { teamCardMode, type CardMember, type CardState } from '@/lib/portal/team/crm-view'
 import { SHARING_STATUS_TEXT, sharingBlockMode, type SharingLine } from '@/lib/portal/team/sharing-list'
 
-interface TeamResponse { ready: boolean; members: CardMember[]; sharing?: { available: boolean; lines: SharingLine[] } }
+interface TeamResponse { ready: boolean; historyAvailable?: boolean; members: CardMember[]; sharing?: { available: boolean; lines: SharingLine[] } }
 
 const STATE_LABEL: Record<CardState, { text: string; cls: string }> = {
   active: { text: 'Active', cls: 'bg-green-100 text-green-800' },
@@ -78,6 +78,8 @@ export function TeamSection({ accountId }: { accountId: string }) {
       await load()
     } catch (err) {
       toast.error(err instanceof Error && err.message ? err.message : 'Could not switch the person. Please try again.')
+      // A switch can half-succeed (switched off, but the sign-in block failed): show the real state, not the old one.
+      void load()
     } finally {
       setBusy(false)
     }
@@ -119,6 +121,12 @@ export function TeamSection({ accountId }: { accountId: string }) {
           The team record is not available on this system yet, so this list is read-only and switching is disabled.
         </p>
       )}
+      {data.ready && data.historyAvailable === false && (
+        <p className="text-xs rounded border border-amber-200 bg-amber-50 text-amber-800 p-2" data-testid="team-section-history-unreadable">
+          The history of these people could not be read just now, so the lines below may be missing. Switching off and on still works.{' '}
+          <button onClick={() => void load()} className="underline">Try again</button>
+        </p>
+      )}
 
       <div className="divide-y">
         {data.members.map((m) => {
@@ -141,7 +149,7 @@ export function TeamSection({ accountId }: { accountId: string }) {
 
               <div className="text-xs text-muted-foreground space-y-0.5">
                 <div>Added {m.addedBy ? `by ${m.addedBy} ` : ''}on {when(m.addedAt)}</div>
-                <div>Last sign-in: {m.lastSignIn ? when(m.lastSignIn) : 'Never'}</div>
+                <div>Last sign-in: {m.lastSignInUnreadable ? 'could not be checked' : m.lastSignIn ? when(m.lastSignIn) : 'Never'}</div>
                 {m.switchedOff && (
                   <div>
                     Switched off by {m.switchedOff.by === 'td' ? 'TD' : 'the owner'} on {when(m.switchedOff.at)}

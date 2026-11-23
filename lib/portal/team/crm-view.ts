@@ -59,6 +59,8 @@ export interface CardMember {
   notice: { version: string | null; acceptedAt: string | null; ip: string | null; text: string | null } | null
   switchedOff: { by: 'owner' | 'td'; at: string | null; reason: string | null } | null
   lastSignIn: string | null
+  /** True when the last sign-in could not be looked up (a failed lookup must not read as "Never signed in"). */
+  lastSignInUnreadable: boolean
   history: CardHistoryLine[]
 }
 
@@ -110,8 +112,11 @@ export function buildTeamCard(input: {
   names: Record<string, string>
   /** auth user id → last sign-in (ISO) */
   signIns: Record<string, string | null>
+  /** auth user ids whose sign-in lookup FAILED (shown as "could not be checked", never as "Never") */
+  signInUnreadable?: ReadonlyArray<string>
 }): CardMember[] {
   const { members, events, names, signIns } = input
+  const unreadable = new Set(input.signInUnreadable ?? [])
   const byMember = new Map<string, CardEventRow[]>()
   for (const e of events) {
     const list = byMember.get(e.team_member_id) ?? []
@@ -147,6 +152,7 @@ export function buildTeamCard(input: {
         ? { by: state === 'off_td' ? 'td' : 'owner', at: m.switched_off_at ?? null, reason: m.switched_off_reason?.trim() || null }
         : null,
       lastSignIn: (m.auth_user_id && signIns[m.auth_user_id]) || null,
+      lastSignInUnreadable: !!m.auth_user_id && unreadable.has(m.auth_user_id),
       history: evs.slice(0, HISTORY_LIMIT).map((e) => ({
         event: e.event,
         label: labelOf(e),
