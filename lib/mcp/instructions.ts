@@ -107,7 +107,7 @@ RULE: Individual services (ITIN, Banking Physical) can exist on a Contact WITHOU
 The system is transitioning to portal-first. The portal is the OFFICIAL system. Use existing MCP tools as described below. When portal MCP tools are built, switch to them.
 
 INVOICING (3-table architecture):
-- Use portal_invoice_create for TD invoices TO clients (OFFICIAL). Writes to payments (CRM) + client_expenses (portal). Supports contact-level (setup fees, pre-account) and account-level (annual installments).
+- Use portal_invoice_create for TD invoices TO clients (OFFICIAL). Writes to payments (CRM) + client_expenses (portal). Supports contact-level (setup fees, pre-account) and account-level (services on an existing LLC). It never sets a Payment Type, a hidden code or a year: the invoice type is the service written in the line item description, and the two yearly installments are NOT made with this tool (they come from the CRM's installment amounts: company page Installments section, the contract signing, the yearly run).
 - Use portal_invoice_send to email the invoice with PDF to the client.
 - client_invoices table is EXCLUSIVELY for client-created sales invoices (their business). TD systems NEVER write to it.
 

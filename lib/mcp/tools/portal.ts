@@ -219,8 +219,10 @@ export function registerPortalTools(server: McpServer) {
 
 Supports two scenarios:
 - **Contact-level** (pass contact_id): For setup fees, ITIN, or any payment before an account exists. The contact is the center — they pay before any LLC is created.
-- **Account-level** (pass account_id): For annual installments, recurring services on an existing LLC.
+- **Account-level** (pass account_id): For services on an existing LLC.
 - Both can be provided (contact pays for a specific company).
+
+The invoice type is the SERVICE written in the line item description — this tool never sets a Payment Type, a hidden code or a year. Yearly installments are NOT made with this tool: they come from the CRM's installment amounts (company page → Installments section, the contract signing, the yearly run).
 
 Returns the created invoice with payment ID, number, total. The client sees this as an expense in their portal.
 
@@ -240,10 +242,8 @@ Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are recei
       message: z.string().optional().describe("Payment terms visible to customer on invoice"),
       mark_as_paid: z.boolean().optional().describe("If true, create as Paid with today's date (invoices are receipts per rule P6)"),
       paid_date: z.string().optional().describe("Override paid date (YYYY-MM-DD) if different from today"),
-      installment: z.enum(["Setup Fee", "Installment 1 (Jan)", "Installment 2 (Jun)", "Annual Payment", "One-Time Service", "Custom"]).optional().describe("Set this for an annual installment invoice — required for the account-page badge and the duplicate-invoice warning to see it. Omit for setup fees / one-off invoices."),
-      year: z.number().optional().describe("Billing year this invoice is FOR (not necessarily the year it's created in). Required alongside installment='Installment 1 (Jan)'/'Installment 2 (Jun)' for the duplicate-invoice warning to check this account."),
     },
-    async ({ contact_id, account_id, line_items, currency, due_date, notes, message, mark_as_paid, paid_date, installment, year }) => {
+    async ({ contact_id, account_id, line_items, currency, due_date, notes, message, mark_as_paid, paid_date }) => {
       try {
         if (!contact_id && !account_id) {
           return { content: [{ type: "text" as const, text: "Error: At least one of contact_id or account_id is required. Contact = person (pre-account). Account = company." }] }
@@ -310,8 +310,6 @@ Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are recei
             message: message || undefined,
             mark_as_paid: mark_as_paid || false,
             paid_date: paid_date || undefined,
-            installment: installment || undefined,
-            year: year || undefined,
           })
         } catch (err) {
           return { content: [{ type: "text" as const, text: `Failed to create invoice: ${err instanceof Error ? err.message : String(err)}` }] }

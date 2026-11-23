@@ -7,7 +7,7 @@ import { AccountCombobox } from '@/components/shared/account-combobox'
 import { ServiceTypeSelect } from '@/components/shared/service-type-select'
 import { createInvoice, createCreditNote, createOneTimeCustomer } from '@/app/(dashboard)/shared/invoice-actions'
 import { createRecurringInvoice } from '@/app/(dashboard)/shared/recurring-invoice-actions'
-import { INSTALLMENT_TYPES, type CreateInvoiceInput, type CreateCreditNoteInput, type InvoiceItem } from '@/lib/schemas/invoice'
+import type { CreateInvoiceInput, CreateCreditNoteInput, InvoiceItem } from '@/lib/schemas/invoice'
 import { RECURRING_FREQUENCIES, type RecurringInvoiceFrequency, type CreateRecurringInvoiceInput } from '@/lib/schemas/recurring-invoice'
 import { getOfficeDateString } from '@/lib/portal/office-hours'
 import { KEEP_WHOLE } from '@/lib/ui/table-cells'
@@ -41,7 +41,10 @@ export interface InvoiceDialogDefaults {
   description?: string
   items?: InvoiceItem[]
   currency?: 'USD' | 'EUR'
+  /** Only from the company page's Installments section: 'Installment 1 (Jan)' / 'Installment 2 (Jun)', shown read-only. */
   installment?: string
+  /** The installment's year — the one the Installments section shows. Required together with `installment`. */
+  year?: number
   dueDate?: string
   /**
    * WS-C: which offer's payment plan this invoice is one part of. Not a form field — carried
@@ -58,7 +61,7 @@ interface InvoiceDialogProps {
   /** Pre-fill fields when opened from a specific context (e.g. installment button). */
   defaultValues?: InvoiceDialogDefaults
   /** Override the default createInvoice action (e.g. to use createUnifiedInvoice) */
-  onCreateInvoice?: (input: CreateInvoiceInput) => Promise<{ success: boolean; error?: string; data?: { id: string; invoice_number: string; duplicate_warning?: string } }>
+  onCreateInvoice?: (input: CreateInvoiceInput) => Promise<{ success: boolean; error?: string; data?: { id: string; invoice_number: string; duplicate_warning?: string; already_existed?: boolean } }>
   /** Called after creation to send the invoice via email. Receives the payment ID. */
   onSendInvoice?: (paymentId: string) => Promise<{ success: boolean; error?: string }>
 }
@@ -108,7 +111,10 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', defaultValues, 
   }, [])
   const [items, setItems] = useState<InvoiceItem[]>(defaultValues?.items ?? [emptyItem()])
   const [markAsPaid, setMarkAsPaid] = useState(false)
-  const [installment, setInstallment] = useState<string>(defaultValues?.installment ?? '')
+  // The installment (and its year) can only arrive pre-filled from the company page's Installments section; it is shown read-only.
+  // Locked ONLY when it comes with its year (what is shown is exactly what is sent).
+  const lockedInstallment = defaultValues?.installment && defaultValues?.year != null ? defaultValues.installment : undefined
+  const lockedYear = lockedInstallment ? defaultValues?.year : undefined
   const [errors, setErrors] = useState<Record<string, string>>({})
 
   // Recurring — deliberately isolated from the tranche/installment/discount
@@ -181,7 +187,6 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', defaultValues, 
     setBankPreference('auto')
     setItems(defaultValues?.items ?? [emptyItem()])
     setMarkAsPaid(false)
-    setInstallment(defaultValues?.installment ?? '')
     setErrors({})
     setIsRecurring(false)
     setRecurringFrequency('monthly')
@@ -299,13 +304,25 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', defaultValues, 
           payment_method: paymentMethod,
           bank_preference: bankPreference,
           items: items.map((item, i) => ({ ...item, sort_order: i })),
-          mark_as_paid: markAsPaid || undefined,
-          installment: (installment as CreateInvoiceInput['installment']) || undefined,
+          mark_as_paid: (markAsPaid && !lockedInstallment) || undefined,
+          // Only a pre-filled installment travels, with ITS year; nothing else is ever sent as a type or a year.
+          ...(lockedInstallment && lockedYear != null
+            ? { installment: lockedInstallment as CreateInvoiceInput['installment'], year: lockedYear }
+            : {}),
         }
         const result = onCreateInvoice
           ? await onCreateInvoice(input)
           : await createInvoice(input)
         if (result.success) {
+          if (result.data?.already_existed) {
+            // The invoice was ALREADY there (same installment + year, or the same invoice sent twice): nothing was created, so it
+            // is never sent, never marked paid and never reported as "created" (dev job bea928e0).
+            toast.warning(result.data.duplicate_warning ?? `This invoice already exists (${result.data.invoice_number}), so nothing new was created.`, { duration: 30000 })
+            setSendMode(false)
+            resetForm()
+            onClose()
+            return
+          }
           if (result.data?.duplicate_warning) {
             toast.warning(result.data.duplicate_warning, { duration: 30000 })
           }
@@ -390,7 +407,7 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', defaultValues, 
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="block text-sm font-medium">Account *</label>
-                {!isCredit && !showNewCustomer && (
+                {!isCredit && !showNewCustomer && !lockedInstallment && (
                   <button
                     type="button"
                     onClick={() => setShowNewCustomer(true)}
@@ -460,6 +477,11 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', defaultValues, 
                     </button>
                   </div>
                 </div>
+              ) : lockedInstallment ? (
+                // An installment belongs to ONE company (its amount comes from that company's CRM record): the company is locked too.
+                <div data-testid="locked-account" className="w-full px-3 py-2 text-sm border rounded-md bg-zinc-50 text-zinc-700">
+                  {accountName ?? 'Company'}
+                </div>
               ) : (
                 <AccountCombobox
                   value={accountId}
@@ -526,22 +548,17 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', defaultValues, 
               </div>
             )}
 
-            {/* Installment Tag (invoice only, not for recurring) */}
-            {!isCredit && !isRecurring && (
-              <div>
+            {/* Yearly installment — read-only. It is NEVER picked here (dev job bea928e0, Antonio 2026-11-22): an installment comes from the
+                company's installment amounts in the CRM and this window only opens with it when started from the company page's Installments
+                section. Every other invoice saves no Payment Type, no hidden code and no year — the service above is the whole truth. */}
+            {!isCredit && !isRecurring && lockedInstallment && (
+              <div data-testid="locked-installment">
                 <label className="block text-sm font-medium mb-1">Payment Type</label>
-                <select
-                  value={installment}
-                  onChange={e => setInstallment(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="">— None —</option>
-                  {INSTALLMENT_TYPES.map(t => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
-                </select>
+                <div className="w-full px-3 py-2 text-sm border rounded-md bg-zinc-50 text-zinc-700">
+                  {lockedInstallment}{lockedYear != null ? ` — ${lockedYear}` : ''}
+                </div>
                 <p className="text-[10px] text-zinc-400 mt-1">
-                  Tag this invoice for installment tracking (e.g. Installment 1 (Jan) triggers the renewal chain when paid).
+                  Set from this company&apos;s installment amount in the CRM. It cannot be changed here; when paid it starts the yearly steps.
                 </p>
               </div>
             )}
@@ -757,7 +774,9 @@ export function InvoiceDialog({ open, onClose, mode = 'invoice', defaultValues, 
 
             {/* Already Paid toggle (one-time invoice only — a recurring bill's first
                 cycle is always a Draft to review, same as every later cycle) */}
-            {!isCredit && !isRecurring && (
+            {/* Not for a locked installment: an invoice created as already Paid never runs the yearly steps (the paid handler only runs
+                when an invoice is marked paid afterwards), so an installment is created as a Draft and marked paid the normal way. */}
+            {!isCredit && !isRecurring && !lockedInstallment && (
               <label className="flex items-center gap-2 cursor-pointer select-none">
                 <input
                   type="checkbox"

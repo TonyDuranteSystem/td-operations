@@ -13,6 +13,7 @@ import {
 import { createTDInvoice } from '@/lib/portal/td-invoice'
 import { applyAvailableCreditToInvoice } from '@/lib/operations/credit-netting'
 import { createHash } from 'crypto'
+import { installmentIdempotencyKey } from '@/lib/billing/installment-invoice-key'
 import { PLAN_TOTAL_TOLERANCE, validatePaymentPlan } from '@/lib/offers/payment-plan'
 import { resolveTrancheCardFeeRate } from '@/lib/offers/payment-plan-state'
 import { computeInvoiceItemTotals, type InvoiceLineItemInput } from '@/lib/finance/invoice-totals'
@@ -52,7 +53,7 @@ function manualInvoiceIdempotencyKey(
 
 export async function createInvoice(
   input: CreateInvoiceInput
-): Promise<ActionResult<{ id: string; invoice_number: string; duplicate_warning?: string }>> {
+): Promise<ActionResult<{ id: string; invoice_number: string; duplicate_warning?: string; already_existed?: boolean }>> {
   const parsed = createInvoiceSchema.safeParse(input)
   if (!parsed.success) return { success: false, error: parsed.error.issues[0].message }
 
@@ -70,9 +71,15 @@ export async function createInvoice(
   // raised twice by editing the amount between clicks, which is precisely the double-bill this
   // is meant to prevent. The database index is the hard guarantee; this key makes the second
   // attempt return the FIRST invoice instead of surfacing a constraint error to whoever clicked.
+  //
+  // A third notion for a yearly INSTALLMENT (dev job bea928e0): its identity is company + number + year, the SAME key the
+  // contract signing (January) and the yearly run (June) use — so an installment made here and one made by the system are one
+  // invoice, whichever comes second returns the first.
   const idempotencyKey = invoiceData.tranche
     ? `offer-tranche:${invoiceData.tranche.offer_token}:${invoiceData.tranche.seq}`
-    : manualInvoiceIdempotencyKey(
+    : (invoiceData.installment && invoiceData.year != null
+        ? installmentIdempotencyKey(invoiceData.account_id, invoiceData.installment, invoiceData.year)
+        : null) ?? manualInvoiceIdempotencyKey(
         'manual-crm-invoice',
         invoiceData.account_id,
         items,
@@ -160,12 +167,10 @@ export async function createInvoice(
       issue_date: invoiceData.issue_date,
       message: invoiceData.message || undefined,
       installment: invoiceData.installment || undefined,
-      // Billing year for the installment badge + duplicate check (both keyed on
-      // account + payment_category + year) — derived from the issue date, since
-      // this dialog has no separate year field. Was silently never sent before
-      // this fix (merged in from main 2026-09-07), so a real installment invoice
-      // had no year on it at all.
-      year: invoiceData.installment ? Number(invoiceData.issue_date.slice(0, 4)) : undefined,
+      // The installment's OWN year — the one the company page's Installments section shows — never guessed from the issue date
+      // (an issue date edited across New Year used to stamp a different year than the button showed). The schema guarantees
+      // an installment and its year come together, and no other invoice carries a year (dev job bea928e0).
+      year: invoiceData.year,
       idempotency_key: idempotencyKey,
       // ⛔ These three were being silently dropped — the dialog collects and
       // sends them, but nothing ever forwarded them to createTDInvoice, so
@@ -202,21 +207,33 @@ export async function createInvoice(
     // it here too would silently overwrite that correct value with the raw,
     // uncapped one.
     const supabase = createClient()
-    // eslint-disable-next-line no-restricted-syntax -- post-createTDInvoice field override; createTDInvoice doesn't accept description/billing_entity_id as inputs. Acceptable shape until those flow into the helper signature.
-    await supabase
-      .from('payments')
-      .update({
-        description: invoiceData.description,
-        billing_entity_id: invoiceData.billing_entity_id || null,
-      })
-      .eq('id', result.paymentId)
+    // An invoice that ALREADY existed (same key) is returned untouched: never overwrite its description or payer with this
+    // form's values, and say plainly that nothing new was made (dev job bea928e0 — it used to answer "created" for the old one).
+    if (!result.alreadyExisted) {
+      // eslint-disable-next-line no-restricted-syntax -- post-createTDInvoice field override; createTDInvoice doesn't accept description/billing_entity_id as inputs. Acceptable shape until those flow into the helper signature.
+      await supabase
+        .from('payments')
+        .update({
+          description: invoiceData.description,
+          billing_entity_id: invoiceData.billing_entity_id || null,
+        })
+        .eq('id', result.paymentId)
+    }
 
     // Revalidates both while the old Payment Tracker page still exists — its
     // own Invoices tab reads the same table. Drop '/payments' once that page
     // is deleted (dev job ef5da377, Step 6).
     revalidatePath('/payments')
     revalidatePath('/finance')
-    return { id: result.paymentId, invoice_number: result.invoiceNumber, duplicate_warning: result.duplicate_warning }
+    return {
+      id: result.paymentId,
+      invoice_number: result.invoiceNumber,
+      duplicate_warning: result.alreadyExisted
+        ? `This invoice already exists (${result.invoiceNumber}), so nothing new was created.`
+        : result.duplicate_warning,
+      // The window must not send it, mark it paid or say "created" — nothing was created.
+      already_existed: result.alreadyExisted || undefined,
+    }
   }, {
     action_type: 'create',
     table_name: 'payments',
@@ -509,17 +526,21 @@ export async function createCreditNote(
     // Override credit-note-specific fields (createTDInvoice doesn't know about
     // credit semantics — it sees this as a normal invoice with negative total).
     const supabase = createClient()
-    // eslint-disable-next-line no-restricted-syntax -- post-createTDInvoice override of credit-note-specific fields not in helper signature.
-    await supabase
-      .from('payments')
-      .update({
-        description: noteData.description,
-        invoice_status: 'Credit',
-        credit_remaining: Math.abs(total), // available to net against future invoices
-        credit_for_payment_id: noteData.credit_for_payment_id || null,
-        referral_partner_id: noteData.referral_partner_id || null,
-      })
-      .eq('id', result.paymentId)
+    // A credit note that ALREADY existed (same key) is returned untouched: resetting credit_remaining to the full amount would
+    // make credit that was already spent spendable again (dev job bea928e0, reviewer finding).
+    if (!result.alreadyExisted) {
+      // eslint-disable-next-line no-restricted-syntax -- post-createTDInvoice override of credit-note-specific fields not in helper signature.
+      await supabase
+        .from('payments')
+        .update({
+          description: noteData.description,
+          invoice_status: 'Credit',
+          credit_remaining: Math.abs(total), // available to net against future invoices
+          credit_for_payment_id: noteData.credit_for_payment_id || null,
+          referral_partner_id: noteData.referral_partner_id || null,
+        })
+        .eq('id', result.paymentId)
+    }
 
     // Click-to-apply (2026-06-03): credits are NOT auto-applied at creation. The
     // credit sits as available credit_remaining and lands on whichever invoice

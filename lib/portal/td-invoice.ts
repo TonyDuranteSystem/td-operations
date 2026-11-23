@@ -218,6 +218,12 @@ export interface TDInvoiceResult {
    * no structured identity to check against.
    */
   duplicate_warning?: string
+  /**
+   * True when the idempotency key already matched a live invoice and THAT invoice was returned instead of creating a new one
+   * (dev job bea928e0). Callers must say so plainly ("this invoice already exists") and must not overwrite the existing row
+   * with the values of the form that asked for a new one.
+   */
+  alreadyExisted?: boolean
 }
 
 // ─── Create TD Invoice ─────────────────────────────
@@ -848,6 +854,7 @@ async function findByIdempotencyKey(key: string): Promise<TDInvoiceResult | null
     invoiceNumber: payment.invoice_number,
     total: Number(payment.total) || 0,
     status: (payment.invoice_status as string) || 'Pending',
+    alreadyExisted: true,
   }
 }
 

@@ -1429,6 +1429,7 @@ function InstallmentsSection({ account, payments, makeAccountSaver, contractMism
         description: `1st Installment ${year}`,
         currency: inst1Currency,
         installment: 'Installment 1 (Jan)',
+        year, // the year this section shows — saved as-is, never guessed from the issue date (dev job bea928e0)
         items: [{
           description: `1st Installment ${year}`,
           quantity: 1,
@@ -1444,6 +1445,7 @@ function InstallmentsSection({ account, payments, makeAccountSaver, contractMism
         description: `2nd Installment ${year}`,
         currency: inst2Currency,
         installment: 'Installment 2 (Jun)',
+        year,
         items: [{
           description: `2nd Installment ${year}`,
           quantity: 1,
