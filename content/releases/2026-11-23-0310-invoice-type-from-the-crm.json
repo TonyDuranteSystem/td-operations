@@ -6,6 +6,7 @@
     "Finance → New Invoice: no Payment Type any more",
     "Company page → Annual Installments → Invoice: the type and the year are shown and locked",
     "If an invoice already exists for that installment and year, you are told so instead of getting a second one",
+    "An installment that was cancelled can be invoiced again; one fully covered by the client's credit starts its yearly steps right away",
     "The contract signing and the yearly run create installments exactly as before"
   ],
   "screenshot": "finance-installment-locked.png"
