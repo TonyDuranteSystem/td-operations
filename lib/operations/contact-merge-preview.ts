@@ -72,7 +72,7 @@ export async function buildMergePreview(i: MergePreviewInput): Promise<DryRunRes
   const combined = summarizePlan(storeCheck.plan)
   if (combined) items.push({ label: combined.headline })
   else if ((owners ?? []).length > 0) items.push({ label: `The merged-away contact's storage (files and folders) moves to the kept contact; its top folder is renamed "${winner.full_name}"` })
-  if (i.portalLoginCount > 0) items.push({ label: `portal login${i.portalLoginCount > 1 ? "s" : ""} of the merged-away contact: ${i.portalLoginCount} (will be removed)` })
+  if (i.portalLoginCount > 0) items.push({ label: `portal login${i.portalLoginCount > 1 ? "s" : ""} of the merged-away contact: ${i.portalLoginCount} (you choose what happens to it under "Logins")` })
 
   const warnings: string[] = []
   if (nameKey(loser.full_name) !== nameKey(winner.full_name)) warnings.push(`The two names differ: kept "${label(winner.full_name)}", merged away "${label(loser.full_name)}". Check you are keeping the right one.`)
@@ -82,7 +82,7 @@ export async function buildMergePreview(i: MergePreviewInput): Promise<DryRunRes
       const { findAuthUsersByContactId } = await import("@/lib/auth-admin-helpers")
       winnerLoginCount = (await findAuthUsersByContactId(i.winnerId).catch(() => [])).length
     }
-    if (winnerLoginCount === 0) warnings.push("The kept contact has no portal login but the merged-away one does. The login will be removed — the kept contact will need a portal login created.")
+    if (winnerLoginCount === 0) warnings.push("The kept contact has no portal login but the merged-away one does. Choose under \"Logins\" whether it moves to the kept contact or is removed.")
   }
   warnings.push("A merge cannot be undone from the screen.")
   return {

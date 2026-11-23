@@ -65,4 +65,11 @@ describe("assembleMergeReport", () => {
     expect(assembleMergeReport(raw({ storagePlan: plan })).storage?.plan).toEqual(plan)
     expect(assembleMergeReport(raw({ storagePlan: plan })).storage?.summary.headline).toMatch(/2 files/)
   })
+  it("tells the window what the person may choose about the logins (slice 3)", () => {
+    expect(assembleMergeReport(raw()).loginChoices.options).toEqual(["kept"])
+    const onlyRemoved = assembleMergeReport(raw({ logins: { removed: [login(true)], kept: [] } })).loginChoices
+    expect(onlyRemoved).toMatchObject({ options: ["removed", "none"], mustChoose: true })
+    const both = assembleMergeReport(raw({ logins: { removed: [login(true)], kept: [login(true)] } })).loginChoices
+    expect(both).toMatchObject({ options: ["kept", "removed"], defaultChoice: "kept" })
+  })
 })

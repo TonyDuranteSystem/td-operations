@@ -169,7 +169,7 @@ describe('the merge route calls it', () => {
     const start = route.indexOf('could not be moved to')
     expect(start).toBeGreaterThan(0)
     expect(route.slice(start - 400, start + 200)).toContain('status: 500')
-    const removeLogins = route.indexOf('Remove the loser\'s portal login(s)')
+    const removeLogins = route.indexOf('The portal logins, as chosen in the merge window')
     expect(removeLogins).toBeGreaterThan(start)
   })
 })

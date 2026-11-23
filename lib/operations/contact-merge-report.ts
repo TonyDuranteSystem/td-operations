@@ -10,6 +10,7 @@ import {
   DETAIL_FIELDS, countFilledDetails, diffPersonalDetails, eligibleOwnerlessDocs, suggestKeep, unresolvedIdentityConflicts,
   type DetailRow, type KeepSuggestion,
 } from "@/lib/contacts/merge-details"
+import { loginChoices, type LoginChoices } from "@/lib/contacts/merge-logins"
 import { storeMergeCheck } from "@/lib/crm-store/merge-guard"
 import { summarizePlan, type CombinePlan, type PlanSummary } from "@/lib/crm-store/merge-combine"
 import { memberRowsOf } from "@/lib/operations/contact-name-follow"
@@ -95,6 +96,8 @@ export interface MergeReport {
   blockers: string[]
   /** the combine of the two Storage folders, in plain English (null when the storages are not combined) */
   storage: { plan: CombinePlan; summary: PlanSummary } | null
+  /** what the person may choose about the portal logins (slice 3) */
+  loginChoices: LoginChoices
 }
 
 function view(c: RawContact, companies: RawCompany[], records: number, logins: LoginView[], hasStorage: boolean): PersonView {
@@ -124,6 +127,7 @@ export function assembleMergeReport(raw: MergeRaw): MergeReport {
     },
     blockers: raw.blockers,
     storage: raw.storagePlan && summarizePlan(raw.storagePlan) ? { plan: raw.storagePlan, summary: summarizePlan(raw.storagePlan) as PlanSummary } : null,
+    loginChoices: loginChoices(removed.logins, kept.logins),
   }
 }
 

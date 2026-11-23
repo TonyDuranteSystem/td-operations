@@ -10,6 +10,7 @@ import { Loader2, X, GitMerge, ArrowLeftRight } from "lucide-react"
 import type { MergeReport, PersonView } from "@/lib/operations/contact-merge-report"
 import type { DryRunResult } from "@/lib/operations/destructive"
 import { followsCopies, unresolvedIdentityConflicts, type DetailChoice } from "@/lib/contacts/merge-details"
+import { describeLoginChoice, loginActions, type LoginChoice } from "@/lib/contacts/merge-logins"
 
 interface Person { id: string; full_name: string | null; email: string | null }
 
@@ -69,6 +70,10 @@ export function MergeReviewDialog({
   const [loadError, setLoadError] = useState<string | null>(null)
   const [choices, setChoices] = useState<Record<string, DetailChoice>>({})
   const [docIds, setDocIds] = useState<Record<string, boolean>>({})
+  const [loginChoice, setLoginChoice] = useState<LoginChoice | null>(null)
+  const [loginLeftover, setLoginLeftover] = useState<number | null>(null)
+  // the merge ran but the login could not be moved: the Merge button must not be pressable again
+  const [loginMoveFailed, setLoginMoveFailed] = useState(false)
   const [typed, setTyped] = useState("")
   const [merging, setMerging] = useState(false)
   const [mergeError, setMergeError] = useState<string | null>(null)
@@ -88,13 +93,13 @@ export function MergeReviewDialog({
 
   useEffect(() => {
     if (!open) return
-    setRemovedId(current.id); setKeptId(other.id); setWanted(""); setChoices({}); setDocIds({}); setTyped(""); setMergeError(null)
+    setRemovedId(current.id); setKeptId(other.id); setWanted(""); setChoices({}); setDocIds({}); setLoginChoice(null); setTyped(""); setMergeError(null)
     load(current.id, other.id, "")
   }, [open, current.id, other.id, load])
 
   const report = data?.report ?? null
   const swap = () => {
-    setRemovedId(keptId); setKeptId(removedId); setChoices({}); setDocIds({}); setTyped(""); setMergeError(null)
+    setRemovedId(keptId); setKeptId(removedId); setChoices({}); setDocIds({}); setLoginChoice(null); setTyped(""); setMergeError(null)
     load(keptId, removedId, wanted)
   }
   // the wanted email only changes the suggestion: the choices already made stay as they are
@@ -102,10 +107,14 @@ export function MergeReviewDialog({
 
   const identityMissing = useMemo(() => (report ? unresolvedIdentityConflicts(report.details, choices) : []), [report, choices])
   const selectedDocs = Object.entries(docIds).filter(([, v]) => v).map(([id]) => id)
+  // the login choice: the person's pick when it still fits this pair, else the suggested one — except when they must choose themselves
+  const loginPicked: LoginChoice | null = report
+    ? (loginChoice && report.loginChoices.options.includes(loginChoice) ? loginChoice : report.loginChoices.mustChoose ? null : report.loginChoices.defaultChoice)
+    : null
   const blocked = !!(data?.preview.blocker) || (report?.blockers.length ?? 0) > 0
   // the report on screen must be the one for the pair about to be merged, in the same direction
   const reportMatches = !!report && report.removed.id === removedId && report.kept.id === keptId && !loadError
-  const ready = reportMatches && !loading && !blocked && identityMissing.length === 0 && typed.trim().toUpperCase() === "MERGE" && !merging
+  const ready = reportMatches && !loading && !blocked && identityMissing.length === 0 && loginPicked !== null && typed.trim().toUpperCase() === "MERGE" && !merging && !loginMoveFailed
 
   if (!open) return null
 
@@ -115,10 +124,18 @@ export function MergeReviewDialog({
     try {
       const res = await fetch("/api/crm/admin-actions/delete-contact", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contact_id: removedId, mode: "merge", merge_into_contact_id: keptId, field_choices: choices, document_ids: selectedDocs }),
+        body: JSON.stringify({ contact_id: removedId, mode: "merge", merge_into_contact_id: keptId, field_choices: choices, document_ids: selectedDocs, login_choice: loginPicked ?? undefined }),
       })
       const j = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(j.error || "Merge failed — nothing was changed.")
+      if (!res.ok) {
+        if (j.login_move_failed) setLoginMoveFailed(true)
+        throw new Error(j.error || "Merge failed — nothing was changed.")
+      }
+      if (typeof j.login_delete_failed === "number" && j.login_delete_failed > 0) {
+        // the merge is done but an old login could not be deleted: say so instead of closing silently
+        setLoginLeftover(j.login_delete_failed)
+        return
+      }
       onMerged(keptId)
     } catch (e) {
       setMergeError(e instanceof Error && e.message ? e.message : "Merge failed — nothing was changed.")
@@ -269,20 +286,51 @@ export function MergeReviewDialog({
                 )}
 
                 {/* Logins */}
-                <section className="space-y-2">
+                <section className="space-y-2" aria-label="Logins">
                   <h3 className="font-semibold text-zinc-900">{report.storage ? "5" : "4"}. Logins</h3>
                   {[report.kept, report.removed].every((p) => p.logins.length === 0) ? <p className="text-zinc-600">Neither contact has a portal login.</p> : (
                     <ul>
-                      {[{ p: report.kept, tag: "Kept" }, { p: report.removed, tag: "Removed with the merge" }].flatMap(({ p, tag }) => p.logins.map((l) => (
-                        <li key={l.id} className="flex flex-wrap items-center justify-between gap-2 border-t py-1.5">
-                          <span className="break-all">{l.email ?? "(no email)"} <span className="text-zinc-500">· {l.working ? "can sign in" : "cannot sign in"}{l.lastSignInAt ? ` · last in ${new Date(l.lastSignInAt).toLocaleDateString()}` : " · never signed in"}</span></span>
-                          <span className={`text-xs font-semibold rounded-full px-2 py-0.5 ${tag === "Kept" ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800"}`}>{tag}</span>
-                        </li>
-                      )))}
+                      {[{ p: report.kept, side: "kept" as const }, { p: report.removed, side: "removed" as const }].flatMap(({ p, side }) => p.logins.map((l) => {
+                        const act = loginPicked ? loginActions(loginPicked, report.removed.logins, report.kept.logins) : null
+                        const label = !act ? (side === "kept" ? "Kept contact" : "Removed contact")
+                          : act.moveId === l.id ? `Moves to ${keptName}`
+                          : act.deleteIds.includes(l.id) ? "Will be deleted"
+                          : "Stays"
+                        const good = label === "Stays" || label.startsWith("Moves")
+                        return (
+                          <li key={l.id} className="flex flex-wrap items-center justify-between gap-2 border-t py-1.5">
+                            <span className="break-all">{l.email ?? "(no email)"} <span className="text-zinc-500">· {l.working ? "can sign in" : "cannot sign in"}{l.lastSignInAt ? ` · last in ${new Date(l.lastSignInAt).toLocaleDateString()}` : " · never signed in"} · login of the {side === "kept" ? "kept" : "removed"} contact</span></span>
+                            <span className={`text-xs font-semibold rounded-full px-2 py-0.5 ${good ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800"}`}>{label}</span>
+                          </li>
+                        )
+                      }))}
                     </ul>
                   )}
-                  {report.removed.logins.length > 0 && !report.kept.logins.some((l) => l.working) && (
-                    <p className="rounded-md bg-amber-50 text-amber-900 px-3 py-2">The kept contact has no working login, but the removed one does. The removed login will be deleted — the person will need a new login. Consider swapping.</p>
+                  {report.loginChoices.note && <p className="text-zinc-600">{report.loginChoices.note}</p>}
+                  {report.loginChoices.options.length > 1 && (
+                    <div className="space-y-1" role="radiogroup" aria-label="What happens to the login">
+                      <div className="font-medium text-zinc-900">Which login does the person use after the merge?</div>
+                      {report.loginChoices.options.map((o) => {
+                        const rem = report.removed.logins[0]?.email ?? null
+                        const kep = report.kept.logins[0]?.email ?? null
+                        const seen = (l?: { lastSignInAt: string | null }) => (l?.lastSignInAt ? `last signed in ${new Date(l.lastSignInAt).toLocaleDateString()}` : "never signed in")
+                        const text = o === "kept" ? `Keep ${kep ?? "the kept contact's login"} (${seen(report.kept.logins[0])})`
+                          : o === "removed" ? (report.kept.logins.length > 0 ? `Use ${rem ?? "the removed contact's login"} instead (${seen(report.removed.logins[0])}; ${kep ?? "the kept login"} is deleted)` : `Keep ${rem ?? "the removed contact's login"} — move it to ${keptName}`)
+                          : "Remove the login — the person will need a new one"
+                        return (
+                          <label key={o} className="flex items-center gap-1.5 cursor-pointer">
+                            <input type="radio" name="login-choice" checked={loginPicked === o} onChange={() => setLoginChoice(o)} /> {text}
+                            {o === report.loginChoices.defaultChoice && !report.loginChoices.mustChoose && <span className="text-xs text-zinc-500">(suggested)</span>}
+                          </label>
+                        )
+                      })}
+                      {loginPicked === null && <span className="inline-block text-xs font-semibold text-amber-800 bg-amber-100 rounded-full px-2 py-0.5">You choose</span>}
+                    </div>
+                  )}
+                  {loginPicked && report.removed.logins.length > 0 && (
+                    <p className={loginPicked === "none" ? "rounded-md bg-amber-50 text-amber-900 px-3 py-2" : "text-zinc-700"}>
+                      {describeLoginChoice(loginPicked, report.removed.logins[0]?.email ?? null, report.kept.logins[0]?.email ?? null, keptName, report.removed.logins.length, report.kept.logins.length)}
+                    </p>
                   )}
                 </section>
 
@@ -298,9 +346,21 @@ export function MergeReviewDialog({
             )}
           </div>
 
+          {loginLeftover !== null ? (
+            <div className="px-6 py-3 border-t shrink-0 space-y-2">
+              <div className="rounded-md bg-amber-50 text-amber-900 px-3 py-2 text-sm" role="status">
+                The merge is done, but {loginLeftover} old login{loginLeftover === 1 ? "" : "s"} could not be deleted — tell support.
+              </div>
+              <div className="flex justify-end">
+                <button type="button" onClick={() => onMerged(keptId)} className="px-4 py-2 text-sm rounded-md bg-zinc-900 text-white">Go to {keptName}</button>
+              </div>
+            </div>
+          ) : (
           <div className="px-6 py-3 border-t shrink-0 space-y-2">
             {mergeError && <div className="rounded-md bg-red-50 text-red-800 px-3 py-2 text-sm" role="alert">{mergeError}</div>}
+            {loginMoveFailed && <div className="flex justify-end"><button type="button" onClick={() => onMerged(keptId)} className="px-4 py-2 text-sm rounded-md bg-zinc-900 text-white">Go to {keptName}</button></div>}
             {identityMissing.length > 0 && <div className="text-sm text-amber-800">Choose a value for: {identityMissing.map((m) => m.label.toLowerCase()).join(", ")}.</div>}
+            {report && loginPicked === null && <div className="text-sm text-amber-800">Choose what happens to the removed contact&apos;s login.</div>}
             <div className="flex flex-wrap items-center justify-end gap-2">
               <input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="Type MERGE" aria-label="Type MERGE to confirm" className="border rounded-md px-3 py-1.5 text-sm w-32" />
               <button type="button" onClick={onClose} className="px-4 py-2 text-sm border rounded-md hover:bg-zinc-50">Cancel</button>
@@ -309,6 +369,7 @@ export function MergeReviewDialog({
               </button>
             </div>
           </div>
+          )}
         </div>
       </div>
     </>
