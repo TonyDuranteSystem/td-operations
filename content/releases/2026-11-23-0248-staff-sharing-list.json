@@ -1,0 +1,12 @@
+{
+  "title": "Company page: the Team card now lists who shares their personal documents with which team login",
+  "tag": "new",
+  "text": "An owner can let one team login see their own personal papers, such as a passport or ID. Until now only the owner could see who they shared with. The Team logins card on a company's page now has a list for staff: each owner, the login they share with, when they started, and whether that login can really see the papers right now. If it cannot, the list says why: the login is switched off, has not accepted its own notice yet, does not have the Documents power, or the owner no longer has access to the company. If the list cannot be read, the card says so instead of showing an empty list. It only shows; nothing can be changed or sent from it.",
+  "points": [
+    "Open a company with team logins: the new list sits at the bottom of the Team logins card",
+    "A green line means the login is allowed to see those papers now; an orange line says why not",
+    "No sharing yet shows \"Nobody\"; a list that cannot be read says so and offers Try again",
+    "It is read-only: no email or message goes to anyone"
+  ],
+  "screenshot": "team-sharing-list.png"
+}
