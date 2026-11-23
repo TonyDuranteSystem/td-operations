@@ -1090,8 +1090,8 @@ export function AuditPanel({
 
   async function handlePortalAccessToggle(action: 'activate' | 'deactivate', force = false) {
     const confirmMsg = action === 'deactivate'
-      ? 'Block portal login? The auth user(s) for the linked contact(s) will be banned (sign-in disabled). Tier values, services, invoices, and documents are preserved exactly as they are. Contacts who also have access to other active accounts will be SKIPPED unless you confirm again.'
-      : 'Restore portal login? The auth user(s) for the linked contact(s) will be un-banned. Their existing tier and data are unchanged.'
+      ? 'Block portal login? The auth user(s) for the linked contact(s) will be banned (sign-in disabled). Tier values, services, invoices, and documents are preserved exactly as they are. Contacts who also have access to other active accounts will be SKIPPED unless you confirm again. This company\'s team logins are switched off too (nobody is emailed; Restore switches back on only the ones this block switched off).'
+      : 'Restore portal login? The auth user(s) for the linked contact(s) will be un-banned, and the team logins this block switched off are switched back on (team logins that someone else switched off stay off). Their existing tier and data are unchanged.'
     if (!confirm(confirmMsg)) return
     setPortalToggling(true)
     try {
@@ -1118,7 +1118,11 @@ export function AuditPanel({
         }
       }
 
-      toast.success(action === 'activate' ? 'Portal login restored' : 'Portal login blocked')
+      const teamNote: string = d.teamLoginsNote ?? ''
+      const teamProblem = !!d.teamLoginsError || (d.teamLogins?.failed?.length ?? 0) > 0
+      const done = action === 'activate' ? 'Portal login restored' : 'Portal login blocked'
+      if (teamProblem) toast.warning(`${done}, but not every team login was handled: ${teamNote}`)
+      else toast.success(teamNote ? `${done}. ${teamNote}.` : done)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed')
     } finally {
