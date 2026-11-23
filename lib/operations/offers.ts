@@ -37,6 +37,7 @@ import { agreementCoverageGap, agreementCoverageWarnings } from "@/lib/offers/st
 import { multiAgreementsEnabled } from "@/lib/offers/multi-agreements-switch"
 import { normalizeOfferLists } from "@/lib/offers/json-list"
 import { checkTaxYearOnOffer } from "@/lib/offers/tax-year-check"
+import { syncOfferReferrerToLead } from "@/lib/operations/lead-referrer"
 
 // ─── JSONB validation ───────────────────────────────────────
 
@@ -974,6 +975,22 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         .eq("id", params.lead_id)
     }
 
+    // 9b. Referrer -> lead (dev job 4bc21d49). An offer made FROM a lead with a PICKED referrer (a person / company /
+    // partner from the list) also sets that referrer on the lead, exactly as the lead page's Referrer box does — so the
+    // lead page shows it, the pending referral exists, and the referrer is told once. A typed name is never copied
+    // (see decideLeadReferrerSync); a lead already pinned to someone else is not overwritten (a warning comes back);
+    // a failure here never fails the offer — it is already created.
+    let leadReferrerSync: string = "not_applicable"
+    if (effectiveLeadId && (refContactId || refAccountId)) {
+      const sync = await syncOfferReferrerToLead(effectiveLeadId, {
+        referrerName: refName,
+        contactId: refContactId,
+        accountId: refAccountId,
+      })
+      leadReferrerSync = sync.outcome
+      if (sync.warning) creditWarnings.push(sync.warning)
+    }
+
     // 10. Whop auto-plan (default on when payment_gateway=whop + payment_type=checkout).
     // Skipped for multi-option offers: Whop mints a link priced off a single
     // header total, and there is no single price until a package is locked —
@@ -1015,6 +1032,7 @@ export async function createOffer(params: CreateOfferParams): Promise<CreateOffe
         required_documents: params.required_documents,
         source: params.source || "mcp-claude",
         referrer_auto_filled: referralAutoFilled,
+        lead_referrer_sync: leadReferrerSync,
       },
     })
 

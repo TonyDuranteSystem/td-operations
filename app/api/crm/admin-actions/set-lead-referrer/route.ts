@@ -16,11 +16,9 @@
 
 import { NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
-import { supabaseAdmin } from "@/lib/supabase-admin"
 import { canPerform } from "@/lib/permissions"
 import { logAction } from "@/lib/mcp/action-log"
-import { createPendingReferral, reconcilePendingReferral, type PendingReferralRow } from "@/lib/operations/referral"
-import { notifyReferrerLinked } from "@/lib/operations/referral-notify"
+import { setLeadReferrer } from "@/lib/operations/lead-referrer"
 
 export async function POST(request: Request) {
   const supabase = createClient()
@@ -47,92 +45,22 @@ export async function POST(request: Request) {
       ? body.referrer_account_id
       : null
 
-    const { data: lead } = await supabaseAdmin
-      .from("leads")
-      .select("full_name, email")
-      .eq("id", leadId)
-      .single()
-
-    if (!lead) {
-      return NextResponse.json({ error: "Lead not found" }, { status: 404 })
+    // Persist + reconcile the pending referral + notify the referrer — one shared routine (also used when an
+    // offer is created from a lead), so the lead page and the offer window can never disagree.
+    const res = await setLeadReferrer(leadId, { referrerName, contactId, accountId })
+    if (!res.ok) {
+      return NextResponse.json({ error: res.error }, { status: res.reason === "lead_not_found" ? 404 : 500 })
     }
-
-    // 1. Persist the referrer fields on the lead.
-    const { error: updErr } = await supabaseAdmin
-      .from("leads")
-      .update({
-        referrer_name: referrerName,
-        referrer_contact_id: contactId,
-        referrer_account_id: accountId,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", leadId)
-
-    if (updErr) {
-      return NextResponse.json({ error: updErr.message }, { status: 500 })
-    }
-
-    // 2. Reconcile the lead's pending referral link. Only pending rows are touched.
-    const { data: existingRaw } = await supabaseAdmin
-      .from("referrals")
-      .select("id, referrer_contact_id, referrer_account_id, status")
-      .eq("referred_lead_id", leadId)
-
-    const existing = (existingRaw ?? []) as PendingReferralRow[]
-    const next = (contactId || accountId) ? { contactId, accountId } : null
-    const { cancelIds, createFor, updateAccountId } = reconcilePendingReferral(existing, next)
-
-    let cancelled = 0
-    if (cancelIds.length > 0) {
-      const { error: cancelErr } = await supabaseAdmin
-        .from("referrals")
-        .update({ status: "cancelled" })
-        .in("id", cancelIds)
-      if (!cancelErr) cancelled = cancelIds.length
-    }
-
-    // Keep the kept referral's credit target in sync when staff change the
-    // "credit goes to" company for the same referrer.
-    if (updateAccountId) {
-      await supabaseAdmin
-        .from("referrals")
-        .update({ referrer_account_id: updateAccountId.accountId })
-        .eq("id", updateAccountId.id)
-    }
-
-    let created: string | null = null
-    let createSkip: string | null = null
-    if (createFor) {
-      const res = await createPendingReferral(
-        {
-          referrerContactId: createFor.contactId,
-          referrerAccountId: createFor.accountId,
-          referredLeadId: leadId,
-          referredName: lead.full_name || referrerName || "Lead",
-          referredEmail: lead.email || "",
-        },
-        supabaseAdmin,
-      )
-      if (res.created) {
-        created = res.id
-        // Tell the referrer (chat + email), once per referrer-per-lead. Fire-and-forget.
-        void notifyReferrerLinked({
-          referralId: res.id,
-          referrerContactId: createFor.contactId,
-          referrerAccountId: createFor.accountId,
-          referredLeadId: leadId,
-        })
-      } else if ('reason' in res) {
-        createSkip = res.reason
-      }
-    }
+    const created = res.referralCreated
+    const cancelled = res.referralCancelled
+    const createSkip = res.referralSkip
 
     logAction({
       actor: "crm-admin",
       action_type: "update",
       table_name: "leads",
       record_id: leadId,
-      summary: `Set referrer for lead "${lead.full_name}"${referrerName ? ` → ${referrerName}` : " (cleared)"}`,
+      summary: `Set referrer for lead "${res.leadName}"${referrerName ? ` → ${referrerName}` : " (cleared)"}`,
       details: { lead_id: leadId, referrer_name: referrerName, referrer_contact_id: contactId, referrer_account_id: accountId, referral_created: created, referral_cancelled: cancelled, referral_skip: createSkip, admin_email: user?.email },
     })
 

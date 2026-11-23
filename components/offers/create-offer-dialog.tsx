@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { FileText, Loader2, X, Upload, AlertTriangle, StickyNote, ExternalLink, CheckCircle2, BookOpen, Phone, ChevronDown, ChevronUp, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
 import { ReferrerPicker, type ReferrerValue } from './referrer-picker'
+import { referrerDraftProblem, referrerReviewLabel } from '@/lib/offers/referrer-draft'
 import { FORMATION_STATE_CODES, FORMATION_STATE_NAMES, type FormationStateCode } from '@/lib/formation/states'
 import { parsePriceQuirk } from '@/lib/offers/compute-offer-totals'
 import { parseAuthoredAmount, authoredAmountValue } from '@/lib/offers/parse-authored-amount'
@@ -215,8 +216,11 @@ export function CreateOfferDialog({
     accountId: null,
   })
   const [referrer, setReferrer] = useState<ReferrerValue>(initialReferrer)
+  // What is currently TYPED in the referrer search box. Typing is only a search — the referrer is kept only when a
+  // result is clicked — so Create Offer refuses a name that was typed but never picked (dev job 4bc21d49).
+  const [referrerDraft, setReferrerDraft] = useState('')
   useEffect(() => {
-    if (open) setReferrer(initialReferrer())
+    if (open) { setReferrer(initialReferrer()); setReferrerDraft('') }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, referrerName, referrerType])
 
@@ -1087,6 +1091,12 @@ export function CreateOfferDialog({
       return
     }
 
+    const referrerProblem = referrerDraftProblem(referrer, referrerDraft)
+    if (referrerProblem) {
+      toast.error(referrerProblem)
+      return
+    }
+
     if (splitBlockReason) {
       toast.error(splitBlockReason)
       return
@@ -1497,7 +1507,7 @@ export function CreateOfferDialog({
               </div>
             )}
             <div className="pt-1">
-              <ReferrerPicker value={referrer} onChange={setReferrer} />
+              <ReferrerPicker value={referrer} onChange={setReferrer} onDraftChange={setReferrerDraft} />
             </div>
           </div>
 
@@ -2699,6 +2709,11 @@ export function CreateOfferDialog({
                     toast.error(`Bank/currency mismatch: ${bankCurrencyMismatch.bankLabel} is ${bankCurrencyMismatch.expected}-only`)
                     return
                   }
+                  const referrerProblem = referrerDraftProblem(referrer, referrerDraft)
+                  if (referrerProblem) {
+                    toast.error(referrerProblem)
+                    return
+                  }
                   if (splitBlockReason) {
                     toast.error(splitBlockReason)
                     return
@@ -2738,6 +2753,10 @@ export function CreateOfferDialog({
                 <div className="flex justify-between gap-3">
                   <dt className="text-zinc-500">Language</dt>
                   <dd className="font-medium">{language === 'it' ? 'Italian' : 'English'}</dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-zinc-500">Referrer</dt>
+                  <dd className="font-medium text-right truncate">{referrerReviewLabel(referrer)}</dd>
                 </div>
                 <div className="flex justify-between gap-3">
                   <dt className="text-zinc-500">Contract</dt>
