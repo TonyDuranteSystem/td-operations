@@ -20622,6 +20622,8 @@ export type Database = {
           extension_deadline: string | null
           extension_filed: boolean | null
           extension_requested_date: string | null
+          extension_skipped_at: string | null
+          extension_skipped_by: string | null
           extension_submission_id: string | null
           first_year_skip: boolean | null
           hubspot_id: string | null
@@ -20657,6 +20659,8 @@ export type Database = {
           extension_deadline?: string | null
           extension_filed?: boolean | null
           extension_requested_date?: string | null
+          extension_skipped_at?: string | null
+          extension_skipped_by?: string | null
           extension_submission_id?: string | null
           first_year_skip?: boolean | null
           hubspot_id?: string | null
@@ -20692,6 +20696,8 @@ export type Database = {
           extension_deadline?: string | null
           extension_filed?: boolean | null
           extension_requested_date?: string | null
+          extension_skipped_at?: string | null
+          extension_skipped_by?: string | null
           extension_submission_id?: string | null
           first_year_skip?: boolean | null
           hubspot_id?: string | null
