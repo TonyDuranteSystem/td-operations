@@ -1,0 +1,32 @@
+{
+  "title": "Block Portal Login now also switches off the company's team logins",
+  "tag": "fixed",
+  "text": "The Block Portal Login button on a client's audit page used to stop only the owners and members from signing in. The company's team logins (colleagues given their own login) kept working: they could still read documents, invoices and chat, and with the owners gone nobody on the client's side could switch them off. Now the button also switches off every active team login of that company, silently (nobody is emailed). Restore Portal Login switches back on only the ones the block switched off. A login an owner had switched off, or that you switched off for another reason, stays off. If a team login cannot be handled, the screen says which one, and you use the company's Team card.",
+  "points": [
+    "Client audit page: press Block Portal Login and read the new confirm text",
+    "The company's Team card shows each login as switched off by TD, with the reason \"Company portal login blocked by TD\"",
+    "Restore Portal Login switches back on only those logins; the toast says how many"
+  ],
+  "stepsTitle": "What Block and Restore do now",
+  "steps": [
+    {
+      "name": "Block Portal Login",
+      "detail": "Owners and members are blocked from signing in, as before."
+    },
+    {
+      "name": "Team logins switched off",
+      "detail": "Every active team login of that company, silently, with the reason written in the team record.",
+      "flag": "new"
+    },
+    {
+      "name": "Left as they were",
+      "detail": "A login an owner switched off, or you switched off for another reason, stays off.",
+      "flag": "new"
+    },
+    {
+      "name": "Restore Portal Login",
+      "detail": "Owners and members come back, and so do only the team logins the block switched off.",
+      "flag": "new"
+    }
+  ]
+}

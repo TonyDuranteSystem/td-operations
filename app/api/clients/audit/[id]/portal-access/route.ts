@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
 import { requireStaffRoute } from '@/lib/auth/require-staff-route'
+import { createClient } from '@/lib/supabase/server'
+import { tdActorFromRequest } from '@/lib/portal/team/events'
+import { companyBlockDeps, describeCompanyBlock, switchOffCompanyLogins, switchOnCompanyLogins, type CompanyBlockResult } from '@/lib/portal/team/company-block'
 
 export const dynamic = 'force-dynamic'
 
@@ -24,6 +27,11 @@ export const dynamic = 'force-dynamic'
  *   - For each linked contact, unban their auth user (ban_duration = 'none')
  *   - Edge case (no contacts): set account.portal_tier = 'active' so the
  *     account is at least marked as eligible (no actual login until contact added)
+ *
+ * TEAM LOGINS (Team Powers, dev job e59dd470): a team login is not a contact, so the steps above never reached it. Block also switches off every
+ * ACTIVE team login of THIS company (the Team card's own TD switch-off: reversible, silent, written to the team record with the staff email);
+ * Restore switches back on ONLY the ones this block switched off (a login an owner switched off, or TD switched off for another reason, stays
+ * as it is). A failure on a team login never fails the request: it is reported in `teamLogins` / `teamLoginsError` and the screen says so.
  */
 
 const BAN_FOREVER = '876600h' // 100 years — Supabase Auth admin "ban_duration" string
@@ -43,6 +51,24 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   if (action !== 'activate' && action !== 'deactivate') {
     return NextResponse.json({ error: 'action must be "activate" or "deactivate"' }, { status: 400 })
+  }
+
+  // The staff login behind the click: the team record names who switched the team logins off or on.
+  const { data: { user: staffUser } } = await createClient().auth.getUser()
+  if (!staffUser?.email) return NextResponse.json({ error: 'Not authorized' }, { status: 403 })
+  const teamActor = tdActorFromRequest(staffUser.email, req.headers)
+
+  /** The company's team logins (never throws: a problem here is reported next to the contact result, it never undoes it). */
+  const handleTeamLogins = async (): Promise<{ teamLogins: CompanyBlockResult | null; teamLoginsError: string | null; teamLoginsNote: string }> => {
+    try {
+      const teamLogins = action === 'deactivate'
+        ? await switchOffCompanyLogins(params.id, teamActor, companyBlockDeps())
+        : await switchOnCompanyLogins(params.id, teamActor, companyBlockDeps())
+      return { teamLogins, teamLoginsError: null, teamLoginsNote: describeCompanyBlock(action, teamLogins) }
+    } catch (err) {
+      const teamLoginsError = err instanceof Error ? err.message : 'Could not read the team logins'
+      return { teamLogins: null, teamLoginsError, teamLoginsNote: describeCompanyBlock(action, null, teamLoginsError) }
+    }
   }
 
   // ── Get linked contacts ──
@@ -71,7 +97,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       summary: `Audit: account had no contacts — account.portal_tier set to ${newTier ?? 'null'}`,
     })
 
-    return NextResponse.json({ ok: true, contactBlocks: [], accountTierSet: newTier })
+    const team = await handleTeamLogins()
+    if (team.teamLoginsNote) {
+      await supabaseAdmin.from('action_log').insert({
+        account_id: params.id,
+        action_type: `audit_portal_${action}`,
+        table_name: 'portal_team_members',
+        summary: `Audit: team logins — ${team.teamLoginsNote}`,
+      })
+    }
+    return NextResponse.json({ ok: true, contactBlocks: [], accountTierSet: newTier, ...team })
   }
 
   // ── For each linked contact, find auth user, check multi-account, ban/unban ──
@@ -142,19 +177,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
   }
 
+  const team = await handleTeamLogins()
+
   await supabaseAdmin.from('action_log').insert({
     account_id: params.id,
     action_type: `audit_portal_${action}`,
     table_name: 'auth.users',
-    summary: `Audit: portal login ${action === 'deactivate' ? 'blocked' : 'restored'} — ${blocks.filter(b => b.reason === 'banned' || b.reason === 'unbanned').length} of ${contacts.length} contact(s) updated${skippedMulti.length > 0 ? ` (${skippedMulti.length} skipped: multi-account)` : ''}`,
+    summary: `Audit: portal login ${action === 'deactivate' ? 'blocked' : 'restored'} — ${blocks.filter(b => b.reason === 'banned' || b.reason === 'unbanned').length} of ${contacts.length} contact(s) updated${skippedMulti.length > 0 ? ` (${skippedMulti.length} skipped: multi-account)` : ''}${team.teamLoginsNote ? `; team logins: ${team.teamLoginsNote}` : ''}`,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    details: { actor: actor ?? 'audit-panel', blocks } as any,
+    details: { actor: actor ?? 'audit-panel', blocks, team_logins: team.teamLogins, team_logins_error: team.teamLoginsError } as any,
   })
 
   return NextResponse.json({
     ok: true,
     contactBlocks: blocks,
     skippedMultiAccount: skippedMulti,
+    ...team,
   })
 }
 /* eslint-enable no-restricted-syntax */
