@@ -39,6 +39,22 @@ export function installmentIdempotencyKey(accountId: string, label: string | nul
   return null
 }
 
+const INSTALLMENT_KEY_RE = /^(?:renewal-1st:[0-9a-f-]{36}:\d{4}|annual-installment:[0-9a-f-]{36}:2:\d{4})$/i
+
+/** True only for the two installment keys above — never for a credit note's, a plan part's or a one-off's key. */
+export function isInstallmentIdempotencyKey(key: string | null | undefined): boolean {
+  return !!key && INSTALLMENT_KEY_RE.test(key)
+}
+
+/**
+ * An installment invoice that was cancelled or voided is DEAD: it can never be paid, so it must not keep holding its
+ * installment's key (the key is unique across every row, dead ones included). A credit note is NOT dead — never listed here.
+ * (dev job bea928e0: 8 cancelled installment invoices in production still held their key.)
+ */
+export function isDeadInstallmentRow(row: { status?: string | null; invoice_status?: string | null }): boolean {
+  return row.status === "Cancelled" || row.invoice_status === "Cancelled" || row.invoice_status === "Voided"
+}
+
 /**
  * An invoice carries an installment label and a year TOGETHER or not at all: the year is the installment's own year
  * (the one the company page shows), never guessed from a date, and no other kind of invoice carries a year.

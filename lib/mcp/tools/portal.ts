@@ -230,7 +230,7 @@ Workflow: portal_invoice_create -> portal_invoice_send (email with PDF) -> clien
 Or: portal_invoice_create(mark_as_paid=true) if already paid (invoices are receipts per rule P6).`,
     {
       contact_id: z.string().uuid().optional().describe("Contact UUID — invoice a person (setup fees, pre-account). At least one of contact_id or account_id required."),
-      account_id: z.string().uuid().optional().describe("Account UUID — invoice a company (annual installments). At least one of contact_id or account_id required."),
+      account_id: z.string().uuid().optional().describe("Account UUID — invoice a company (a one-off invoice; the yearly installments are not made with this tool). At least one of contact_id or account_id required."),
       line_items: z.array(z.object({
         description: z.string().describe("Line item description"),
         unit_price: z.number().describe("Unit price"),

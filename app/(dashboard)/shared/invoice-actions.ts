@@ -14,6 +14,7 @@ import { createTDInvoice } from '@/lib/portal/td-invoice'
 import { applyAvailableCreditToInvoice } from '@/lib/operations/credit-netting'
 import { createHash } from 'crypto'
 import { installmentIdempotencyKey } from '@/lib/billing/installment-invoice-key'
+import { runInstallmentPaidSteps } from '@/lib/billing/run-installment-paid-steps'
 import { PLAN_TOTAL_TOLERANCE, validatePaymentPlan } from '@/lib/offers/payment-plan'
 import { resolveTrancheCardFeeRate } from '@/lib/offers/payment-plan-state'
 import { computeInvoiceItemTotals, type InvoiceLineItemInput } from '@/lib/finance/invoice-totals'
@@ -220,17 +221,37 @@ export async function createInvoice(
         .eq('id', result.paymentId)
     }
 
+    // An installment the client's credit covered completely is born Paid — nobody marks it paid afterwards, so the yearly steps
+    // that start on payment (January: the recurring services; June: the tax-return gate) would never run. Run them here, the
+    // same as when an installment is marked paid; a failure is reported to the screen, never swallowed (dev job bea928e0).
+    let paidStepsWarning: string | undefined
+    if (!result.alreadyExisted && result.status === 'Paid' && invoiceData.installment && invoiceData.year != null) {
+      try {
+        const steps = await runInstallmentPaidSteps({
+          accountId: invoiceData.account_id,
+          installment: invoiceData.installment,
+          year: invoiceData.year,
+        })
+        if (steps.failedSteps.length > 0) {
+          paidStepsWarning = `The client's credit covered this installment, so it was created already paid — but these yearly steps reported a problem: ${steps.failedSteps.join(', ')}. Please check the company page.`
+        }
+      } catch {
+        paidStepsWarning = "The client's credit covered this installment, so it was created already paid — but its yearly steps did not run. Please check the company page."
+      }
+    }
+
     // Revalidates both while the old Payment Tracker page still exists — its
     // own Invoices tab reads the same table. Drop '/payments' once that page
     // is deleted (dev job ef5da377, Step 6).
     revalidatePath('/payments')
     revalidatePath('/finance')
+    const existingNote = result.alreadyExisted
+      ? `This invoice already exists (${result.invoiceNumber}), so nothing new was created.`
+      : result.duplicate_warning
     return {
       id: result.paymentId,
       invoice_number: result.invoiceNumber,
-      duplicate_warning: result.alreadyExisted
-        ? `This invoice already exists (${result.invoiceNumber}), so nothing new was created.`
-        : result.duplicate_warning,
+      duplicate_warning: [existingNote, paidStepsWarning].filter(Boolean).join(' ') || undefined,
       // The window must not send it, mark it paid or say "created" — nothing was created.
       already_existed: result.alreadyExisted || undefined,
     }

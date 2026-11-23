@@ -9,12 +9,14 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest"
 
-const { mockCreateTDInvoice, paymentUpdates } = vi.hoisted(() => ({
+const { mockCreateTDInvoice, paymentUpdates, mockPaidSteps } = vi.hoisted(() => ({
   mockCreateTDInvoice: vi.fn(),
   paymentUpdates: [] as Array<Record<string, unknown>>,
+  mockPaidSteps: vi.fn(),
 }))
 
 vi.mock("@/lib/portal/td-invoice", () => ({ createTDInvoice: mockCreateTDInvoice }))
+vi.mock("@/lib/billing/run-installment-paid-steps", () => ({ runInstallmentPaidSteps: mockPaidSteps }))
 vi.mock("@/lib/supabase/server", () => ({
   createClient: () => ({
     from: () => ({
@@ -51,6 +53,8 @@ beforeEach(() => {
   mockCreateTDInvoice.mockReset()
   mockCreateTDInvoice.mockResolvedValue({ paymentId: "pay-1", expenseId: "exp-1", invoiceNumber: "INV-000001", total: 100, status: "Draft" })
   paymentUpdates.length = 0
+  mockPaidSteps.mockReset()
+  mockPaidSteps.mockResolvedValue({ ran: true, failedSteps: [] })
 })
 
 const lastCall = () => mockCreateTDInvoice.mock.calls[mockCreateTDInvoice.mock.calls.length - 1][0] as Record<string, unknown>
@@ -146,8 +150,68 @@ describe("an invoice that already existed is returned untouched and says so", ()
   })
 })
 
+describe("an installment the client's credit covered completely runs the yearly steps (it is born Paid, nobody marks it paid later)", () => {
+  const jan = { ...oneOff, description: "1st Installment 2026", installment: "Installment 1 (Jan)" as const, year: 2026 }
+  const june = { ...oneOff, description: "2nd Installment 2026", installment: "Installment 2 (Jun)" as const, year: 2026 }
+  const born = (status: string, extra: Record<string, unknown> = {}) =>
+    mockCreateTDInvoice.mockResolvedValue({ paymentId: "pay-1", expenseId: "exp-1", invoiceNumber: "INV-000001", total: 0, status, ...extra })
+
+  it("born Paid → the steps run once, for that company, label and year, and there is no warning", async () => {
+    born("Paid")
+    const res = await createInvoice(jan)
+    expect(res.success).toBe(true)
+    expect(mockPaidSteps).toHaveBeenCalledTimes(1)
+    expect(mockPaidSteps).toHaveBeenCalledWith({ accountId: ACCT, installment: "Installment 1 (Jan)", year: 2026 })
+    expect((res as { data: { duplicate_warning?: string } }).data.duplicate_warning).toBeUndefined()
+  })
+
+  it("the June installment runs its own steps too", async () => {
+    born("Paid")
+    await createInvoice(june)
+    expect(mockPaidSteps).toHaveBeenCalledWith({ accountId: ACCT, installment: "Installment 2 (Jun)", year: 2026 })
+  })
+
+  it("an installment that is still a Draft runs nothing (the steps start when it is really paid)", async () => {
+    born("Draft")
+    await createInvoice(jan)
+    expect(mockPaidSteps).not.toHaveBeenCalled()
+  })
+
+  it("an invoice that already existed runs nothing, even if it is Paid", async () => {
+    born("Paid", { alreadyExisted: true })
+    await createInvoice(jan)
+    expect(mockPaidSteps).not.toHaveBeenCalled()
+  })
+
+  it("a one-off invoice marked paid is not an installment: nothing runs", async () => {
+    born("Paid")
+    await createInvoice({ ...oneOff, mark_as_paid: true })
+    expect(mockPaidSteps).not.toHaveBeenCalled()
+  })
+
+  it("a step that reports a problem is shown to the staff member, never swallowed", async () => {
+    born("Paid")
+    mockPaidSteps.mockResolvedValue({ ran: true, failedSteps: ["recurring_services"] })
+    const res = await createInvoice(jan)
+    expect(res.success).toBe(true)
+    expect((res as { data: { duplicate_warning?: string } }).data.duplicate_warning).toMatch(/already paid.*recurring_services/)
+  })
+
+  it("steps that crash do not undo the invoice — it is still created, with a plain warning", async () => {
+    born("Paid")
+    mockPaidSteps.mockRejectedValue(new Error("boom"))
+    const res = await createInvoice(jan)
+    expect(res.success).toBe(true)
+    expect((res as { data: { id: string; duplicate_warning?: string } }).data.id).toBe("pay-1")
+    expect((res as { data: { duplicate_warning?: string } }).data.duplicate_warning).toMatch(/did not run/)
+  })
+})
+
 describe("a credit note that already existed is returned untouched (spent credit must not become spendable again)", () => {
-  const note = { account_id: ACCT, description: "Referral credit", amount_currency: "USD" as const, issue_date: "2026-11-22", items: [{ description: "Referral credit", quantity: 1, unit_price: 100, amount: 100, sort_order: 0 }] }
+  // Only reachable in the short window between the credit note being inserted and being marked as a credit: the key lookup
+  // skips finished credit notes (they are 'Credit'), so a LATER re-submit of the same credit note is stopped by the database
+  // index instead — the same raw error as before this job, with no second credit written.
+  const note ={ account_id: ACCT, description: "Referral credit", amount_currency: "USD" as const, issue_date: "2026-11-22", items: [{ description: "Referral credit", quantity: 1, unit_price: 100, amount: 100, sort_order: 0 }] }
 
   it("a NEW credit note is written as a credit with its full remaining amount", async () => {
     await createCreditNote(note)

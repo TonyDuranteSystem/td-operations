@@ -16,6 +16,7 @@ import { syncTDInvoiceMirror } from '@/lib/portal/td-invoice-mirror'
 import { generateInvoiceNumber, generateCreditNoteNumber, isUniqueViolation } from '@/lib/portal/invoice-number'
 import { computeCreditApplication, consumeCredits, releaseStaleCreditClaims, claimCredits, confirmCreditClaims, unwindCreditClaims } from '@/lib/operations/credit-netting'
 import { categoryFromInstallmentLabel, isInstallment } from '@/lib/billing/payment-classification'
+import { retireDeadInstallmentKey } from '@/lib/billing/retire-dead-installment-key'
 import { DEAD_INVOICE_STATUSES } from '@/lib/offers/payment-plan-state'
 import { resolveCreationCardFeeRate } from '@/lib/payments/card-fee-config'
 import { getOfficeDateString } from '@/lib/portal/office-hours'
@@ -304,6 +305,10 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
   // 0. Idempotency check — if a payments row already exists with this key,
   //    return it instead of creating a new invoice.
   if (idempotency_key) {
+    // A cancelled / voided INSTALLMENT invoice must not keep holding its key (unique across every row): the lookup below skips
+    // dead rows, so without this the new insert would hit the unique index and the installment could never be raised again
+    // (dev job bea928e0). A no-op for every other kind of key.
+    await retireDeadInstallmentKey(idempotency_key)
     const existing = await findByIdempotencyKey(idempotency_key)
     if (existing) return existing
   }
