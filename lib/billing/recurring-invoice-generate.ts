@@ -62,7 +62,6 @@ export async function generateRecurringInvoiceCycle(tmpl: RecurringInvoiceTempla
   const runDate = tmpl.next_run_date
   const dueDate = addDaysToDate(runDate, tmpl.due_date_offset_days ?? 0)
   const idempotencyKey = `recurring-template:${tmpl.id}:${runDate}`
-  const year = Number(runDate.slice(0, 4))
 
   try {
     const invoice = await createTDInvoice({
@@ -84,7 +83,8 @@ export async function generateRecurringInvoiceCycle(tmpl: RecurringInvoiceTempla
       idempotency_key: idempotencyKey,
       installment: tmpl.installment || undefined,
       payment_category: tmpl.payment_category || undefined,
-      year,
+      // No year (dev job bea928e0): a recurring invoice is never a yearly installment, and a year on a bill whose description
+      // says "tax return" would aim the database's tax-return rule at the date's year. Nothing but an installment carries one.
     })
 
     // SUCCESS PATH ONLY past this point — next_run_date advances here and

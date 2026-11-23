@@ -143,8 +143,11 @@ export async function GET(req: NextRequest) {
       )
       // "Any payment they will do" (Antonio, 2026-08-30) — every invoice type
       // is in scope, EXCEPT 'credit' (a credit note is money TD owes the
-      // client, never something to charge a card for).
-      .neq("payment_category" as never, "credit")
+      // client, never something to charge a card for). An invoice with NO
+      // hidden code (a one-off, since dev job bea928e0) is a type like any
+      // other: a bare `.neq(... "credit")` would DROP those rows (in SQL
+      // NULL <> 'credit' is not true), so NULL is named explicitly.
+      .or("payment_category.is.null,payment_category.neq.credit")
       .eq("invoice_status" as never, "Sent")
       .not("status", "in", '("Paid","Cancelled","Waived","Refunded")')
       .gt("amount", 0)

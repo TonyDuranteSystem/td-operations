@@ -136,6 +136,6 @@ describe('loadTeamCard (staff)', () => {
   })
   it('a company with no logins is a normal empty card', async () => {
     h.queue.portal_team_members = [ok([])]
-    expect(await loadTeamCard('a1')).toEqual({ ready: true, members: [] })
+    expect(await loadTeamCard('a1')).toEqual({ ready: true, members: [], sharing: { available: true, lines: [] } })
   })
 })

@@ -9,6 +9,7 @@
 import { supabaseAdmin } from "@/lib/supabase-admin"
 import { createTDInvoice } from "@/lib/portal/td-invoice"
 import { PORTAL_INSTALLMENT_PAYMENT_INSTRUCTION } from "@/lib/billing/installment-message"
+import { isDeadInstallmentRow } from "@/lib/billing/installment-invoice-key"
 import { PORTAL_AUDIENCE_TIERS } from "@/lib/portal/pay-token"
 
 export interface AgreementSignedOutcome {
@@ -75,12 +76,14 @@ export async function processAgreementSigned(agreement_token: string): Promise<A
     // Idempotency — skip if 1st installment already created for this year
     const { data: existingInvoice } = await supabaseAdmin
       .from("payments")
-      .select("id, invoice_number")
+      .select("id, invoice_number, status, invoice_status")
       .eq("idempotency_key", idempotencyKey)
       .limit(1)
       .maybeSingle()
 
-    if (existingInvoice) {
+    // A cancelled / voided January installment must NOT count as "already invoiced": the client signs and would otherwise be
+    // skipped and never invoiced. createTDInvoice frees the dead row's key and raises a fresh invoice (dev job bea928e0).
+    if (existingInvoice && !isDeadInstallmentRow(existingInvoice)) {
       return { status: 200, body: {
         ok: true,
         renewal: true,

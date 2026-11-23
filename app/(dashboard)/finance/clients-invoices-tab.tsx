@@ -686,7 +686,6 @@ export function ClientsInvoicesTab({ clientList, selectedClientId, invoices, cre
             bank_preference: input.bank_preference,
             items: input.items,
             mark_as_paid: input.mark_as_paid,
-            installment: input.installment,
             discount: input.discount,
           })
           // duplicate_warning is toasted once, centrally, by InvoiceDialog's own

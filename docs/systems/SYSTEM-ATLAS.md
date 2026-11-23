@@ -186,8 +186,8 @@ _Regenerated 2026-11-23. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [agent-bridge.md](agent-bridge.md) — Hermes ↔ Claude Agent Bridge _(verified 2026-11-18)_
 - [ai-agent.md](ai-agent.md) — AI Agent (in-dashboard assistant) _(verified 2026-11-20)_
 - [auth-oauth.md](auth-oauth.md) — Auth & OAuth _(verified 2026-11-18)_
-- [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-11-20)_
-- [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-11-22)_
+- [banking-bankfeed.md](banking-bankfeed.md) — Banking & Bank-Feed Reconciliation _(verified 2026-11-23)_
+- [billing-invoicing.md](billing-invoicing.md) — Billing & Invoicing _(verified 2026-11-23)_
 - [bofa-intake.md](bofa-intake.md) — Bank Application Intake (Bank of America, one-time link) _(verified 2026-11-06)_
 - [booking.md](booking.md) — Booking page — Calendly links per audience (Stage 1a engine + Stage 1b screens + Stage 3 paid links) _(verified 2026-11-16)_
 - [captures.md](captures.md) — Capture / Share (screenshot tool) _(verified 2026-11-05)_
@@ -210,10 +210,10 @@ _Regenerated 2026-11-23. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [leads.md](leads.md) — Leads — the Leads list (a tab of the Booking page) and the lead page _(verified 2026-11-15)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-11-21)_
 - [marketing.md](marketing.md) — TD Marketing (Rocco's and Ale's sales workspace) _(verified 2026-11-13)_
-- [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-11-10)_
+- [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-11-23)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-11-20)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-11-11)_
-- [offers.md](offers.md) — Offers & Contracts _(verified 2026-11-22)_
+- [offers.md](offers.md) — Offers & Contracts _(verified 2026-11-23)_
 - [onboarding.md](onboarding.md) — Onboarding _(verified 2026-11-21)_
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-22)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-11-19)_

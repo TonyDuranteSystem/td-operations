@@ -130,7 +130,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       paid_date: txnDate,
       payment_method: feed.source,
       idempotency_key: idempotencyKey,
-      installment: 'One-Time Service',
+      // No Payment Type, no hidden code, no year (dev job bea928e0): see app/api/feed/create-from-feed/route.ts.
       notes: `Audit pass — created from bank feed ${feedId}`,
     })
   } catch (err) {
