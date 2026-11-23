@@ -1,7 +1,7 @@
 {
   "title": "You choose what happens to the portal login when two contacts are merged",
   "tag": "improved",
-  "text": "Before, merging two contacts always deleted the login of the contact being removed, even when that was the only one that worked, and the person was locked out. The Logins step of the merge window now lets you choose. If only the removed contact has a login, you move it to the kept contact (same email and password) or remove it. If both have one, nothing is preselected: you pick which one the person keeps, and each shows when it last signed in. The chosen login is moved and checked first; the other is deleted only after. If something fails, the window says so plainly.",
+  "text": "Before, merging two contacts always deleted the login of the contact being removed, even when that was the only one that worked, and the person was locked out. The Logins step of the merge window now lets you choose. If only the removed contact has a login, you move it to the kept contact (same email and password) or remove it. If both have one, nothing is preselected: you pick which one the person keeps, and each shows when it last signed in. The chosen login is moved and checked first; the other is deleted only after. If the move fails, the window says so and Merge stays off.",
   "points": [
     "Open a contact, press Delete / Merge, pick the other contact",
     "In the Logins step, choose which login the person keeps using",

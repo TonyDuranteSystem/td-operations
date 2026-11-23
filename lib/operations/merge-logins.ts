@@ -39,6 +39,11 @@ export async function applyLoginChoice(
   const actions: LoginActions = loginActions(choice, removed.map((u) => ({ id: u.id, working: true })), kept.map((u) => ({ id: u.id, working: true })))
   const result: MergeLoginResult = { choice, moved: null, deleted: [], deleteFailed: [], error: null, stranded: null }
 
+  if (choice === "removed" && !actions.moveId) {
+    // Guard: "use the removed contact's login" with no login on that side must never fall through to deleting the kept login.
+    return { ...result, error: "The merged-away contact has no login to move, so nothing was changed." }
+  }
+
   if (actions.moveId) {
     const moveId = actions.moveId
     const from = removed.find((u) => u.id === moveId) ?? null

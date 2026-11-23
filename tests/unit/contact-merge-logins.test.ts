@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
 import type { User } from "@supabase/supabase-js"
 import { describeLoginChoice, loginActions, loginChoices, resolveLoginChoice } from "@/lib/contacts/merge-logins"
 import { applyLoginChoice, type MergeLoginDeps } from "@/lib/operations/merge-logins"
@@ -149,6 +151,16 @@ describe("applyLoginChoice", () => {
     expect(calls).toEqual(["delete:k"])
   })
 
+  it("'removed' with no login on the removed contact is refused and deletes nothing (the kept login is safe)", async () => {
+    const k = U("k", "KEPT")
+    const { d, calls } = deps({}, { k })
+    const res = await applyLoginChoice("removed", [], [k], "KEPT", d)
+    expect(calls).toEqual([])
+    expect(res.error).toMatch(/no login to move/)
+    expect(res.moved).toBeNull()
+    expect(res.deleted).toEqual([])
+  })
+
   it("a move that cannot be read back deletes NOTHING", async () => {
     const r = U("r", "REM")
     const k = U("k", "KEPT")
@@ -189,5 +201,22 @@ describe("applyLoginChoice", () => {
     const { d, store } = deps({ keptTier: vi.fn(async () => null) }, { r })
     await applyLoginChoice("removed", [r], [], "KEPT", d)
     expect(store.r.app_metadata).toMatchObject({ contact_id: "KEPT", portal_tier: "onboarding" })
+  })
+})
+
+describe("the merge window after a failed login move", () => {
+  const dialog = readFileSync(join(process.cwd(), "components/contacts/merge-review-dialog.tsx"), "utf8")
+  const route = readFileSync(join(process.cwd(), "app/api/crm/admin-actions/delete-contact/route.ts"), "utf8")
+
+  it("the route tells the window the merge ran and the login move failed", () => {
+    const at = route.indexOf("could NOT be attached")
+    expect(at).toBeGreaterThan(0)
+    expect(route.slice(at, at + 700)).toMatch(/login_move_failed: true/)
+  })
+
+  it("the window remembers it and keeps Merge switched off (no blind second press)", () => {
+    expect(dialog).toMatch(/if \(j\.login_move_failed\) setLoginMoveFailed\(true\)/)
+    expect(dialog).toMatch(/const ready = [^\n]*&& !loginMoveFailed/)
+    expect(dialog).toMatch(/\{loginMoveFailed && /)
   })
 })

@@ -266,7 +266,7 @@ export async function POST(request: Request) {
       const removedLogins = loginResult.deleted.length
       if (loginResult.error) {
         logAction({ actor, action_type: "merge", table_name: "contacts", record_id: contact_id, summary: `Merge of "${contact.full_name}" into "${target.full_name}": the login was NOT moved — it is still pointed at the removed contact and needs repair`, details: { loginResult, stranded_login_id: loginResult.stranded?.loginId, removed_contact_id: contact_id, kept_contact_id: merge_into_contact_id, mergeResult } })
-        return NextResponse.json({ error: `The merge ran, but the login could NOT be attached to "${target.full_name}" (${loginResult.error}). It is still attached to the merged-away contact, so the person cannot see their companies until support moves it. No login was deleted — tell support now.` }, { status: 500 })
+        return NextResponse.json({ error: `The merge ran, but the login could NOT be attached to "${target.full_name}" (${loginResult.error}). It is still attached to the merged-away contact, so the person cannot see their companies until support moves it. No login was deleted — tell support now.`, merge_done: true, login_move_failed: true }, { status: 500 })
       }
 
       logAction({

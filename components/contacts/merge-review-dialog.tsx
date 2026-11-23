@@ -72,6 +72,8 @@ export function MergeReviewDialog({
   const [docIds, setDocIds] = useState<Record<string, boolean>>({})
   const [loginChoice, setLoginChoice] = useState<LoginChoice | null>(null)
   const [loginLeftover, setLoginLeftover] = useState<number | null>(null)
+  // the merge ran but the login could not be moved: the Merge button must not be pressable again
+  const [loginMoveFailed, setLoginMoveFailed] = useState(false)
   const [typed, setTyped] = useState("")
   const [merging, setMerging] = useState(false)
   const [mergeError, setMergeError] = useState<string | null>(null)
@@ -112,7 +114,7 @@ export function MergeReviewDialog({
   const blocked = !!(data?.preview.blocker) || (report?.blockers.length ?? 0) > 0
   // the report on screen must be the one for the pair about to be merged, in the same direction
   const reportMatches = !!report && report.removed.id === removedId && report.kept.id === keptId && !loadError
-  const ready = reportMatches && !loading && !blocked && identityMissing.length === 0 && loginPicked !== null && typed.trim().toUpperCase() === "MERGE" && !merging
+  const ready = reportMatches && !loading && !blocked && identityMissing.length === 0 && loginPicked !== null && typed.trim().toUpperCase() === "MERGE" && !merging && !loginMoveFailed
 
   if (!open) return null
 
@@ -125,7 +127,10 @@ export function MergeReviewDialog({
         body: JSON.stringify({ contact_id: removedId, mode: "merge", merge_into_contact_id: keptId, field_choices: choices, document_ids: selectedDocs, login_choice: loginPicked ?? undefined }),
       })
       const j = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(j.error || "Merge failed — nothing was changed.")
+      if (!res.ok) {
+        if (j.login_move_failed) setLoginMoveFailed(true)
+        throw new Error(j.error || "Merge failed — nothing was changed.")
+      }
       if (typeof j.login_delete_failed === "number" && j.login_delete_failed > 0) {
         // the merge is done but an old login could not be deleted: say so instead of closing silently
         setLoginLeftover(j.login_delete_failed)
@@ -353,6 +358,7 @@ export function MergeReviewDialog({
           ) : (
           <div className="px-6 py-3 border-t shrink-0 space-y-2">
             {mergeError && <div className="rounded-md bg-red-50 text-red-800 px-3 py-2 text-sm" role="alert">{mergeError}</div>}
+            {loginMoveFailed && <div className="flex justify-end"><button type="button" onClick={() => onMerged(keptId)} className="px-4 py-2 text-sm rounded-md bg-zinc-900 text-white">Go to {keptName}</button></div>}
             {identityMissing.length > 0 && <div className="text-sm text-amber-800">Choose a value for: {identityMissing.map((m) => m.label.toLowerCase()).join(", ")}.</div>}
             {report && loginPicked === null && <div className="text-sm text-amber-800">Choose what happens to the removed contact&apos;s login.</div>}
             <div className="flex flex-wrap items-center justify-end gap-2">

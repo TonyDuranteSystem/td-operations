@@ -20,8 +20,8 @@ let ctToAccountLinks: Array<{ account_id: string; contact_id: string }>
 let insertLog: Array<{ table: string; payload: unknown }>
 let updateLog: Array<{ table: string; where: Record<string, unknown>; payload: unknown }>
 const mockUpdateUserById = vi.fn()
-let mockFindAuthUserByEmail: (email: string) => Promise<unknown>
-let mockFindAuthUsersByContactId: (id: string) => Promise<unknown[]>
+let mockUsers: unknown[] = []
+const mockListAllAuthUsers = vi.fn(async () => mockUsers)
 
 // ─── Mock: supabase-admin ─────────────────────────────────
 
@@ -129,11 +129,10 @@ vi.mock("@/lib/supabase-admin", () => ({
 }))
 
 vi.mock("@/lib/auth-admin-helpers", () => ({
-  findAuthUserByEmail: (email: string) => mockFindAuthUserByEmail(email),
-  findAuthUsersByContactId: (id: string) => mockFindAuthUsersByContactId(id),
+  listAllAuthUsers: () => mockListAllAuthUsers(),
 }))
 
-import { syncTier, computeContactTier } from "@/lib/operations/sync-tier"
+import { syncTier, computeContactTier, pickLoginForContact } from "@/lib/operations/sync-tier"
 
 // ─── Setup ───────────────────────────────────────────────
 
@@ -145,8 +144,8 @@ beforeEach(() => {
   insertLog = []
   updateLog = []
   mockUpdateUserById.mockReset()
-  mockFindAuthUserByEmail = vi.fn().mockResolvedValue(null)
-  mockFindAuthUsersByContactId = vi.fn().mockResolvedValue([])
+  mockUsers = []
+  mockListAllAuthUsers.mockClear()
 })
 
 // ─── computeContactTier ──────────────────────────────────
@@ -235,11 +234,11 @@ describe("syncTier", () => {
     acToContactLinks.push({ account_id: "acc-A", contact_id: "c1" })
     ctToAccountLinks.push({ contact_id: "c1", account_id: "acc-A" })
 
-    mockFindAuthUserByEmail = vi.fn().mockResolvedValue({
+    mockUsers = [{
       id: "auth-1",
       email: "user@example.com",
-      app_metadata: { portal_tier: "onboarding" },
-    })
+      app_metadata: { role: "client", portal_tier: "onboarding" },
+    }]
 
     const result = await syncTier({ accountId: "acc-A", newTier: "active", reason: "payment-confirmed" })
 
@@ -373,11 +372,11 @@ describe("syncTier", () => {
     acToContactLinks.push({ account_id: "acc-A", contact_id: "c1" })
     ctToAccountLinks.push({ contact_id: "c1", account_id: "acc-A" })
 
-    mockFindAuthUserByEmail = vi.fn().mockResolvedValue({
+    mockUsers = [{
       id: "auth-99",
       email: "user@example.com",
-      app_metadata: { portal_tier: "formation", some_other: true },
-    })
+      app_metadata: { role: "client", portal_tier: "formation", some_other: true },
+    }]
 
     await syncTier({ accountId: "acc-A", newTier: "active", reason: "test" })
 
@@ -398,11 +397,10 @@ describe("syncTier", () => {
     contactMap.set("c1", { id: "c1", email: "kept@example.com", portal_tier: "formation" })
     acToContactLinks.push({ account_id: "acc-A", contact_id: "c1" })
     ctToAccountLinks.push({ contact_id: "c1", account_id: "acc-A" })
-    mockFindAuthUsersByContactId = vi.fn().mockResolvedValue([{ id: "auth-moved", email: "old-removed@example.com", app_metadata: { contact_id: "c1", portal_tier: "formation" } }])
+    mockUsers = [{ id: "auth-moved", email: "old-removed@example.com", app_metadata: { role: "client", contact_id: "c1", portal_tier: "formation" } }]
 
     await syncTier({ accountId: "acc-A", newTier: "active", reason: "test" })
 
-    expect(mockFindAuthUserByEmail).not.toHaveBeenCalled()
     expect(mockUpdateUserById).toHaveBeenCalledWith("auth-moved", expect.objectContaining({ app_metadata: expect.objectContaining({ contact_id: "c1", portal_tier: "active" }) }))
   })
 
@@ -411,11 +409,10 @@ describe("syncTier", () => {
     contactMap.set("c1", { id: "c1", email: "user@example.com", portal_tier: "formation" })
     acToContactLinks.push({ account_id: "acc-A", contact_id: "c1" })
     ctToAccountLinks.push({ contact_id: "c1", account_id: "acc-A" })
-    mockFindAuthUserByEmail = vi.fn().mockResolvedValue({ id: "auth-e", email: "user@example.com", app_metadata: { portal_tier: "formation" } })
+    mockUsers = [{ id: "auth-e", email: "user@example.com", app_metadata: { role: "client", portal_tier: "formation" } }]
 
     await syncTier({ accountId: "acc-A", newTier: "active", reason: "test" })
 
-    expect(mockFindAuthUserByEmail).toHaveBeenCalledWith("user@example.com")
     expect(mockUpdateUserById).toHaveBeenCalledWith("auth-e", expect.anything())
   })
 
@@ -427,7 +424,6 @@ describe("syncTier", () => {
 
     await syncTier({ accountId: "acc-A", newTier: "formation", reason: "test" })
 
-    expect(mockFindAuthUserByEmail).not.toHaveBeenCalled()
     expect(mockUpdateUserById).not.toHaveBeenCalled()
   })
 
@@ -497,5 +493,48 @@ describe("syncTier", () => {
     expect(result.success).toBe(true)
     const acctUpdate = updateLog.find(w => w.table === "accounts")
     expect(acctUpdate?.payload).toMatchObject({ portal_tier: "lead" })
+  })
+})
+
+describe("pickLoginForContact — which login a tier sync touches", () => {
+  const U = (id: string, meta: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({ id, email: `${id}@x.com`, app_metadata: meta, ...extra }) as never
+
+  it("ignores a staff or admin login even when it carries the contact id or the email", () => {
+    const staff = U("staff", { role: "admin", contact_id: "c1" }, { email: "user@example.com" })
+    expect(pickLoginForContact([staff], "c1", "user@example.com")).toBeNull()
+  })
+
+  it("two client logins on one contact: the most recently signed-in wins", () => {
+    const a = U("a", { role: "client", contact_id: "c1" }, { last_sign_in_at: "2026-01-01T00:00:00Z" })
+    const b = U("b", { role: "client", contact_id: "c1" }, { last_sign_in_at: "2026-06-01T00:00:00Z" })
+    expect(pickLoginForContact([a, b], "c1", null)?.id).toBe("b")
+    expect(pickLoginForContact([b, a], "c1", null)?.id).toBe("b")
+  })
+
+  it("a tie is broken by id, whatever the order of the list", () => {
+    const a = U("a", { role: "client", contact_id: "c1" })
+    const b = U("b", { role: "client", contact_id: "c1" })
+    expect(pickLoginForContact([b, a], "c1", null)?.id).toBe("a")
+    expect(pickLoginForContact([a, b], "c1", null)?.id).toBe("a")
+  })
+
+  it("the contact tie beats the email match; the email is the fallback", () => {
+    const byEmail = U("e", { role: "client" }, { email: "user@example.com" })
+    const byContact = U("c", { role: "client", contact_id: "c1" }, { email: "old@x.com" })
+    expect(pickLoginForContact([byEmail, byContact], "c1", "user@example.com")?.id).toBe("c")
+    expect(pickLoginForContact([byEmail], "c1", "USER@example.com ")?.id).toBe("e")
+  })
+})
+
+describe("one scan of the logins per sync, however many contacts", () => {
+  it("reads the logins once for an account with two contacts", async () => {
+    accountMap.set("acc-A", { portal_tier: "formation" })
+    for (const id of ["c1", "c2"]) {
+      contactMap.set(id, { id, email: `${id}@example.com`, portal_tier: "formation" })
+      acToContactLinks.push({ account_id: "acc-A", contact_id: id })
+      ctToAccountLinks.push({ contact_id: id, account_id: "acc-A" })
+    }
+    await syncTier({ accountId: "acc-A", newTier: "active", reason: "test" })
+    expect(mockListAllAuthUsers).toHaveBeenCalledTimes(1)
   })
 })

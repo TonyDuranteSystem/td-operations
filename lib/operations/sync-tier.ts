@@ -1,5 +1,5 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { findAuthUserByEmail, findAuthUsersByContactId } from '@/lib/auth-admin-helpers'
+import { listAllAuthUsers } from '@/lib/auth-admin-helpers'
 import type { User } from '@supabase/supabase-js'
 import { PORTAL_TIERS, TIER_ORDER, type PortalTier } from '@/lib/portal/tier-config'
 
@@ -34,14 +34,39 @@ export interface SyncTierResult {
 }
 
 /**
- * The client login of a contact. Found by the contact it is tied to first (a login moved by a contact merge keeps the removed
- * contact's email, which the merge folds into the kept contact's alternate emails, so the email alone no longer finds it),
- * then by the contact's email as before.
+ * PURE: the client login of a contact out of an already-read list of logins. Only CLIENT logins count (staff and admin
+ * logins are never touched by a tier sync). Tied to the contact first, then by the contact's email. When several fit
+ * (e.g. after a failed delete) the most recently signed-in one wins, ties broken by id, so the choice never flips between runs.
  */
-export async function findLoginForContact(contactId: string, email: string | null): Promise<User | null> {
-  const byContact = await findAuthUsersByContactId(contactId).catch(() => [])
-  if (byContact.length > 0) return byContact[0]
-  return email ? findAuthUserByEmail(email) : null
+export function pickLoginForContact(users: User[], contactId: string, email: string | null): User | null {
+  const clients = users.filter((u) => (u.app_metadata as { role?: string } | undefined)?.role === 'client')
+  const rank = (list: User[]): User | null => {
+    if (list.length === 0) return null
+    return [...list].sort((a, b) => {
+      const ta = a.last_sign_in_at ? Date.parse(a.last_sign_in_at) : 0
+      const tb = b.last_sign_in_at ? Date.parse(b.last_sign_in_at) : 0
+      return tb - ta || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+    })[0]
+  }
+  const byContact = rank(clients.filter((u) => (u.app_metadata as { contact_id?: string } | undefined)?.contact_id === contactId))
+  if (byContact) return byContact
+  const want = (email ?? '').toLowerCase().trim()
+  return want ? rank(clients.filter((u) => (u.email ?? '').toLowerCase().trim() === want)) : null
+}
+
+/**
+ * The client login of a contact, from ONE scan of the logins. Found by the contact it is tied to first (a login moved by a
+ * contact merge keeps the removed contact's email, which the merge folds into the kept contact's alternate emails, so the
+ * email alone no longer finds it), then by the contact's email.
+ */
+export async function findLoginForContact(contactId: string, email: string | null, users?: User[]): Promise<User | null> {
+  return pickLoginForContact(users ?? await listAllAuthUsers(), contactId, email)
+}
+
+/** Reads the logins at most once per run (a tier sync loops over contacts; one scan serves them all). */
+function lazyLogins(): () => Promise<User[]> {
+  let all: Promise<User[]> | null = null
+  return () => (all ??= listAllAuthUsers())
 }
 
 /**
@@ -109,6 +134,7 @@ export async function syncContactTiersForAccount(
 
   const contactIds = Array.from(new Set(links.map(l => l.contact_id)))
   const contactsUpdated: ContactTierUpdate[] = []
+  const logins = lazyLogins()
 
   for (const contactId of contactIds) {
     const { data: contact } = await supabaseAdmin
@@ -132,7 +158,7 @@ export async function syncContactTiersForAccount(
     }
 
     {
-      const authUser = await findLoginForContact(contactId, contact.email)
+      const authUser = await findLoginForContact(contactId, contact.email, await logins())
       if (authUser && authUser.app_metadata?.portal_tier !== computedTier) {
         await supabaseAdmin.auth.admin.updateUserById(authUser.id, {
           app_metadata: { ...authUser.app_metadata, portal_tier: computedTier },
@@ -214,6 +240,7 @@ export async function syncTier(params: SyncTierParams): Promise<SyncTierResult> 
   if (links && links.length > 0) {
     // Deduplicate contact IDs
     const contactIds = Array.from(new Set(links.map(l => l.contact_id)))
+    const logins = lazyLogins()
 
     for (const contactId of contactIds) {
       // Get current contact tier
@@ -245,7 +272,7 @@ export async function syncTier(params: SyncTierParams): Promise<SyncTierResult> 
 
       // Sync auth metadata (always, even if tier didn't change — repairs drift)
       {
-        const authUser = await findLoginForContact(contactId, contact.email)
+        const authUser = await findLoginForContact(contactId, contact.email, await logins())
         if (authUser && authUser.app_metadata?.portal_tier !== computedTier) {
           await supabaseAdmin.auth.admin.updateUserById(authUser.id, {
             app_metadata: { ...authUser.app_metadata, portal_tier: computedTier },
