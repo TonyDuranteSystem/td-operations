@@ -27,6 +27,10 @@ describe("P2.3 — PROTECTED_TABLES expanded", () => {
     }
   })
 
+  it("guards the Team Powers tables: a raw write there grants powers or shares papers with no notice, no confirmation and no owner email (dev job e59dd470)", () => {
+    for (const t of ["portal_team_members", "portal_team_events", "portal_team_document_shares"]) expect(PROTECTED_TABLES).toContain(t)
+  })
+
   it("adds the 2 heavily-written tables from P2.2 classification", () => {
     // "services" was already present. New additions per P2.2:
     expect(PROTECTED_TABLES).toContain("pipeline_stages")

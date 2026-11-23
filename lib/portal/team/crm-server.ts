@@ -28,6 +28,8 @@ export interface SharingData {
 export interface TeamCardData {
   /** False while the database does not have the step 2 columns / record table yet (read-only list, no switch). */
   ready: boolean
+  /** False when the record (history) could not be READ right now although the database has it: the card says so, the switch buttons stay. */
+  historyAvailable: boolean
   members: CardMember[]
   /** Who shares their personal documents with which login, and whether the login can see them now (staff only). */
   sharing: SharingData
@@ -62,17 +64,27 @@ export async function loadSharing(accountId: string, members: CardMemberRow[]): 
   }
 }
 
+/** The database does not have a column / table yet (code deployed before its database change) — as opposed to a read that merely failed. */
+function isMissingSchema(err: { code?: string; message?: string } | null | undefined): boolean {
+  if (!err) return false
+  return err.code === '42703' || err.code === '42P01' || err.code === 'PGRST204' || err.code === 'PGRST205' || /does not exist|schema cache/i.test(err.message ?? '')
+}
+
 export async function loadTeamCard(accountId: string): Promise<TeamCardData> {
   let ready = true
+  let historyAvailable = true
   let res = await sb().from('portal_team_members').select(FULL_COLUMNS).eq('account_id', accountId).order('created_at', { ascending: true })
   if (res.error) {
+    // Only a MISSING column means "the database change is not on this system yet" (read-only list, no switch). Any other failure is a read
+    // that failed: it must not switch the buttons off and tell staff the system is not ready (dev job e59dd470, 20 Nov hunt D#3b).
+    if (!isMissingSchema(res.error)) throw new Error('Could not read the team logins.')
     ready = false
     res = await sb().from('portal_team_members').select(OLD_COLUMNS).eq('account_id', accountId).order('created_at', { ascending: true })
   }
   // Both reads failed: that is "could not read", never "no team logins" (the card would simply vanish).
   if (res.error) throw new Error('Could not read the team logins.')
   const members = (res.data ?? []) as CardMemberRow[]
-  if (members.length === 0) return { ready, members: [], sharing: { available: true, lines: [] } }
+  if (members.length === 0) return { ready, historyAvailable, members: [], sharing: { available: true, lines: [] } }
 
   let events: CardEventRow[] = []
   if (ready) {
@@ -82,8 +94,14 @@ export async function loadTeamCard(accountId: string): Promise<TeamCardData> {
       .eq('account_id', accountId)
       .order('created_at', { ascending: false })
       .limit(500)
-    if (ev.error) ready = false
-    else events = (ev.data ?? []) as CardEventRow[]
+    if (ev.error) {
+      if (isMissingSchema(ev.error)) ready = false // the record table is not on this system yet
+      else {
+        historyAvailable = false // the table is there but could not be read now: the people and the switch buttons stay, the card says so
+        // eslint-disable-next-line no-console -- a failed read must be visible in the server log; the card says "history could not be read"
+        console.error('[team-card] could not read the team record', ev.error.message)
+      }
+    } else events = (ev.data ?? []) as CardEventRow[]
   }
 
   // Names of the owners named in the record.
@@ -96,18 +114,23 @@ export async function loadTeamCard(accountId: string): Promise<TeamCardData> {
 
   // Last sign-in of each login (one lookup per person; a company's team is a handful of people).
   const signIns: Record<string, string | null> = {}
+  const signInUnreadable: string[] = []
   await Promise.all(
     members.map(async (m) => {
       if (!m.auth_user_id) return
       try {
-        const { data } = await supabaseAdmin.auth.admin.getUserById(m.auth_user_id)
+        const { data, error } = await supabaseAdmin.auth.admin.getUserById(m.auth_user_id)
+        if (error) {
+          signInUnreadable.push(m.auth_user_id) // a failed lookup is NOT "never signed in"
+          return
+        }
         signIns[m.auth_user_id] = data?.user?.last_sign_in_at ?? null
       } catch {
-        signIns[m.auth_user_id] = null
+        signInUnreadable.push(m.auth_user_id)
       }
     }),
   )
 
   const sharing = await loadSharing(accountId, members)
-  return { ready, members: buildTeamCard({ members, events, names, signIns }), sharing }
+  return { ready, historyAvailable, members: buildTeamCard({ members, events, names, signIns, signInUnreadable }), sharing }
 }

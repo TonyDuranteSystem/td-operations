@@ -230,7 +230,7 @@ export function TeamManager({ accountId, companyName, teammates, loginUrl, defau
     setBusy(true); setError('')
     const r = await api(`/api/portal/team/${id}/switch`, 'POST', { account_id: accountId, action })
     setBusy(false)
-    if (!r.ok) { setError(r.error || 'Could not switch the person'); return }
+    if (!r.ok) { setError(r.error || 'Could not switch the person'); router.refresh(); return } // a switch can half-succeed: show the real state
     router.refresh()
   }
 

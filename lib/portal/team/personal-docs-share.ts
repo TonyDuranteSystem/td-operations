@@ -123,8 +123,14 @@ export async function setPersonalDocShare(input: ShareInput, deps: ShareDeps): P
       },
     })
   } catch {
-    await deps.removeShare(input.teamMemberId, input.ownerContactId).catch(() => undefined)
-    return { ok: false, status: 500, error: 'We could not save the record of this change, so nothing was shared. Please try again.' }
+    const undone = await deps.removeShare(input.teamMemberId, input.ownerContactId).then(() => true, () => false)
+    return {
+      ok: false,
+      status: 500,
+      error: undone
+        ? 'We could not save the record of this change, so nothing was shared. Please try again.'
+        : 'We could not save the record of this change, and the sharing could not be undone either: it may be active without a record. Press "Stop sharing" for this person, then try again, or contact support.',
+    }
   }
   return { ok: true, changed: true }
 }

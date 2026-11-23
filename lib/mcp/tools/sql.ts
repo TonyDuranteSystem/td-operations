@@ -40,6 +40,9 @@ export const PROTECTED_TABLES = [
   "deals", "leads", "offers", "deadlines",
   // Added by P2.3:
   "pipeline_stages", "client_invoices",
+  // Team Powers (dev job e59dd470, 20 Nov hunt D#9): a raw write here grants powers, shares personal documents or forges the team record
+  // with no notice, no confirmation and no owner email. (A trigger already refuses UPDATE / DELETE / TRUNCATE on the record table.)
+  "portal_team_members", "portal_team_events", "portal_team_document_shares",
   // Note: "services" is already in the list above.
 ]
 

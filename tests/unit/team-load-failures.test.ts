@@ -5,10 +5,11 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-type Result = { data: unknown; error: { message: string } | null }
+type Result = { data: unknown; error: { message: string; code?: string } | null }
 
 const h = vi.hoisted(() => ({
-  queue: {} as Record<string, Array<{ data: unknown; error: { message: string } | null }>>,
+  queue: {} as Record<string, Array<{ data: unknown; error: { message: string; code?: string } | null }>>,
+  signInFails: false,
 }))
 
 vi.mock('@/lib/supabase-admin', () => ({
@@ -25,7 +26,7 @@ vi.mock('@/lib/supabase-admin', () => ({
       }
       return chain
     },
-    auth: { admin: { getUserById: async () => ({ data: { user: { last_sign_in_at: null } } }) } },
+    auth: { admin: { getUserById: async () => (h.signInFails ? { data: null, error: { message: 'auth down' } } : { data: { user: { last_sign_in_at: null } }, error: null }) } },
   },
 }))
 
@@ -37,6 +38,9 @@ import { loadTeamCard } from '@/lib/portal/team/crm-server'
 
 const ok = (data: unknown): Result => ({ data, error: null })
 const bad = (message = 'db down'): Result => ({ data: null, error: { message } })
+/** The database change is not on this system yet (what a real Postgres says for a missing column / table). */
+const missingColumn = (): Result => ({ data: null, error: { code: '42703', message: 'column portal_team_members.switched_off_by does not exist' } })
+const missingTable = (): Result => ({ data: null, error: { code: '42P01', message: 'relation "portal_team_events" does not exist' } })
 
 beforeEach(() => {
   h.queue = {}
@@ -128,14 +132,49 @@ describe('loadTeamCard (staff)', () => {
     h.queue.portal_team_members = [bad('down'), bad('down')]
     await expect(loadTeamCard('a1')).rejects.toThrow('Could not read the team logins')
   })
-  it('an old database (first read fails, old columns work) still lists the people read-only', async () => {
-    h.queue.portal_team_members = [bad('no such column'), ok([row])]
+  it('an old database (the new columns do not exist yet, old columns work) still lists the people read-only', async () => {
+    h.queue.portal_team_members = [missingColumn(), ok([row])]
     const card = await loadTeamCard('a1')
     expect(card.ready).toBe(false)
+    expect(card.historyAvailable).toBe(true)
     expect(card.members).toHaveLength(1)
+  })
+  it('a read that merely FAILED is "could not read", never "the system is not ready" (that would switch the buttons off)', async () => {
+    h.queue.portal_team_members = [bad('timeout'), ok([row])]
+    await expect(loadTeamCard('a1')).rejects.toThrow('Could not read the team logins')
+  })
+  it('the record table missing on an old database means "not ready", with no false "history unreadable"', async () => {
+    h.queue.portal_team_members = [ok([row])]
+    h.queue.portal_team_events = [missingTable()]
+    const card = await loadTeamCard('a1')
+    expect(card.ready).toBe(false)
+    expect(card.historyAvailable).toBe(true)
+  })
+  it('the history (record) failing to READ keeps the people AND the switch buttons, and says the history is unreadable', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    h.queue.portal_team_members = [ok([row])]
+    h.queue.portal_team_events = [bad('timeout')]
+    const card = await loadTeamCard('a1')
+    expect(card.ready).toBe(true) // the buttons are drawn from this
+    expect(card.historyAvailable).toBe(false)
+    expect(card.members).toHaveLength(1)
+  })
+  it('a failed sign-in lookup reads "could not be checked", never "Never signed in"', async () => {
+    h.signInFails = true
+    h.queue.portal_team_members = [ok([row])]
+    const card = await loadTeamCard('a1')
+    h.signInFails = false
+    expect(card.members[0].lastSignInUnreadable).toBe(true)
+    expect(card.members[0].lastSignIn).toBeNull()
+  })
+  it('a normal read says nothing is unreadable', async () => {
+    h.queue.portal_team_members = [ok([row])]
+    const card = await loadTeamCard('a1')
+    expect(card.historyAvailable).toBe(true)
+    expect(card.members[0].lastSignInUnreadable).toBe(false)
   })
   it('a company with no logins is a normal empty card', async () => {
     h.queue.portal_team_members = [ok([])]
-    expect(await loadTeamCard('a1')).toEqual({ ready: true, members: [], sharing: { available: true, lines: [] } })
+    expect(await loadTeamCard('a1')).toEqual({ ready: true, historyAvailable: true, members: [], sharing: { available: true, lines: [] } })
   })
 })

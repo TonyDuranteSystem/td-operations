@@ -1,0 +1,33 @@
+{
+  "title": "Team logins, batch two: clearer ticks, steadier staff card, switch-off retry",
+  "tag": "improved",
+  "text": "Six improvements from the Team Powers review. The Bank Applications tick now says it also manages the company's bank accounts and which one prints on invoices, and Company & Services says it can change the logo, so owners see what they are granting. The staff Team card keeps its Switch off button when the history cannot be read, and says so, instead of claiming the system is not ready. Pressing Switch off again after a half-failed switch-off now finishes blocking the sign-in. A few behind-the-scenes undo steps now report failures honestly. Team logins no longer see a Generate Documents menu entry that led nowhere. Raw SQL writes on the team tables now need a stated reason.",
+  "points": [
+    "Owner Team page: open Add team member and read the Bank Applications line",
+    "A company's Team card: if the history cannot be read, an amber note says so and the Switch buttons stay",
+    "Press Switch off again on someone whose earlier switch-off said the sign-in could not be fully blocked"
+  ],
+  "stepsTitle": "What changes for team logins",
+  "steps": [
+    {
+      "name": "Owner grants a power",
+      "detail": "Bank Applications now says it also manages the company's bank accounts.",
+      "flag": "new"
+    },
+    {
+      "name": "Staff open the Team card",
+      "detail": "If history cannot be read, the Switch buttons stay and a note says so.",
+      "flag": "new"
+    },
+    {
+      "name": "A switch-off half fails",
+      "detail": "Pressing Switch off again now finishes blocking the sign-in.",
+      "flag": "new"
+    },
+    {
+      "name": "A team login opens the menu",
+      "detail": "No more Generate Documents entry that led back home.",
+      "flag": "new"
+    }
+  ]
+}

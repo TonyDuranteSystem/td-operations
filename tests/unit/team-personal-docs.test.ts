@@ -225,6 +225,21 @@ describe('setPersonalDocShare — switching ON', () => {
     expect(shares.size).toBe(0)
   })
 
+  it('if the record AND the undo both fail, the owner is told the share may be live (never "nothing was shared")', async () => {
+    const { deps } = fakeShareDeps({
+      recordEvent: async () => { throw new Error('db down') },
+      removeShare: async () => { throw new Error('db down') },
+    })
+    const r = await setPersonalDocShare(on, deps)
+    expect(r).toMatchObject({ ok: false, status: 500 })
+    expect((r as { error: string }).error).toContain('may be active without a record')
+    expect((r as { error: string }).error).not.toContain('nothing was shared')
+  })
+  it('if only the record fails and the undo works, the message still says nothing was shared', async () => {
+    const { deps } = fakeShareDeps({ recordEvent: async () => { throw new Error('db down') } })
+    expect((await setPersonalDocShare(on, deps) as { error: string }).error).toContain('nothing was shared')
+  })
+
   it('one owner\'s share never creates another owner\'s: each is its own row', async () => {
     const { deps, shares } = fakeShareDeps()
     await setPersonalDocShare(on, deps)

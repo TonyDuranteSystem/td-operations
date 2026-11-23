@@ -43,8 +43,8 @@ export const CAPABILITY_LABELS: CapabilityLabel[] = [
   },
   {
     key: 'company_services', group: 'look',
-    en: { label: 'Company & Services', hint: 'See the company profile, its services and deadlines.' },
-    it: { label: 'Società e servizi', hint: 'Vedere il profilo della società, i servizi e le scadenze.' },
+    en: { label: 'Company & Services', hint: 'See the company profile, its services and deadlines, and change the company logo.' },
+    it: { label: 'Società e servizi', hint: 'Vedere il profilo della società, i servizi e le scadenze, e cambiare il logo della società.' },
   },
   {
     key: 'announcements', group: 'look',
@@ -83,8 +83,9 @@ export const CAPABILITY_LABELS: CapabilityLabel[] = [
   },
   {
     key: 'bank_applications', group: 'forms',
-    en: { label: 'Bank Applications', hint: 'Fill in and send the bank application (Payset or Relay).' },
-    it: { label: 'Richieste bancarie', hint: 'Compilare e inviare la richiesta bancaria (Payset o Relay).' },
+    // The LABEL is what the owner's notice lists ("describeCapabilities"), so the bank accounts are named in it too — not only in the hint on the screen.
+    en: { label: 'Bank applications & bank accounts', hint: "Fill in and send the bank application (Payset or Relay), and add, change or remove the company's bank accounts, including which one is printed on its invoices." },
+    it: { label: 'Richieste bancarie e conti bancari', hint: 'Compilare e inviare la richiesta bancaria (Payset o Relay), e aggiungere, modificare o togliere i conti bancari della società, compreso quello che compare sulle sue fatture.' },
   },
   {
     key: 'company_data_form', group: 'forms',

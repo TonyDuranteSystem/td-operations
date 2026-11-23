@@ -121,14 +121,26 @@ export async function switchOffTeammate(
       const at = (deps.now?.() ?? new Date()).toISOString()
       const taken = await deps.takeOver(id, accountId, reason, at)
       if (!taken) throw new TeamSwitchError('conflict', 'This person was changed by someone else a moment ago. Refresh and try again.')
-      await deps.setBan(row.auth_user_id, true).catch(() => undefined) // already blocked; make sure
+      // Already blocked (the owner switched them off); make sure — and if that cannot be done, say so in the record instead of hiding it.
+      const banFailed = await deps.setBan(row.auth_user_id, true).then(() => false, () => true)
       await deps.record.bestEffort({
         teamMemberId: id,
         accountId,
         event: 'switched_off',
         actor,
-        detail: { reason, took_over_from: 'owner', previous_reason: row.switched_off_reason },
+        detail: { reason, took_over_from: 'owner', previous_reason: row.switched_off_reason, ban_failed: banFailed || undefined },
       })
+      return { ok: true }
+    }
+    // The same side pressing Switch off again: the only thing left to do is finish an earlier switch-off whose sign-in block failed ("Switched
+    // off, but the sign-in could not be fully blocked. Please try again." used to be answered with "already switched off" and the block was
+    // never retried). Re-block the sign-in; say so if that fails again. Anything else (an owner pressing it on a person TD switched off) is "already off".
+    if (row.switched_off_by === by) {
+      try {
+        await deps.setBan(row.auth_user_id, true)
+      } catch {
+        throw new TeamSwitchError('ban_failed', 'This person is switched off, but the sign-in could not be fully blocked. Please try again.')
+      }
       return { ok: true }
     }
     throw new TeamSwitchError('already_off', 'This person is already switched off')
@@ -199,8 +211,13 @@ export async function switchOnTeammate(
 
   const applied = await deps.markOn(id, accountId, by)
   if (!applied) {
-    await deps.setBan(row.auth_user_id, true).catch(() => undefined)
-    throw new TeamSwitchError('conflict', 'This person was changed by someone else a moment ago. Refresh and try again.')
+    const reblocked = await deps.setBan(row.auth_user_id, true).then(() => true, () => false)
+    throw new TeamSwitchError(
+      'conflict',
+      reblocked
+        ? 'This person was changed by someone else a moment ago. Refresh and try again.'
+        : 'This person was changed by someone else a moment ago, and the sign-in could not be blocked again. Refresh and check them.',
+    )
   }
 
   try {
@@ -213,13 +230,15 @@ export async function switchOnTeammate(
     })
   } catch {
     // No record, no grant: block the sign-in FIRST (so whatever happens next they stay locked out), then put the status back.
-    await deps.setBan(row.auth_user_id, true).catch(() => undefined)
+    const reblocked = await deps.setBan(row.auth_user_id, true).then(() => true, () => false)
     const restored = await deps.restoreOff(row).then(() => true, () => false)
     throw new TeamSwitchError(
       'log_failed',
       restored
         ? 'We could not save the record of this change, so the person stays switched off. Please try again.'
-        : 'We could not save the record of this change. The person is blocked from signing in, but their status could not be put back — please contact support.',
+        : reblocked
+          ? 'We could not save the record of this change. The person is blocked from signing in, but their status could not be put back — please contact support.'
+          : 'We could not save the record of this change, and the person could neither be blocked again nor put back: they may be able to sign in. Switch them off again right now and contact support.',
     )
   }
   return { ok: true }
