@@ -9,6 +9,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
+import { canAccessAccount } from '@/lib/portal/team/gate'
 import { NextRequest, NextResponse } from 'next/server'
 
 const MAX_SIZE_MB = 10
@@ -84,6 +85,17 @@ export async function POST(request: NextRequest) {
 
   // Access control for client users
   const authContactId = getClientContactId(user)
+  const isClientUser = (user.app_metadata as Record<string, unknown> | undefined)?.role === 'client'
+  if (!authContactId && isClientUser) {
+    // A client login with NO contact is a TEAM login (Team Powers) — or a login with no portal identity at all. The contact checks below were
+    // SKIPPED for it, so any team login (even one with no powers, one still on its temporary password, or one waiting for its own notice)
+    // could put a file into ANY company's folder of the public bucket and get a public link. Same rule as /chat/upload-url and the chat send
+    // route: only its own company, and only with the Chat tick (canAccessAccount holds a waiting login's powers back). A team login has no
+    // contact thread, so a request naming only a contact is refused.
+    if (!accountId || !(await canAccessAccount(user, accountId, 'chat'))) {
+      return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+    }
+  }
   if (authContactId) {
     if (accountId) {
       const accountIds = await getClientAccountIds(authContactId)

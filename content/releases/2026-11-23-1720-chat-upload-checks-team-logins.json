@@ -1,0 +1,5 @@
+{
+  "title": "The old chat file-upload route now checks team logins like the new one",
+  "tag": "behind-the-scenes",
+  "text": "A browser tab opened before an earlier update still sends chat attachments through an older upload route. That route skipped its permission check for team logins, so any team login, even one with no powers, could upload a file into any company's chat folder and get a public link. It now applies the same rule as the current upload: a team login can upload only into its own company, and only with the Chat power. Owners, members and staff are unaffected. Nothing changes on screen for people who are allowed to attach files."
+}
