@@ -16,6 +16,7 @@ import { syncTDInvoiceMirror } from '@/lib/portal/td-invoice-mirror'
 import { generateInvoiceNumber, generateCreditNoteNumber, isUniqueViolation } from '@/lib/portal/invoice-number'
 import { computeCreditApplication, consumeCredits, releaseStaleCreditClaims, claimCredits, confirmCreditClaims, unwindCreditClaims } from '@/lib/operations/credit-netting'
 import { categoryFromInstallmentLabel, isInstallment } from '@/lib/billing/payment-classification'
+import { retireDeadInstallmentKey } from '@/lib/billing/retire-dead-installment-key'
 import { DEAD_INVOICE_STATUSES } from '@/lib/offers/payment-plan-state'
 import { resolveCreationCardFeeRate } from '@/lib/payments/card-fee-config'
 import { getOfficeDateString } from '@/lib/portal/office-hours'
@@ -218,6 +219,12 @@ export interface TDInvoiceResult {
    * no structured identity to check against.
    */
   duplicate_warning?: string
+  /**
+   * True when the idempotency key already matched a live invoice and THAT invoice was returned instead of creating a new one
+   * (dev job bea928e0). Callers must say so plainly ("this invoice already exists") and must not overwrite the existing row
+   * with the values of the form that asked for a new one.
+   */
+  alreadyExisted?: boolean
 }
 
 // ─── Create TD Invoice ─────────────────────────────
@@ -298,6 +305,10 @@ export async function createTDInvoice(input: TDInvoiceInput): Promise<TDInvoiceR
   // 0. Idempotency check — if a payments row already exists with this key,
   //    return it instead of creating a new invoice.
   if (idempotency_key) {
+    // A cancelled / voided INSTALLMENT invoice must not keep holding its key (unique across every row): the lookup below skips
+    // dead rows, so without this the new insert would hit the unique index and the installment could never be raised again
+    // (dev job bea928e0). A no-op for every other kind of key.
+    await retireDeadInstallmentKey(idempotency_key)
     const existing = await findByIdempotencyKey(idempotency_key)
     if (existing) return existing
   }
@@ -848,6 +859,7 @@ async function findByIdempotencyKey(key: string): Promise<TDInvoiceResult | null
     invoiceNumber: payment.invoice_number,
     total: Number(payment.total) || 0,
     status: (payment.invoice_status as string) || 'Pending',
+    alreadyExisted: true,
   }
 }
 

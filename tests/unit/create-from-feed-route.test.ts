@@ -231,6 +231,9 @@ describe("invoicing a person who is not in the CRM", () => {
     expect(order).toEqual(["refundGate", "findOrCreatePayerContact", "createBackfilledSD", "createTDInvoice", "manualMatch"])
     expect(createTDInvoice).toHaveBeenCalledWith(expect.objectContaining({ contact_id: DERIVED_CONTACT, currency: "EUR", mark_as_paid: true, idempotency_key: `feed-flow-create:${FEED_ID}` }))
     expect(createTDInvoice.mock.calls[0][0].line_items[0]).toMatchObject({ unit_price: 500, quantity: 1 })
+    // No invented Payment Type, hidden code or year (dev job bea928e0): the service in the description is the whole truth.
+    expect(createTDInvoice.mock.calls[0][0]).not.toHaveProperty("installment")
+    expect(createTDInvoice.mock.calls[0][0]).not.toHaveProperty("year")
     expect(body).toMatchObject({ payment_id: "pay-new", invoice_number: "INV-000999", contact_id: DERIVED_CONTACT, attached: false })
     expect(writeFeedStoryToInvoices).toHaveBeenCalledWith(FEED_ID, ["pay-new"], ["pay-new"])
   })

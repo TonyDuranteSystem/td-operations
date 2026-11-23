@@ -21,14 +21,10 @@ export async function createUnifiedInvoiceDraft(input: {
   items: Array<{ description: string; quantity: number; unit_price: number; amount: number; sort_order: number }>
   mark_as_paid?: boolean
   /**
-   * The New Invoice dialog's installment dropdown was being collected and
-   * silently discarded — this function never forwarded it, so an invoice
-   * staff explicitly labeled "Installment 2 (Jun)" landed with no
-   * payment_category and no year, invisible to the account-page badge, the
-   * annual-installments cron's duplicate guard, and this same function's own
-   * duplicate check below (2026-08-31, ShoppyVerse LLC investigation).
+   * No `installment` and no `year` here, on purpose (dev job bea928e0, Antonio 2026-11-22): this is the Finance one-off invoice.
+   * It saves NO Payment Type, NO hidden code and NO year — the service in the description is the whole truth. Yearly installments
+   * are made from the CRM's installment amounts (company page → Installments section, the contract signing, the yearly run).
    */
-  installment?: string
   /**
    * Threaded through to createTDInvoice, which applies it before account
    * credit is computed (dev job 06fb1ad2). This wrapper's own input type
@@ -89,14 +85,7 @@ export async function createUnifiedInvoiceDraft(input: {
       payment_method: paymentMethod === 'card' ? 'Card' : paymentMethod === 'bank_transfer' ? `Wire Transfer (${bankLabel})` : `Wire Transfer (${bankLabel}) / Card`,
       bank_preference: bankPref,
       mark_as_paid: input.mark_as_paid || false,
-      installment: input.installment || undefined,
       discount: input.discount,
-      // Derived from the issue date — this dialog has no separate year field.
-      // Falls back to the office's own "today" (not the server's UTC clock) to
-      // match createTDInvoice's own issue_date default exactly.
-      year: input.installment
-        ? Number((input.issue_date || (await import('@/lib/portal/office-hours')).getOfficeDateString()).slice(0, 4))
-        : undefined,
     })
 
     revalidatePath('/finance')

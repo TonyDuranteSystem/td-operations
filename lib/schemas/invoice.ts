@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { INSTALLMENT_LABELS, installmentPairProblem } from '@/lib/billing/installment-invoice-key'
 
 export const INVOICE_STATUS = [
   'Draft', 'Sent', 'Paid', 'Overdue', 'Voided', 'Credit',
@@ -14,17 +15,8 @@ export const invoiceItemSchema = z.object({
   sort_order: z.number().int().default(0),
 })
 
-export const INSTALLMENT_TYPES = [
-  'Setup Fee',
-  'Installment 1 (Jan)',
-  'Installment 2 (Jun)',
-  'Annual Payment',
-  'One-Time Service',
-  'Custom',
-] as const
-
-export type InstallmentType = (typeof INSTALLMENT_TYPES)[number]
-
+// The ONLY Payment Types an invoice can still carry are the two yearly installments (see lib/billing/installment-invoice-key.ts):
+// they are created from the CRM's installment amounts, never picked. One-off invoices carry no Payment Type, no hidden code and no year.
 export const createInvoiceSchema = z.object({
   account_id: z.string().uuid(),
   description: z.string().min(1).max(500),
@@ -38,7 +30,9 @@ export const createInvoiceSchema = z.object({
   bank_preference: z.string().optional(),
   items: z.array(invoiceItemSchema).min(1, 'At least one line item required'),
   mark_as_paid: z.boolean().optional(),
-  installment: z.enum(INSTALLMENT_TYPES).optional(),
+  installment: z.enum(INSTALLMENT_LABELS).optional(),
+  /** The year of the installment (the one the company page shows). Only with an installment, never guessed from a date. */
+  year: z.number().int().min(2000).max(2100).optional(),
   /**
    * WS-C: this invoice is one PART of an offer's payment plan.
    *
@@ -52,6 +46,9 @@ export const createInvoiceSchema = z.object({
       seq: z.number().int().positive(),
     })
     .optional(),
+}).superRefine((v, ctx) => {
+  const problem = installmentPairProblem({ installment: v.installment, year: v.year })
+  if (problem) ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem })
 })
 
 export const createCreditNoteSchema = z.object({

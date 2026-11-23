@@ -494,7 +494,9 @@ export async function POST(req: NextRequest) {
       paid_date: txnDate,
       payment_method: feed.source,
       idempotency_key: idempotencyKey,
-      installment: "One-Time Service",
+      // No Payment Type, no hidden code, no year (dev job bea928e0, Antonio 2026-11-22): this used to write a fixed
+      // "One-Time Service" on every invoice made from a bank payment, whatever the money was for. The service in the
+      // description is the whole truth.
       notes: `Bank-feed flow — created from bank feed ${feedId}`,
     })
   } catch (err) {

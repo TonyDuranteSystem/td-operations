@@ -1,0 +1,13 @@
+{
+  "title": "Invoices save no hidden type; installments come only from the CRM's amounts",
+  "tag": "improved",
+  "text": "The New Invoice window no longer has a Payment Type. A one-off invoice now saves exactly what you see: the service, the lines and the amount, with no hidden type and no hidden year. A yearly installment can only be made from the Annual Installments box on the company page: it is filled in from the company's installment amount in the CRM, and its type and year are locked. Invoices made from a bank payment no longer get a fixed \"One-Time Service\" label, and automatic card payment now includes every invoice type except credit notes.",
+  "points": [
+    "Finance → New Invoice: no Payment Type any more",
+    "Company page → Annual Installments → Invoice: the type and the year are shown and locked",
+    "If an invoice already exists for that installment and year, you are told so instead of getting a second one",
+    "An installment that was cancelled can be invoiced again; one fully covered by the client's credit starts its yearly steps right away",
+    "The contract signing and the yearly run create installments exactly as before"
+  ],
+  "screenshot": "finance-installment-locked.png"
+}
