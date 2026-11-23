@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '@/lib/supabase-admin'
-import { findAuthUserByEmail } from '@/lib/auth-admin-helpers'
+import { findAuthUserByEmail, findAuthUsersByContactId } from '@/lib/auth-admin-helpers'
+import type { User } from '@supabase/supabase-js'
 import { PORTAL_TIERS, TIER_ORDER, type PortalTier } from '@/lib/portal/tier-config'
 
 // Tiers that are lifecycle markers on accounts, NOT portal access tiers
@@ -30,6 +31,17 @@ export interface SyncTierResult {
   newTier: PortalTier
   contactsUpdated: ContactTierUpdate[]
   error?: string
+}
+
+/**
+ * The client login of a contact. Found by the contact it is tied to first (a login moved by a contact merge keeps the removed
+ * contact's email, which the merge folds into the kept contact's alternate emails, so the email alone no longer finds it),
+ * then by the contact's email as before.
+ */
+export async function findLoginForContact(contactId: string, email: string | null): Promise<User | null> {
+  const byContact = await findAuthUsersByContactId(contactId).catch(() => [])
+  if (byContact.length > 0) return byContact[0]
+  return email ? findAuthUserByEmail(email) : null
 }
 
 /**
@@ -119,8 +131,8 @@ export async function syncContactTiersForAccount(
       contactsUpdated.push({ contactId, previousTier: contactPreviousTier, newTier: computedTier })
     }
 
-    if (contact.email) {
-      const authUser = await findAuthUserByEmail(contact.email)
+    {
+      const authUser = await findLoginForContact(contactId, contact.email)
       if (authUser && authUser.app_metadata?.portal_tier !== computedTier) {
         await supabaseAdmin.auth.admin.updateUserById(authUser.id, {
           app_metadata: { ...authUser.app_metadata, portal_tier: computedTier },
@@ -232,8 +244,8 @@ export async function syncTier(params: SyncTierParams): Promise<SyncTierResult> 
       }
 
       // Sync auth metadata (always, even if tier didn't change — repairs drift)
-      if (contact.email) {
-        const authUser = await findAuthUserByEmail(contact.email)
+      {
+        const authUser = await findLoginForContact(contactId, contact.email)
         if (authUser && authUser.app_metadata?.portal_tier !== computedTier) {
           await supabaseAdmin.auth.admin.updateUserById(authUser.id, {
             app_metadata: { ...authUser.app_metadata, portal_tier: computedTier },

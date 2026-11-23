@@ -197,7 +197,7 @@ export async function POST(request: Request) {
       // What happens to the portal logins (slice 3): checked against the logins as they are right now, BEFORE anything changes.
       const { resolveLoginChoice } = await import("@/lib/contacts/merge-logins")
       const loginCheck = resolveLoginChoice(body.login_choice, mergeReport.removed.logins, mergeReport.kept.logins)
-      if (!loginCheck.ok) return NextResponse.json({ error: loginCheck.error }, { status: 400 })
+      if ("error" in loginCheck) return NextResponse.json({ error: loginCheck.error }, { status: 400 })
       const offered = new Set(mergeReport.documents.ownerless.map((d) => d.id))
       const documentIds = Array.from(new Set(Array.isArray(body.document_ids) ? body.document_ids : []))
       if (documentIds.some((id) => typeof id !== "string" || !offered.has(id))) {
@@ -259,14 +259,14 @@ export async function POST(request: Request) {
       }
 
       // The portal logins, as chosen in the merge window: the login that moves is re-pointed at the kept contact FIRST and read back,
-      // and only then are the others deleted. A failed move deletes nothing (the login stays on the removed contact, which still works).
+      // and only then are the others deleted. A failed move deletes nothing (the login stays pointed at the removed contact, so it is NOT attached to the kept contact until support moves it).
       const { applyLoginChoice, realMergeLoginDeps } = await import("@/lib/operations/merge-logins")
       const keptLogins = logins?.get(merge_into_contact_id) ?? []
       const loginResult = await applyLoginChoice(loginCheck.choice, portalUsers, keptLogins, merge_into_contact_id, await realMergeLoginDeps(merge_into_contact_id))
       const removedLogins = loginResult.deleted.length
       if (loginResult.error) {
-        logAction({ actor, action_type: "merge", table_name: "contacts", record_id: contact_id, summary: `Merge of "${contact.full_name}" into "${target.full_name}": the login was NOT moved`, details: { loginResult, mergeResult } })
-        return NextResponse.json({ error: `The merge ran, but the login could not be moved to "${target.full_name}" (${loginResult.error}). No login was deleted — tell support.` }, { status: 500 })
+        logAction({ actor, action_type: "merge", table_name: "contacts", record_id: contact_id, summary: `Merge of "${contact.full_name}" into "${target.full_name}": the login was NOT moved — it is still pointed at the removed contact and needs repair`, details: { loginResult, stranded_login_id: loginResult.stranded?.loginId, removed_contact_id: contact_id, kept_contact_id: merge_into_contact_id, mergeResult } })
+        return NextResponse.json({ error: `The merge ran, but the login could NOT be attached to "${target.full_name}" (${loginResult.error}). It is still attached to the merged-away contact, so the person cannot see their companies until support moves it. No login was deleted — tell support now.` }, { status: 500 })
       }
 
       logAction({
@@ -275,7 +275,7 @@ export async function POST(request: Request) {
         table_name: "contacts",
         record_id: contact_id,
         summary: `Merged contact "${contact.full_name}" into "${target.full_name}"`,
-        details: { loser: contact_id, winner: merge_into_contact_id, mergeResult, removedLogins, login_choice: loginCheck.choice, login_result: loginResult, field_choices: choices, document_ids: documentIds, document_shares_moved: sharesMoved },
+        details: { loser: contact_id, winner: merge_into_contact_id, mergeResult, removedLogins, login_choice: loginCheck.choice, login_result: loginResult, login_delete_failed_ids: loginResult.deleteFailed, field_choices: choices, document_ids: documentIds, document_shares_moved: sharesMoved },
       })
 
       return NextResponse.json({

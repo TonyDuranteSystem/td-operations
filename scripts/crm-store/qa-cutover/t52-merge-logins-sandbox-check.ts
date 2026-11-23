@@ -57,7 +57,8 @@ async function main() {
   await Promise.all([page.waitForURL((u) => !u.pathname.startsWith("/login"), { timeout: 30000 }), page.click('button[type="submit"]')])
 
   const openWindow = async (p: Page, pair: { r: { id: string }; k: { full_name: string } }) => {
-    await p.goto(`${BASE}/contacts/${pair.r.id}`, { waitUntil: "domcontentloaded" })
+    await p.waitForTimeout(3000)   // let the post-login redirect settle
+    await p.goto(`${BASE}/contacts/${pair.r.id}`, { waitUntil: "domcontentloaded" }).catch(async () => { await p.waitForTimeout(3000); await p.goto(`${BASE}/contacts/${pair.r.id}`, { waitUntil: "domcontentloaded" }) })
     await p.waitForTimeout(4000)   // hydration (never networkidle on this app)
     await p.screenshot({ path: "/tmp/t52-contact-page.png" })
     await p.getByRole("button", { name: /Delete \/ Merge|Merge this contact/ }).first().click({ timeout: 60000 })
@@ -90,7 +91,7 @@ async function main() {
   // B
   await openWindow(page, B)
   check("B1 both logins are listed", (await dialog(page).getByText(B.r.email).count()) > 0 && (await dialog(page).getByText(B.k.email).count()) > 0)
-  check("B2 the kept login is suggested and Merge is not forced off by the login", await dialog(page).getByText("(suggested)").count() > 0)
+  check("B2 both have a login: nothing is preselected and Merge stays off until a choice", await mergeBtn(page).isDisabled() && await dialog(page).getByText(/last signed in|never signed in/).count() > 0)
   await dialog(page).getByLabel(new RegExp(`Use ${B.r.email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} instead`)).check()
   await page.screenshot({ path: "/tmp/t52-B-swap.png", fullPage: false })
   await finish(page)
@@ -99,6 +100,8 @@ async function main() {
 
   // C (take the suggestion)
   await openWindow(page, C)
+  check("C0 both logins: Merge stays off until the person chooses", await mergeBtn(page).isDisabled())
+  await dialog(page).getByLabel(new RegExp(`Keep ${C.k.email.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`)).check()
   await finish(page)
   check("C1 the kept login stays on the kept contact", (await contactOfLogin(cLoginK)) === C.k.id)
   check("C2 the removed contact's login was deleted", (await contactOfLogin(cLoginR)) === "DELETED")

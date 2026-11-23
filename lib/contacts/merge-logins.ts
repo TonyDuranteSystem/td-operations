@@ -25,7 +25,7 @@ export interface LoginChoices {
   options: LoginChoice[]
   /** the one that is preselected */
   defaultChoice: LoginChoice
-  /** the person must pick (a working login of the removed contact would otherwise be deleted by default) */
+  /** the person must pick (any default could delete the login that is actually in use) */
   mustChoose: boolean
   /** plain-English reason when the screen can only offer the old rule */
   note: string | null
@@ -40,9 +40,9 @@ export function loginChoices(removed: LoginLite[], kept: LoginLite[]): LoginChoi
     const worth = removed[0].working
     return { options: ["removed", "none"], defaultChoice: worth ? "removed" : "none", mustChoose: worth, note: null }
   }
-  // exactly one login on each side
-  const keepRemoved = removed[0].working && !kept[0].working
-  return { options: ["kept", "removed"], defaultChoice: keepRemoved ? "removed" : "kept", mustChoose: false, note: null }
+  // exactly one login on each side. "Can sign in" is not proof of use (an unused login usually counts as working too), so there is NO
+  // safe default: the person must choose, looking at each login's last sign-in.
+  return { options: ["kept", "removed"], defaultChoice: "kept", mustChoose: true, note: null }
 }
 
 export type LoginChoiceCheck = { ok: true; choice: LoginChoice } | { ok: false; error: string }

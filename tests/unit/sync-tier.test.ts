@@ -21,6 +21,7 @@ let insertLog: Array<{ table: string; payload: unknown }>
 let updateLog: Array<{ table: string; where: Record<string, unknown>; payload: unknown }>
 const mockUpdateUserById = vi.fn()
 let mockFindAuthUserByEmail: (email: string) => Promise<unknown>
+let mockFindAuthUsersByContactId: (id: string) => Promise<unknown[]>
 
 // ─── Mock: supabase-admin ─────────────────────────────────
 
@@ -129,6 +130,7 @@ vi.mock("@/lib/supabase-admin", () => ({
 
 vi.mock("@/lib/auth-admin-helpers", () => ({
   findAuthUserByEmail: (email: string) => mockFindAuthUserByEmail(email),
+  findAuthUsersByContactId: (id: string) => mockFindAuthUsersByContactId(id),
 }))
 
 import { syncTier, computeContactTier } from "@/lib/operations/sync-tier"
@@ -144,6 +146,7 @@ beforeEach(() => {
   updateLog = []
   mockUpdateUserById.mockReset()
   mockFindAuthUserByEmail = vi.fn().mockResolvedValue(null)
+  mockFindAuthUsersByContactId = vi.fn().mockResolvedValue([])
 })
 
 // ─── computeContactTier ──────────────────────────────────
@@ -388,6 +391,32 @@ describe("syncTier", () => {
         }),
       }),
     )
+  })
+
+  it("finds a MOVED login by its contact (the email on the contact no longer matches it) and syncs its tier", async () => {
+    accountMap.set("acc-A", { portal_tier: "formation" })
+    contactMap.set("c1", { id: "c1", email: "kept@example.com", portal_tier: "formation" })
+    acToContactLinks.push({ account_id: "acc-A", contact_id: "c1" })
+    ctToAccountLinks.push({ contact_id: "c1", account_id: "acc-A" })
+    mockFindAuthUsersByContactId = vi.fn().mockResolvedValue([{ id: "auth-moved", email: "old-removed@example.com", app_metadata: { contact_id: "c1", portal_tier: "formation" } }])
+
+    await syncTier({ accountId: "acc-A", newTier: "active", reason: "test" })
+
+    expect(mockFindAuthUserByEmail).not.toHaveBeenCalled()
+    expect(mockUpdateUserById).toHaveBeenCalledWith("auth-moved", expect.objectContaining({ app_metadata: expect.objectContaining({ contact_id: "c1", portal_tier: "active" }) }))
+  })
+
+  it("falls back to the email when no login is tied to the contact", async () => {
+    accountMap.set("acc-A", { portal_tier: "formation" })
+    contactMap.set("c1", { id: "c1", email: "user@example.com", portal_tier: "formation" })
+    acToContactLinks.push({ account_id: "acc-A", contact_id: "c1" })
+    ctToAccountLinks.push({ contact_id: "c1", account_id: "acc-A" })
+    mockFindAuthUserByEmail = vi.fn().mockResolvedValue({ id: "auth-e", email: "user@example.com", app_metadata: { portal_tier: "formation" } })
+
+    await syncTier({ accountId: "acc-A", newTier: "active", reason: "test" })
+
+    expect(mockFindAuthUserByEmail).toHaveBeenCalledWith("user@example.com")
+    expect(mockUpdateUserById).toHaveBeenCalledWith("auth-e", expect.anything())
   })
 
   it("skips auth sync when contact has no email", async () => {

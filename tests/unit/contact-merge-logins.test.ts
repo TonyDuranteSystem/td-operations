@@ -19,10 +19,10 @@ describe("loginChoices — what the person may choose", () => {
     expect(loginChoices([L("r", false)], [])).toMatchObject({ options: ["removed", "none"], defaultChoice: "none", mustChoose: false })
   })
 
-  it("both have one: kept is suggested, unless only the removed one can sign in", () => {
-    expect(loginChoices([L("r")], [L("k")])).toMatchObject({ options: ["kept", "removed"], defaultChoice: "kept", mustChoose: false })
-    expect(loginChoices([L("r")], [L("k", false)])).toMatchObject({ options: ["kept", "removed"], defaultChoice: "removed" })
-    expect(loginChoices([L("r", false)], [L("k", false)])).toMatchObject({ defaultChoice: "kept" })
+  it("both have one: the person MUST choose, whatever 'can sign in' says (an unused login counts as working too)", () => {
+    for (const [r, k] of [[true, true], [true, false], [false, true], [false, false]] as const) {
+      expect(loginChoices([L("r", r)], [L("k", k)])).toMatchObject({ options: ["kept", "removed"], mustChoose: true })
+    }
   })
 
   it("several logins on either side: only the old rule, with a plain note", () => {
@@ -37,12 +37,22 @@ describe("resolveLoginChoice — the choice the caller sent, checked against the
   it("a forced choice that is missing is refused", () => {
     const r = resolveLoginChoice(undefined, [L("r")], [])
     expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.error).toMatch(/Choose what happens/)
+    if ("error" in r) expect(r.error).toMatch(/Choose what happens/)
+  })
+
+  it("both have a login and nothing was chosen: refused (no silent default)", () => {
+    expect(resolveLoginChoice(undefined, [L("r")], [L("k")])).toMatchObject({ ok: false })
+    expect(resolveLoginChoice("", [L("r")], [L("k", false)])).toMatchObject({ ok: false })
   })
 
   it("a missing choice that is not forced takes the suggestion", () => {
-    expect(resolveLoginChoice(undefined, [L("r")], [L("k")])).toEqual({ ok: true, choice: "kept" })
-    expect(resolveLoginChoice("", [L("r")], [L("k", false)])).toEqual({ ok: true, choice: "removed" })
+    expect(resolveLoginChoice(undefined, [L("r", false)], [])).toEqual({ ok: true, choice: "none" })
+    expect(resolveLoginChoice(undefined, [], [L("k")])).toEqual({ ok: true, choice: "kept" })
+  })
+
+  it("accepts either login when both exist", () => {
+    expect(resolveLoginChoice("kept", [L("r")], [L("k")])).toEqual({ ok: true, choice: "kept" })
+    expect(resolveLoginChoice("removed", [L("r")], [L("k")])).toEqual({ ok: true, choice: "removed" })
   })
 
   it("accepts an offered choice", () => {
@@ -115,14 +125,28 @@ describe("applyLoginChoice", () => {
     expect(res).toMatchObject({ moved: "r", deleted: [], error: null })
   })
 
-  it("a failed move deletes NOTHING (the person can still sign in on the removed contact's login)", async () => {
+  it("a failed move deletes NOTHING, is tried twice, and reports which login is stranded", async () => {
     const r = U("r", "REM")
     const k = U("k", "KEPT")
-    const { d, calls } = deps({ setAppMetadata: vi.fn(async () => ({ error: "boom" })) }, { r, k })
+    const set = vi.fn(async () => ({ error: "boom" }))
+    const { d, calls } = deps({ setAppMetadata: set }, { r, k })
     const res = await applyLoginChoice("removed", [r], [k], "KEPT", d)
     expect(calls).toEqual([])
+    expect(set).toHaveBeenCalledTimes(2)
     expect(res.error).toMatch(/could not be moved/)
     expect(res.deleted).toEqual([])
+    expect(res.stranded).toEqual({ loginId: "r", fromContactId: "REM", toContactId: "KEPT" })
+  })
+
+  it("a move that fails once and works on the retry succeeds (and then deletes the other login)", async () => {
+    const r = U("r", "REM")
+    const k = U("k", "KEPT")
+    const store: Record<string, User> = { r, k }
+    let n = 0
+    const { d, calls } = deps({ setAppMetadata: vi.fn(async (id: string, meta: Record<string, unknown>) => { n++; if (n === 1) return { error: "blip" }; store[id] = { ...store[id], app_metadata: meta } as User; return { error: null } }) }, store)
+    const res = await applyLoginChoice("removed", [r], [k], "KEPT", d)
+    expect(res).toMatchObject({ moved: "r", error: null, stranded: null, deleted: ["k"] })
+    expect(calls).toEqual(["delete:k"])
   })
 
   it("a move that cannot be read back deletes NOTHING", async () => {

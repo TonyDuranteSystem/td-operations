@@ -25,6 +25,8 @@ export interface MergeLoginResult {
   deleteFailed: string[]
   /** set when the move failed: nothing was deleted */
   error: string | null
+  /** set when the move failed: the login that should have moved and where to (so support can repair it) */
+  stranded: { loginId: string; fromContactId: string | null; toContactId: string } | null
 }
 
 export async function applyLoginChoice(
@@ -35,21 +37,29 @@ export async function applyLoginChoice(
   deps: MergeLoginDeps,
 ): Promise<MergeLoginResult> {
   const actions: LoginActions = loginActions(choice, removed.map((u) => ({ id: u.id, working: true })), kept.map((u) => ({ id: u.id, working: true })))
-  const result: MergeLoginResult = { choice, moved: null, deleted: [], deleteFailed: [], error: null }
+  const result: MergeLoginResult = { choice, moved: null, deleted: [], deleteFailed: [], error: null, stranded: null }
 
   if (actions.moveId) {
-    const fresh = await deps.getUser(actions.moveId)
-    if (!fresh) return { ...result, error: "The login to move could not be read." }
-    const tier = await deps.keptTier()
-    const next: Record<string, unknown> = { ...(fresh.app_metadata ?? {}), contact_id: keptContactId }
-    if (tier) next.portal_tier = tier
-    const set = await deps.setAppMetadata(actions.moveId, next)
-    if (set.error) return { ...result, error: `The login could not be moved: ${set.error}` }
-    const back = await deps.getUser(actions.moveId)
-    if ((back?.app_metadata as { contact_id?: string } | undefined)?.contact_id !== keptContactId) {
-      return { ...result, error: "The login was moved but could not be confirmed." }
+    const moveId = actions.moveId
+    const from = removed.find((u) => u.id === moveId) ?? null
+    const stranded = { loginId: moveId, fromContactId: (from?.app_metadata as { contact_id?: string } | undefined)?.contact_id ?? null, toContactId: keptContactId }
+    // One retry: a failed move leaves the person's login attached to a contact with no companies, so try twice before giving up.
+    let failure: string | null = null
+    for (let attempt = 0; attempt < 2; attempt++) {
+      failure = null
+      const fresh = await deps.getUser(moveId)
+      if (!fresh) { failure = "The login to move could not be read."; continue }
+      const tier = await deps.keptTier()
+      const next: Record<string, unknown> = { ...(fresh.app_metadata ?? {}), contact_id: keptContactId }
+      if (tier) next.portal_tier = tier
+      const set = await deps.setAppMetadata(moveId, next)
+      if (set.error) { failure = `The login could not be moved: ${set.error}`; continue }
+      const back = await deps.getUser(moveId)
+      if ((back?.app_metadata as { contact_id?: string } | undefined)?.contact_id !== keptContactId) { failure = "The login was moved but could not be confirmed."; continue }
+      break
     }
-    result.moved = actions.moveId
+    if (failure) return { ...result, error: failure, stranded }
+    result.moved = moveId
   }
 
   const pair = new Set([...removed, ...kept].map((u) => u.id))

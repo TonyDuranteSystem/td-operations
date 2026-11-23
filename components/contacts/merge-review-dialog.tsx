@@ -71,6 +71,7 @@ export function MergeReviewDialog({
   const [choices, setChoices] = useState<Record<string, DetailChoice>>({})
   const [docIds, setDocIds] = useState<Record<string, boolean>>({})
   const [loginChoice, setLoginChoice] = useState<LoginChoice | null>(null)
+  const [loginLeftover, setLoginLeftover] = useState<number | null>(null)
   const [typed, setTyped] = useState("")
   const [merging, setMerging] = useState(false)
   const [mergeError, setMergeError] = useState<string | null>(null)
@@ -125,6 +126,11 @@ export function MergeReviewDialog({
       })
       const j = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(j.error || "Merge failed — nothing was changed.")
+      if (typeof j.login_delete_failed === "number" && j.login_delete_failed > 0) {
+        // the merge is done but an old login could not be deleted: say so instead of closing silently
+        setLoginLeftover(j.login_delete_failed)
+        return
+      }
       onMerged(keptId)
     } catch (e) {
       setMergeError(e instanceof Error && e.message ? e.message : "Merge failed — nothing was changed.")
@@ -302,8 +308,9 @@ export function MergeReviewDialog({
                       {report.loginChoices.options.map((o) => {
                         const rem = report.removed.logins[0]?.email ?? null
                         const kep = report.kept.logins[0]?.email ?? null
-                        const text = o === "kept" ? `Keep ${kep ?? "the kept contact's login"}`
-                          : o === "removed" ? (report.kept.logins.length > 0 ? `Use ${rem ?? "the removed contact's login"} instead (${kep ?? "the kept login"} is deleted)` : `Keep ${rem ?? "the removed contact's login"} — move it to ${keptName}`)
+                        const seen = (l?: { lastSignInAt: string | null }) => (l?.lastSignInAt ? `last signed in ${new Date(l.lastSignInAt).toLocaleDateString()}` : "never signed in")
+                        const text = o === "kept" ? `Keep ${kep ?? "the kept contact's login"} (${seen(report.kept.logins[0])})`
+                          : o === "removed" ? (report.kept.logins.length > 0 ? `Use ${rem ?? "the removed contact's login"} instead (${seen(report.removed.logins[0])}; ${kep ?? "the kept login"} is deleted)` : `Keep ${rem ?? "the removed contact's login"} — move it to ${keptName}`)
                           : "Remove the login — the person will need a new one"
                         return (
                           <label key={o} className="flex items-center gap-1.5 cursor-pointer">
@@ -334,6 +341,16 @@ export function MergeReviewDialog({
             )}
           </div>
 
+          {loginLeftover !== null ? (
+            <div className="px-6 py-3 border-t shrink-0 space-y-2">
+              <div className="rounded-md bg-amber-50 text-amber-900 px-3 py-2 text-sm" role="status">
+                The merge is done, but {loginLeftover} old login{loginLeftover === 1 ? "" : "s"} could not be deleted — tell support.
+              </div>
+              <div className="flex justify-end">
+                <button type="button" onClick={() => onMerged(keptId)} className="px-4 py-2 text-sm rounded-md bg-zinc-900 text-white">Go to {keptName}</button>
+              </div>
+            </div>
+          ) : (
           <div className="px-6 py-3 border-t shrink-0 space-y-2">
             {mergeError && <div className="rounded-md bg-red-50 text-red-800 px-3 py-2 text-sm" role="alert">{mergeError}</div>}
             {identityMissing.length > 0 && <div className="text-sm text-amber-800">Choose a value for: {identityMissing.map((m) => m.label.toLowerCase()).join(", ")}.</div>}
@@ -346,6 +363,7 @@ export function MergeReviewDialog({
               </button>
             </div>
           </div>
+          )}
         </div>
       </div>
     </>
