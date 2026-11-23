@@ -1977,10 +1977,11 @@ export async function changeInvoiceBillTo(
 ): Promise<ActionResult<{ invoiceNumber: string | null; from: string; to: string; changed: boolean; accountChanged: boolean; emailKeptWith: string | null }>> {
   // Staff only: a server action is reachable by id, so do not rely on the page door alone.
   const { createClient } = await import('@/lib/supabase/server')
-  const { isDashboardUser } = await import('@/lib/auth')
+  const { isDashboardUser, isStaffUser } = await import('@/lib/auth')
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user || !isDashboardUser(user)) {
+  // TD staff only (isDashboardUser alone also lets a managed partner or marketing login through in code).
+  if (!user || !isDashboardUser(user) || !isStaffUser(user)) {
     return { success: false, error: 'Staff access required' }
   }
 

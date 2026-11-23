@@ -1,0 +1,12 @@
+{
+  "title": "Bill to: safer for invoices with credit, staff choices stay put, long payer names fit the PDF",
+  "tag": "fixed",
+  "text": "Small safety fixes to Finance → Bill to. An invoice that already has credit from its company applied can no longer be moved to another company (a payer can still be named), and the dialog says why. Once staff have set who an invoice is billed to, the client's \"Is someone else paying?\" box no longer overwrites it. A long payer name or address now wraps on the invoice PDF instead of running off the page. The note's date uses New York time, the \"Payer named by client\" mark cannot be faked by a typed name, and only TD staff can use Bill to.",
+  "points": [
+    "Finance → All Invoices → Bill to on an invoice with credit applied: moving to another company is greyed out with the reason",
+    "After a staff change, the client's payment page no longer lets them change the payer; they are pointed to the chat",
+    "A payer name or address that is very long wraps onto several lines on the PDF",
+    "Invisible text-direction characters are removed from what a client types as the payer"
+  ],
+  "screenshot": "billto-credit-move-blocked.png"
+}

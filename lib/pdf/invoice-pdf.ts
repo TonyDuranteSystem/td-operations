@@ -1,6 +1,6 @@
 import { PDFDocument, rgb } from 'pdf-lib'
 import { embedUnicodeFonts } from './unicode-fonts'
-import { wrapPdfParagraphs } from './wrap-text'
+import { wrapPdfParagraphs, wrapPdfText } from './wrap-text'
 
 export interface InvoicePdfInput {
   // Header
@@ -141,11 +141,23 @@ export async function generateInvoicePdf(input: InvoicePdfInput): Promise<Uint8A
   y -= 35
   page.drawText('BILL TO', { x: 50, y, size: 9, font: helveticaBold, color: gray })
   y -= 16
-  page.drawText(input.billTo.name, { x: 50, y, size: 11, font: helveticaBold, color: black })
-  y -= 14
+  // The payer's name / address / VAT can be typed by the client (up to 120 / 200 / 40 characters): wrap them inside the page's
+  // 495-point content width instead of running off the edge of the sheet.
+  const BILL_TO_WIDTH = 495
+  const nameLines = wrapPdfText(input.billTo.name, helveticaBold, 11, BILL_TO_WIDTH, { maxLines: 2 })
+  nameLines.forEach((line, i) => { page.drawText(line, { x: 50, y: y - i * 14, size: 11, font: helveticaBold, color: black }) })
+  y -= 14 * Math.max(1, nameLines.length)
   if (input.billTo.email) { page.drawText(input.billTo.email, { x: 50, y, size: 9, font: helvetica, color: gray }); y -= 13 }
-  if (input.billTo.address) { page.drawText(input.billTo.address, { x: 50, y, size: 9, font: helvetica, color: gray }); y -= 13 }
-  if (input.billTo.vatNumber) { page.drawText(`VAT: ${input.billTo.vatNumber}`, { x: 50, y, size: 9, font: helvetica, color: gray }); y -= 13 }
+  if (input.billTo.address) {
+    for (const line of wrapPdfText(input.billTo.address, helvetica, 9, BILL_TO_WIDTH, { maxLines: 3 })) {
+      page.drawText(line, { x: 50, y, size: 9, font: helvetica, color: gray }); y -= 13
+    }
+  }
+  if (input.billTo.vatNumber) {
+    for (const line of wrapPdfText(`VAT: ${input.billTo.vatNumber}`, helvetica, 9, BILL_TO_WIDTH, { maxLines: 2 })) {
+      page.drawText(line, { x: 50, y, size: 9, font: helvetica, color: gray }); y -= 13
+    }
+  }
 
   // Table header
   y -= 20

@@ -255,3 +255,64 @@ describe('changeInvoiceBillTo — when even the roll-back cannot be done', () =>
     await expect(changeInvoiceBillTo({ paymentId: 'p1', billTo: { type: 'company', account_id: ACC_B }, by: 'x' })).rejects.toThrow(/putting the invoice back failed too/i)
   })
 })
+
+// ── Bug-hunter follow-up (job e62bc2b6, 2026-11-23) ──
+describe('changeInvoiceBillTo — credit netted into the invoice', () => {
+  const sentOnA = (over: Row = {}): Row => ({ id: 'p1', invoice_number: 'INV-7', invoice_status: 'Paid', total: 300, account_id: ACC_A, contact_id: 'c1', billing_entity_id: null, payment_category: null, installment: null, notes: null, is_test: false, updated_at: T0, ...over })
+  const owners = [{ account_id: ACC_A, contact_id: 'c1', role: 'Owner', access_revoked_at: null }]
+
+  it('refuses a move to another company when the invoice carries a "Credit applied" line, and changes nothing', async () => {
+    h.db = miniDb(seed({ payments: [sentOnA()], extra: { account_contacts: owners, payment_items: [{ id: 'i1', payment_id: 'p1', description: 'Credit applied', amount: -200 }] } }))
+    await expect(changeInvoiceBillTo({ paymentId: 'p1', billTo: { type: 'company', account_id: ACC_B }, by: 'by staff in Finance' })).rejects.toThrow(/already applied.*choose a payer/i)
+    expect(pay()).toMatchObject({ account_id: ACC_A, notes: null })
+  })
+
+  it('refuses it too when a credit note was used up completely on this invoice', async () => {
+    h.db = miniDb(seed({ payments: [sentOnA(), { id: 'cn1', invoice_number: 'CN-1', invoice_status: 'Credit', total: -200, account_id: ACC_A, credit_consumed_by: 'p1' }], extra: { account_contacts: owners } }))
+    await expect(changeInvoiceBillTo({ paymentId: 'p1', billTo: { type: 'company', account_id: ACC_B }, by: 'x' })).rejects.toThrow(/already applied/i)
+  })
+
+  it('a payer (name only) is still fine on that invoice', async () => {
+    h.db = miniDb(seed({ payments: [sentOnA()], extra: { account_contacts: owners, payment_items: [{ id: 'i1', payment_id: 'p1', description: 'Credit applied', amount: -200 }] } }))
+    const r = await changeInvoiceBillTo({ paymentId: 'p1', billTo: typed('Other Co Ltd'), by: 'by staff in Finance' })
+    expect(r).toMatchObject({ to: 'Other Co Ltd', accountChanged: false })
+  })
+
+  it('a positive line called "Credit applied", or a different invoice\'s credit, does not block the move', async () => {
+    h.db = miniDb(seed({ payments: [sentOnA(), { id: 'p2', invoice_number: 'INV-8', invoice_status: 'Sent', total: 50, account_id: ACC_A, contact_id: 'c1' }], extra: { account_contacts: owners, payment_items: [{ id: 'i1', payment_id: 'p1', description: 'Credit applied', amount: 200 }, { id: 'i2', payment_id: 'p2', description: 'Credit applied', amount: -5 }] } }))
+    const r = await changeInvoiceBillTo({ paymentId: 'p1', billTo: { type: 'company', account_id: ACC_B }, by: 'x' })
+    expect(r.accountChanged).toBe(true)
+  })
+
+  it('a database that cannot be read is an error, never "no credit"', async () => {
+    h.db = miniDb(seed({ payments: [sentOnA()], extra: { account_contacts: owners } }), { failing: { payment_items: 'db down' } })
+    await expect(changeInvoiceBillTo({ paymentId: 'p1', billTo: { type: 'company', account_id: ACC_B }, by: 'x' })).rejects.toThrow(/Could not check credit/i)
+  })
+})
+
+describe('changeInvoiceBillTo — the note carries the New York date', () => {
+  it('a change made at 10:30 pm New York on 23 Nov is dated 23 Nov, not 24 Nov', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-11-24T03:30:00Z'))
+      h.db = miniDb(seed())
+      await changeInvoiceBillTo({ paymentId: 'p1', billTo: typed('Good Company LTD'), by: 'by staff in Finance' })
+      expect(String(pay().notes)).toMatch(/2026-11-23: Bill to changed from/)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('changeInvoiceBillTo — the payer hangs on the same person whatever order the database lists them in', () => {
+  const twoOwners = (order: string[]) => order.map((id) => ({ account_id: ACC_A, contact_id: id, role: 'Owner', access_revoked_at: null, is_primary: id === 'c2' }))
+  const companyOnly: Row = { id: 'p1', invoice_number: 'INV-5', invoice_status: 'Sent', total: 100, account_id: ACC_A, contact_id: null, billing_entity_id: null, payment_category: null, installment: null, notes: null, is_test: false, updated_at: T0 }
+
+  it('picks the primary owner both times', async () => {
+    for (const order of [['c1', 'c2'], ['c2', 'c1']]) {
+      h.db = miniDb(seed({ payments: [{ ...companyOnly }], extra: { account_contacts: twoOwners(order) } }))
+      await changeInvoiceBillTo({ paymentId: 'p1', billTo: typed('Payer Ltd'), by: 'by staff in Finance' })
+      expect(h.db.tables.billing_entities[0].contact_id).toBe('c2')
+    }
+  })
+})
