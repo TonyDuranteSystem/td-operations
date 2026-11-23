@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId } from '@/lib/portal-auth'
+import { accountIdForIssueReport } from '@/lib/portal/report-issue-scope'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
@@ -13,9 +14,12 @@ export async function POST(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { account_id, area, error_message, context } = await request.json()
+  const { account_id: requestedAccountId, area, error_message, context } = await request.json()
 
   const contactId = getClientContactId(user)
+  // The company the caller typed is kept only when they really belong to it (otherwise the report is still saved, without a company):
+  // nobody can open a High-priority task under another company by typing its id.
+  const account_id = await accountIdForIssueReport(user, requestedAccountId)
 
   // Get display name for the task
   let displayName = 'Unknown'
@@ -50,6 +54,7 @@ export async function POST(request: NextRequest) {
     .single()
 
   // Create a task for admin
+  // eslint-disable-next-line no-restricted-syntax -- pre-existing raw write (predates P2.4); this change only scopes WHICH company the report may name
   await supabaseAdmin.from('tasks').insert({
     task_title: `Portal issue: ${area || 'error'} — ${displayName}`,
     assigned_to: 'Luca',

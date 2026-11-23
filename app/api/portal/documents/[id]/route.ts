@@ -8,6 +8,7 @@ import { mayViewerOpenPersonalDocument, isPersonalDocumentHiddenFromViewer, shar
 import { getSharedPersonalDocOwners } from '@/lib/portal/team/personal-docs-server'
 import { isHiddenByHistoryCutoff } from '@/lib/documents/history-cutoff'
 import { getHistoryCutoff } from '@/lib/portal/history-cutoff'
+import { logPortalAction } from '@/lib/portal/audit'
 
 /**
  * GET /api/portal/documents/[id]
@@ -80,6 +81,18 @@ export async function GET(
   // otherwise an old file would still be reachable by its id (dev job d14e823f).
   if (doc.account_id && contactId && isHiddenByHistoryCutoff(doc, await getHistoryCutoff(doc.account_id, contactId), contactId)) {
     return NextResponse.json({ error: 'Document not found' }, { status: 404 })
+  }
+
+  // A team login opening an owner's SHARED personal paper (passport, ID…) leaves a line in the portal audit log: who (the login), whose paper, which
+  // document. Fire-and-forget (never blocks the open). Dev job e59dd470, 20 Nov hunt C#7.
+  if (!contactId && isPersonal && doc.contact_id && sharedFrom.includes(doc.contact_id)) {
+    logPortalAction({
+      user_id: user.id,
+      account_id: sharedOwners[0]?.accountId ?? undefined,
+      action: 'shared_document_opened',
+      detail: JSON.stringify({ document_id: doc.id, owner_contact_id: doc.contact_id }),
+      ip: request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || undefined,
+    })
   }
 
   // Record that this contact opened the document (clears its "New" state for

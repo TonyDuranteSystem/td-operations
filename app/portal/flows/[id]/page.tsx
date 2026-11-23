@@ -95,6 +95,9 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
 
   // ── Access control ──
   const contactId = getClientContactId(user)
+  // A team login (client role, no contact): it never sees a link that works without signing in (the "add your members" button below, the
+  // links in chat). It needs only the Documents power to open this page, and the link's token + code are the whole credential.
+  const teamLoginViewer = !contactId && (user.app_metadata as Record<string, unknown> | undefined)?.kind === 'team_member'
   let allowed = false
   if (contactId) {
     // Contact-ONLY match (account_id null = ITIN-style personal SD). Company
@@ -226,7 +229,7 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
   // name), not a separate tool that appears out of nowhere. A 'submitted'
   // request means they already answered, so this only ever looks for 'pending'.
   let memberInfoCta: { title: string; body: string; cta: string; href: string } | null = null
-  if (sd.service_type === 'Company Formation' && sd.account_id) {
+  if (!teamLoginViewer && sd.service_type === 'Company Formation' && sd.account_id) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: acctRow } = await (supabaseAdmin as any)
       .from('accounts')
@@ -266,11 +269,10 @@ export default async function PortalFlowDetailPage({ params }: { params: { id: s
     .order('created_at', { ascending: true })
     .limit(100)
   // A team login (no person behind it) sees a neutral line where a link that works without a login sits (lib/portal/credential-links.ts).
-  const isTeamLogin = !contactId && (user.app_metadata as Record<string, unknown> | undefined)?.kind === 'team_member'
   const allMessages = (msgData ?? []) as Array<{
     id: string; sender_type: string; sender_name: string | null; message: string; created_at: string | null
   }>
-  const messages = isTeamLogin ? hideCredentialLinks(allMessages) : allMessages
+  const messages = teamLoginViewer ? hideCredentialLinks(allMessages) : allMessages
 
   // ── Client Decision Requests for this flow ──
   // Newest first; only the most recent pending one is actionable, the rest are

@@ -137,7 +137,9 @@ describe('the team login is shown the neutral line where the app reads chat for 
     expect(src).toMatch(/from '@\/lib\/portal\/credential-links'/)
     const use = src.indexOf('hideCredentialLinks(')
     expect(use).toBeGreaterThan(-1)
-    expect(src.slice(Math.max(0, use - 260), use)).toContain("kind === 'team_member'")
+    // The page decides ONCE who is a team login (`teamLoginViewer`) and uses it for the chat messages AND for the one-time "add your members" link.
+    expect(src.slice(Math.max(0, use - 260), use)).toContain('teamLoginViewer')
+    expect(src).toContain("const teamLoginViewer = !contactId && (user.app_metadata as Record<string, unknown> | undefined)?.kind === 'team_member'")
   })
 })
 

@@ -5,6 +5,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { generateInvoicePdf, type InvoicePdfInput } from '@/lib/pdf/invoice-pdf'
 import { getClientContactId } from '@/lib/portal-auth'
 import { canAccessAccount } from '@/lib/portal/team/gate'
+import { resolvePortalIdentity } from '@/lib/portal/resolve-portal-identity'
+import { teammateMayOpenPayment } from '@/lib/portal/team/history'
 import { resolveMailingAddress } from '@/lib/addresses'
 import { sanitizeInvoiceMessage } from '@/lib/portal/pay-token'
 
@@ -48,6 +50,16 @@ export async function GET(
   const hasContactAccess = !payment.account_id && !!contactId && payment.contact_id === contactId
   if (!hasAccountAccess && !hasContactAccess) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 })
+  }
+
+  // A team login follows its own start date (the day it was added) unless the owner ticked "see earlier invoices", exactly like the invoice
+  // list: an older invoice that is still owed stays visible, a settled one from before it joined does not (dev job e59dd470, 20 Nov hunt A#11).
+  // It used to be reachable here by its id. Answered as "not found", like any invoice the login may not see.
+  if (!contactId && payment.account_id) {
+    const identity = await resolvePortalIdentity(user)
+    if (identity.kind === 'teammate' && !teammateMayOpenPayment({ createdAt: identity.createdAt, capabilities: identity.capabilities }, { created_at: payment.created_at, status: payment.status })) {
+      return NextResponse.json({ error: 'Invoice not found' }, { status: 404 })
+    }
   }
 
   // Fetch line items + account (if any) + contact. For a contact-scoped

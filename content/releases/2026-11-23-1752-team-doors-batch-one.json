@@ -1,0 +1,5 @@
+{
+  "title": "Six small team-login gaps closed (formation link, reports, alerts, PDFs, audit, attach tool)",
+  "tag": "behind-the-scenes",
+  "text": "Six small gaps left over from the Team Powers review are closed. A team login no longer sees the one-time \"add your members\" link on a company's formation page. Report-an-issue only files a problem under a company the person really belongs to. The test-alert button needs the Chat power. A team login can no longer open an older invoice PDF by its id past its own start date, unless it has the \"see earlier invoices\" power. Opening an owner's shared passport or ID now leaves a line in the portal audit log. The staff tool that attaches files to a client chat refuses personal papers. Nothing changes for owners, members or staff on screen."
+}

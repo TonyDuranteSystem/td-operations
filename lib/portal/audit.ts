@@ -11,6 +11,7 @@ export type PortalAction =
   | 'message_sent'
   | 'document_uploaded'
   | 'document_downloaded'
+  | 'shared_document_opened'
   | 'invoice_created'
   | 'invoice_sent'
   | 'invoice_pdf'
