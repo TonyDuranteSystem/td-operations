@@ -640,11 +640,13 @@ export async function POST(request: NextRequest) {
     await waitForPhoneLeg(pushNotifyAdmin(account_id, resolvedContactId, alertPreview).catch(() => {}))
 
     if (!isOfficeOpen()) {
-      sendOfficeClosedAutoReply({
+      // wait (at most 4 s) for the reply too: a serverless function may be stopped as soon as it has answered, and this is the message
+      // a client most needs on a closed day (it carries the reopen day during a planned closure)
+      await waitForPhoneLeg(sendOfficeClosedAutoReply({
         account_id: account_id || null,
         contact_id: resolvedContactId,
         topic,
-      }).catch(() => {})
+      }).catch(() => {}))
     }
   }
 
