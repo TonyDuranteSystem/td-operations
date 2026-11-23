@@ -54,12 +54,17 @@ const isInstallment = (row: BillToPaymentRow): boolean =>
  * Why this invoice may NOT move to another company (or to the person), or null when it may.
  * An installment is counted per company; a credit note sits on the company it reduces.
  */
-export function companyMoveBlockedReason(row: BillToPaymentRow, creditNotesReferencing: number): string | null {
+export function companyMoveBlockedReason(row: BillToPaymentRow, creditNotesReferencing: number, creditAppliedToThis = false): string | null {
   if (isInstallment(row)) {
     return "An installment invoice stays with its company (the installment is counted per company). To change the name printed on it, choose a payer instead of another company."
   }
   if (creditNotesReferencing > 0) {
     return "A credit note points at this invoice, so it cannot move to another company. To change the name printed on it, choose a payer instead."
+  }
+  // Credit that was netted into this invoice came out of ITS company's credit pool. Moving the invoice would leave that credit spent
+  // on an invoice that sits in another company's books (bug-hunter follow-up, job e62bc2b6).
+  if (creditAppliedToThis) {
+    return "Credit from this company's account was already applied to this invoice, so it stays with that company. To change the name printed on it, choose a payer instead of another company."
   }
   return null
 }
@@ -71,7 +76,7 @@ export function companyMoveBlockedReason(row: BillToPaymentRow, creditNotesRefer
 export function decideBillToChange(
   row: BillToPaymentRow,
   rawBillTo: unknown,
-  ctx: { creditNotesReferencing: number },
+  ctx: { creditNotesReferencing: number; /** Credit from the invoice's company was netted into it (a "Credit applied" line, or a credit note used up on it). */ creditAppliedToThis?: boolean },
 ): BillToDecision {
   const parsed = parseBillTo(rawBillTo)
   if (parsed.error) return { ok: false, error: parsed.error.replace(/^Invoice to: /, "Bill to: ") }
@@ -99,29 +104,51 @@ export function decideBillToChange(
   }
 
   if (plan.accountChanged) {
-    const blocked = companyMoveBlockedReason(row, ctx.creditNotesReferencing)
+    const blocked = companyMoveBlockedReason(row, ctx.creditNotesReferencing, ctx.creditAppliedToThis === true)
     if (blocked) return { ok: false, error: blocked }
   }
   return { ok: true, plan }
 }
 
+/** One line, single spaces: nothing typed anywhere can ever start a new line in the notes. */
+function oneLine(text: string): string {
+  return text.replace(/\s+/g, " ").trim()
+}
+
+/** The calendar date in New York (YYYY-MM-DD). The server clock is UTC, which is already "tomorrow" after 8 pm New York time. */
+export function billToNoteDate(now: Date = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(now)
+}
+
 /** The dated line added to the invoice's INTERNAL notes (never copied to the client). */
 export function billToChangeNote(p: { date: string; from: string; to: string; by: string }): string {
-  return `${p.date}: Bill to changed from "${p.from}" to "${p.to}" — ${p.by}.`
+  return `${p.date}: Bill to changed from "${oneLine(p.from)}" to "${oneLine(p.to)}" — ${oneLine(p.by)}.`
 }
 
 /** Marker words in the note line that say the CLIENT (not staff) named the payer. */
 export const CLIENT_NAMED_BY = "named by the client on the payment page"
 
+/** The last "Bill to changed from" line in the internal notes, or null when there is none. */
+function lastBillToChangeLine(notes: string | null | undefined): string | null {
+  const lines = (notes ?? "").split("\n").filter((l) => l.includes("Bill to changed from"))
+  return lines.length ? lines[lines.length - 1].trimEnd() : null
+}
+
 /**
- * Did the client name the CURRENT payer? True only when the LAST "Bill to changed"
- * line in the internal notes was written by the client's box — so a later change by
- * staff clears the Finance mark. No new column: the notes line is the record.
+ * Did the client name the CURRENT payer? True only when the LAST "Bill to changed" line in the internal notes was
+ * written by the client's box — so a later change by staff clears the Finance mark. No new column: the notes line is
+ * the record. The marker must be the END of the line (where only our own text goes): a payer name that merely CONTAINS
+ * the marker words, typed by a client, can no longer make a staff change look client-made.
  */
 export function lastBillToChangeWasByClient(notes: string | null | undefined): boolean {
-  const lines = (notes ?? "").split("\n").filter((l) => l.includes("Bill to changed from"))
-  const last = lines[lines.length - 1]
-  return Boolean(last && last.includes(CLIENT_NAMED_BY))
+  const last = lastBillToChangeLine(notes)
+  return last !== null && last.endsWith(` — ${CLIENT_NAMED_BY}.`)
+}
+
+/** True when the last Bill to change on the invoice was made by STAFF (a staff decision the client's box must not overwrite). */
+export function lastBillToChangeWasByStaff(notes: string | null | undefined): boolean {
+  const last = lastBillToChangeLine(notes)
+  return last !== null && !last.endsWith(` — ${CLIENT_NAMED_BY}.`)
 }
 
 /** Append a line to existing internal notes (blank line between entries). */

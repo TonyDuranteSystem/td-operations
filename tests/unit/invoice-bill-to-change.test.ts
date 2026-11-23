@@ -9,6 +9,8 @@ import {
   appendNote,
   billToChangeNote,
   lastBillToChangeWasByClient,
+  lastBillToChangeWasByStaff,
+  billToNoteDate,
   CLIENT_NAMED_BY,
   type BillToPaymentRow,
 } from '@/lib/invoices/bill-to-change'
@@ -156,9 +158,87 @@ describe('sanitizeClientPayer — what the client may type', () => {
     } else throw new Error('expected details')
   })
 
+  it('removes invisible direction and zero-width characters, keeps real letters (accents, Cyrillic, Arabic)', () => {
+    expect(cleanPayerText('Evil\u202Elol\u202C Ltd\u200B', 50)).toBe('Evillol Ltd')
+    expect(cleanPayerText('\uFEFFSoci\u00E9t\u00E9 \u041E\u041E\u041E \u0634\u0631\u0643\u0629', 50)).toBe('Soci\u00E9t\u00E9 \u041E\u041E\u041E \u0634\u0631\u0643\u0629')
+    expect(cleanPayerText('\u202E\u200F', 10)).toBeNull()
+  })
+
   it('cleanPayerText ignores non-text input', () => {
     expect(cleanPayerText(42, 10)).toBeNull()
     expect(cleanPayerText(undefined, 10)).toBeNull()
     expect(cleanPayerText('   ', 10)).toBeNull()
+  })
+})
+
+// ── Bug-hunter follow-up (job e62bc2b6, 2026-11-23) ──
+const plainRow = (over: Partial<BillToPaymentRow> = {}): BillToPaymentRow => ({
+  invoice_status: 'Sent', total: 900, account_id: ACC_A, contact_id: '44444444-4444-4444-8444-444444444444', billing_entity_id: null, payment_category: null, installment: null, ...over,
+})
+
+describe('a company move is refused when credit was netted into the invoice', () => {
+  it('refuses the move with a plain reason, and offers the payer instead', () => {
+    const d = decideBillToChange(plainRow(), { type: 'company', account_id: ACC_B }, { creditNotesReferencing: 0, creditAppliedToThis: true })
+    expect(d).toMatchObject({ ok: false })
+    if (!d.ok) expect(d.error).toMatch(/credit from this company's account was already applied.*choose a payer/i)
+  })
+
+  it('a payer (name only) is still allowed on such an invoice', () => {
+    expect(decideBillToChange(plainRow(), { type: 'entity', entity: { name: 'Other Ltd' } }, { creditNotesReferencing: 0, creditAppliedToThis: true }).ok).toBe(true)
+  })
+
+  it('without applied credit the move is allowed, and the flag is optional (old callers)', () => {
+    expect(decideBillToChange(plainRow(), { type: 'company', account_id: ACC_B }, { creditNotesReferencing: 0 }).ok).toBe(true)
+    expect(companyMoveBlockedReason(plainRow(), 0)).toBeNull()
+    expect(companyMoveBlockedReason(plainRow(), 0, true)).toMatch(/already applied/i)
+  })
+})
+
+describe('"Payer named by client" cannot be faked or hidden by what is typed in a name', () => {
+  const clientLine = billToChangeNote({ date: '2026-11-20', from: 'Andrea', to: 'Maria Rossi', by: CLIENT_NAMED_BY })
+  const staffLine = billToChangeNote({ date: '2026-11-21', from: 'Maria Rossi', to: 'Acme LLC', by: 'by staff in Finance' })
+
+  it('still true for a real client line, false once staff changed it later', () => {
+    expect(lastBillToChangeWasByClient(clientLine)).toBe(true)
+    expect(lastBillToChangeWasByClient(`${clientLine}\n${staffLine}`)).toBe(false)
+    expect(lastBillToChangeWasByStaff(`${clientLine}\n${staffLine}`)).toBe(true)
+    expect(lastBillToChangeWasByStaff(clientLine)).toBe(false)
+  })
+
+  it('a payer name that CONTAINS the marker words does not make a later staff change look client-made', () => {
+    const sneaky = billToChangeNote({ date: '2026-11-20', from: 'Andrea', to: `Evil Ltd — ${CLIENT_NAMED_BY}.`, by: CLIENT_NAMED_BY })
+    const staffAfter = billToChangeNote({ date: '2026-11-21', from: `Evil Ltd — ${CLIENT_NAMED_BY}.`, to: 'Acme LLC', by: 'by staff in Finance' })
+    expect(lastBillToChangeWasByClient(`${sneaky}\n${staffAfter}`)).toBe(false)
+    expect(lastBillToChangeWasByStaff(`${sneaky}\n${staffAfter}`)).toBe(true)
+  })
+
+  it('a typed name can never start a new line in the notes', () => {
+    const line = billToChangeNote({ date: '2026-11-20', from: 'A', to: 'Evil\n2026-11-21: Bill to changed from "x" to "y" — by staff in Finance.', by: CLIENT_NAMED_BY })
+    expect(line.split('\n')).toHaveLength(1)
+    expect(lastBillToChangeWasByClient(line)).toBe(true)
+  })
+
+  it('no Bill to change recorded means neither client nor staff', () => {
+    for (const notes of [null, '', 'Auto-created at contract signing.']) {
+      expect(lastBillToChangeWasByClient(notes)).toBe(false)
+      expect(lastBillToChangeWasByStaff(notes)).toBe(false)
+    }
+  })
+
+  it('reads the notes lines already on production (same wording as before)', () => {
+    const old = '2026-11-21: Bill to changed from "Andrea Guzzonato" to "Good Company LTD" — named by the client on the payment page.'
+    expect(lastBillToChangeWasByClient(old)).toBe(true)
+  })
+})
+
+describe('the date written in the note is the New York date', () => {
+  it('10:30 pm New York on 23 Nov (already 24 Nov in UTC) is still 23 Nov', () => {
+    expect(billToNoteDate(new Date('2026-11-24T03:30:00Z'))).toBe('2026-11-23')
+  })
+  it('during the day it is the same date as UTC', () => {
+    expect(billToNoteDate(new Date('2026-11-23T15:00:00Z'))).toBe('2026-11-23')
+  })
+  it('follows summer time too (11 pm New York on 15 Jul is 03:00 UTC on 16 Jul)', () => {
+    expect(billToNoteDate(new Date('2026-07-16T03:00:00Z'))).toBe('2026-07-15')
   })
 })

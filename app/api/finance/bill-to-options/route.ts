@@ -13,6 +13,10 @@ import { supabaseAdmin } from "@/lib/supabase-admin"
 import { requireStaffRoute } from "@/lib/auth/require-staff-route"
 import { resolvePaymentRecipient } from "@/lib/portal/resolve-payment-recipient"
 import { companyMoveBlockedReason, lastBillToChangeWasByClient, BILL_TO_EDITABLE_STATUSES } from "@/lib/invoices/bill-to-change"
+import { pickPayerPerson } from "@/lib/invoices/payer-person"
+import { invoiceHasAppliedCredit } from "@/lib/invoices/applied-credit"
+import { createClient } from "@/lib/supabase/server"
+import { isStaffUser } from "@/lib/auth"
 
 export const dynamic = "force-dynamic"
 
@@ -21,6 +25,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 export async function GET(req: Request) {
   const denied = await requireStaffRoute()
   if (denied) return denied
+  // Money screen: TD staff only (the shared gate above also lets a managed partner or marketing login through in code).
+  const { data: { user } } = await createClient().auth.getUser()
+  if (!isStaffUser(user)) return NextResponse.json({ error: "Not authorized" }, { status: 403 })
 
   const url = new URL(req.url)
   const paymentId = url.searchParams.get("payment_id") ?? ""
@@ -41,18 +48,18 @@ export async function GET(req: Request) {
     .eq("credit_for_payment_id", pay.id)
     .limit(1)
   const creditNotes = creditNoteRows?.length ?? 0
+  const creditApplied = await invoiceHasAppliedCredit(pay.id)
 
   // The person the payers hang on: the invoice's own contact, else its company's owner.
   let personId = pay.contact_id
   if (!personId && pay.account_id) {
     const { data: links } = await supabaseAdmin
       .from("account_contacts")
-      .select("contact_id, role")
+      .select("contact_id, role, is_primary")
       .eq("account_id", pay.account_id)
       .is("access_revoked_at", null)
-      .limit(10)
-    const rows = (links ?? []) as Array<{ contact_id: string; role: string | null }>
-    personId = (rows.find((l) => l.role?.toLowerCase().includes("owner")) ?? rows[0])?.contact_id ?? null
+    // Same pick as the save (lib/invoices/payer-person.ts), so the payers listed here are the ones a save attaches to.
+    personId = pickPayerPerson((links ?? []) as Array<{ contact_id: string; role: string | null; is_primary: boolean | null }>)
   }
 
   const companies = new Map<string, string>()
@@ -107,6 +114,7 @@ export async function GET(req: Request) {
       installment: pay.installment,
     },
     creditNotes,
+    creditApplied,
   )
 
   return NextResponse.json({

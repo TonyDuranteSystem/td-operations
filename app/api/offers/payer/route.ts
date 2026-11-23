@@ -4,7 +4,7 @@ import { readOfferRequest } from '@/lib/offers/public-offer-request'
 import { resolvePublicOfferAccess } from '@/lib/offers/public-offer-access'
 import { sanitizeClientPayer } from '@/lib/offers/client-payer'
 import { resolveInvoiceTarget } from '@/lib/offers/bill-to'
-import { CLIENT_NAMED_BY } from '@/lib/invoices/bill-to-change'
+import { CLIENT_NAMED_BY, lastBillToChangeWasByStaff } from '@/lib/invoices/bill-to-change'
 import { changeInvoiceBillTo } from '@/lib/operations/invoice-bill-to'
 
 export const dynamic = 'force-dynamic'
@@ -25,6 +25,9 @@ export const dynamic = 'force-dynamic'
  * payer — BUT ONLY when the invoice sits on the person (no company). On a company's invoice the
  * later parts must follow part 1 (same company, same payer); writing a payer into the offer
  * would send them to the person instead (bug-hunter pass, job e62bc2b6, 2026-11-22).
+ * (Only when the offer has NO explicit "Invoice to": later parts then follow part 1. If staff set an explicit "Invoice to" on the
+ * offer, later parts follow THAT, whatever payer the client names on part 1 — a known, deliberate limit, see lib/plan-invoices/raise.ts.)
+ * Once STAFF have changed the Bill to in Finance, this box is closed for that invoice (the client is sent to the chat).
  * A database read that fails is an error, never an empty answer: the client must not be told
  * "Saved" when it was not.
  */
@@ -54,13 +57,16 @@ export async function POST(req: NextRequest) {
     .maybeSingle()
   if (actErr) return failed('read the offer', actErr.message)
   const invoiceId = act?.portal_invoice_id ?? null
-  let invoice: { id: string; invoice_status: string | null; billing_entity_id: string | null; account_id: string | null } | null = null
+  let invoice: { id: string; invoice_status: string | null; billing_entity_id: string | null; account_id: string | null; notes: string | null } | null = null
   if (invoiceId) {
-    const { data, error } = await supabaseAdmin.from('payments').select('id, invoice_status, billing_entity_id, account_id').eq('id', invoiceId).maybeSingle()
+    const { data, error } = await supabaseAdmin.from('payments').select('id, invoice_status, billing_entity_id, account_id, notes').eq('id', invoiceId).maybeSingle()
     if (error) return failed('read the invoice', error.message)
     invoice = data ?? null
   }
   const paid = invoice ? !OPEN_STATUSES.has(invoice.invoice_status ?? '') : false
+  // Once STAFF have set who is billed (Finance → Bill to), the client's box must not undo it: the last Bill to change in the
+  // invoice's notes was made by staff. The client is told to use the chat instead (bug-hunter follow-up, job e62bc2b6).
+  const lockedByStaff = invoice ? lastBillToChangeWasByStaff(invoice.notes) : false
 
   if (r.body.action === 'get') {
     let payer: { name: string; address: string | null; country: string | null; vat_number: string | null } | null = null
@@ -73,7 +79,7 @@ export async function POST(req: NextRequest) {
       if (beErr) return failed('read the payer', beErr.message)
       if (be) payer = { name: be.entity_name, address: be.billing_address, country: be.country, vat_number: be.vat_number }
     }
-    return NextResponse.json({ ok: true, available: access.offer.status === 'signed', editable: !paid, payer })
+    return NextResponse.json({ ok: true, available: access.offer.status === 'signed', editable: !paid && !lockedByStaff, payer })
   }
 
   if (r.body.action !== 'set') return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
@@ -84,6 +90,12 @@ export async function POST(req: NextRequest) {
   if (paid) {
     return NextResponse.json(
       { error: 'This invoice is already paid, so it can no longer be changed here. Please tell us in the portal chat and we will update it.' },
+      { status: 409 },
+    )
+  }
+  if (lockedByStaff) {
+    return NextResponse.json(
+      { error: 'We have already set who this invoice is billed to, so it can no longer be changed here. Please tell us in the portal chat and we will update it.' },
       { status: 409 },
     )
   }
