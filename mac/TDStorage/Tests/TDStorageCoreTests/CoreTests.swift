@@ -874,3 +874,45 @@ final class LoopbackQueryTests: XCTestCase {
         XCTAssertEqual(LoopbackSignIn.queryValues(nil), [:])
     }
 }
+
+final class SingleCopyTests: XCTestCase {
+    typealias C = SingleCopy.Copy
+    let real = C(pid: 100, path: "/Applications/TDStorage.app", build: 13, runningSeconds: 900_000)
+    let stray = C(pid: 200, path: "/Users/x/Developer/td-operations-builds/TDStorage-production-0.2.3/export/TDStorage.app", build: 13, runningSeconds: 60)
+
+    func testAloneStaysAndEndsNobody() {
+        XCTAssertEqual(SingleCopy.decide(me: real, others: [real]), .stay(end: []))
+        XCTAssertEqual(SingleCopy.decide(me: stray, others: []), .stay(end: []))
+    }
+    func testTheCopyInApplicationsStaysAndEndsTheStrayOne() {
+        XCTAssertEqual(SingleCopy.decide(me: real, others: [real, stray]), .stay(end: [200]))
+        XCTAssertEqual(SingleCopy.decide(me: stray, others: [real, stray]), .yield(to: 100))
+    }
+    func testApplicationsBeatsEvenANewerBuildElsewhere() {
+        let newerElsewhere = C(pid: 300, path: "/Users/x/Downloads/TDStorage.app", build: 99, runningSeconds: 5)
+        XCTAssertEqual(SingleCopy.decide(me: newerElsewhere, others: [real]), .yield(to: 100))
+        XCTAssertEqual(SingleCopy.decide(me: real, others: [newerElsewhere]), .stay(end: [300]))
+    }
+    func testAnUpdatedCopyReplacesTheOldOneInTheSameFolder() {
+        let old = C(pid: 400, path: "/Applications/TDStorage.app", build: 12, runningSeconds: 1_000_000)
+        let new = C(pid: 500, path: "/Applications/TDStorage.app", build: 13, runningSeconds: 10)
+        XCTAssertEqual(SingleCopy.decide(me: old, others: [old, new]), .yield(to: 500))
+        XCTAssertEqual(SingleCopy.decide(me: new, others: [old, new]), .stay(end: [400]))
+    }
+    func testASingleCopyOutsideApplicationsIsLeftAlone() {
+        // a Mac whose only copy lives in Downloads must keep working
+        XCTAssertEqual(SingleCopy.decide(me: stray, others: [stray]), .stay(end: []))
+    }
+    func testTwoEqualCopiesNeverBothStayOrBothGo() {
+        let a = C(pid: 10, path: "/Applications/TDStorage.app", build: 13, runningSeconds: nil)
+        let b = C(pid: 11, path: "/Applications/TDStorage.app", build: 13, runningSeconds: nil)
+        XCTAssertEqual(SingleCopy.decide(me: a, others: [a, b]), .stay(end: [11]))
+        XCTAssertEqual(SingleCopy.decide(me: b, others: [a, b]), .yield(to: 10))
+    }
+    func testThreeCopiesOnlyTheBestStays() {
+        let old = C(pid: 400, path: "/Users/x/a/TDStorage.app", build: 5, runningSeconds: 9)
+        XCTAssertEqual(SingleCopy.decide(me: real, others: [real, stray, old]), .stay(end: [200, 400]))
+        XCTAssertEqual(SingleCopy.decide(me: old, others: [real, stray, old]), .yield(to: 100))
+        XCTAssertEqual(SingleCopy.decide(me: stray, others: [real, stray, old]), .yield(to: 100))
+    }
+}

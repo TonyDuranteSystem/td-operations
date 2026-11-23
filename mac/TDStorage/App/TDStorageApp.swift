@@ -63,9 +63,32 @@ final class QuitGuard: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + KeepAlive.allowSeconds) { allowQuit = false }
     }
     private var powerOff: NSObjectProtocol?
+    private var copyCheck: Timer?
     func applicationDidFinishLaunching(_ notification: Notification) {
         // posted by macOS before a shutdown, restart or logout — from then on every quit is allowed
         powerOff = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main) { _ in QuitGuard.allowQuitBriefly() }
+        // ONE copy of the app per Mac: at start and once a minute (a stray copy from a builds folder, an old version after an update)
+        enforceSingleCopy()
+        copyCheck = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.enforceSingleCopy() }
+    }
+    /// Every copy asks the same ranking question (SingleCopy.decide): the copy in Applications / the newest build stays and ends the others; a lower-ranked
+    /// copy ends itself. Copies with a different app id (test builds) are never looked at.
+    private func enforceSingleCopy() {
+        guard let id = Bundle.main.bundleIdentifier else { return }
+        func copy(_ app: NSRunningApplication) -> SingleCopy.Copy? {
+            guard let url = app.bundleURL else { return nil }
+            let build = Int((Bundle(url: url)?.infoDictionary?["CFBundleVersion"] as? String) ?? "") ?? 0
+            return SingleCopy.Copy(pid: app.processIdentifier, path: url.path, build: build, runningSeconds: app.launchDate.map { Date().timeIntervalSince($0) })
+        }
+        let running = NSRunningApplication.runningApplications(withBundleIdentifier: id).filter { !$0.isTerminated }
+        guard let mine = running.first(where: { $0.processIdentifier == ProcessInfo.processInfo.processIdentifier }).flatMap(copy) else { return }
+        switch SingleCopy.decide(me: mine, others: running.compactMap(copy)) {
+        case .yield:
+            QuitGuard.allowQuitBriefly()
+            NSApp.terminate(nil)
+        case .stay(let end):
+            for pid in end { NSRunningApplication(processIdentifier: pid)?.forceTerminate() }
+        }
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let event = NSAppleEventManager.shared().currentAppleEvent
