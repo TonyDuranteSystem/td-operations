@@ -1,4 +1,5 @@
 # Partners & Team Access
+_Last verified against code: 2026-11-23 (the "not built" claims are gone) — Claude (dev job `e59dd470`, Team Powers bug hunt, SANDBOX → pull request; docs only). This doc still called Portal Team Access "PLANNED — NOT built" and said "do not assume any of it exists in production" — contradicted by the code (`lib/portal/team/*`, `app/api/portal/team/*`, the migrations `20260529-1755-portal-team-members.sql` and `20261117-2300-team-foundation.sql`) and by production (3 team logins, a record table, shares table). Sections 0 and 3, the business-rule line, the file / table lists and the gotcha now say BUILT and LIVE and point to `portal.md`. Nothing about partner payouts changed._
 _Last verified against code: 2026-11-19 — Claude (dev job `beb43385`, member portal access delivery A, SANDBOX → pull request): No behaviour change: the partner pages and billing contact lookup under `app/portal/partner/` and `app/api/portal/partner/` only gained `// portal-access-ok:` reason lines (a roster view of a client company keeps every link). See `docs/systems/portal.md`._
 _Last verified against code: 2026-11-16 (later) — Claude (dev job `992c2bbb`, SANDBOX): CORRECTION to the note below — the partner page's "Activity & to-dos" box is back to plain links and no longer takes a name; nothing on the partner page opens a chat window. See `portal-chats.md`._
 _Last verified against code: 2026-11-16 — Claude (dev job `992c2bbb`, SANDBOX): the partner page's "Activity & to-dos" box (`EntityActivitySummary`, `app/(dashboard)/partners/[id]/page.tsx`) now passes the partner's name so its "Open in chat" link — which opens the partner's Portal Chats as a floating window — can title the window. No other change to partners. See `portal-chats.md`._
@@ -24,7 +25,7 @@ _Prior: 2026-05-29 — Claude (read lib/partners/payout-calc.ts, portal_team_sen
 Three distinct things that share the word "team" / "partner" — keep them separate:
 1. **Partner relationships & payouts** (built) — external partners who refer clients under a commission model; TD computes and pays their commission.
 2. **Internal team messaging** (built) — `portal_team_send`: staff-only notes, NOT client-visible.
-3. **Portal Team Access** (PLANNED, not built) — letting a client *owner* invite their *employees* into the company portal.
+3. **Portal Team Access** (BUILT and LIVE — "Team Powers", Nov 2026) — letting a company's *owner or member* give colleagues their own login for ONE company. The full account is in `portal.md`.
 
 ## 1. Partner payouts (built)
 - `calculatePartnerPayout()` (`lib/partners/payout-calc.ts`, pure) computes what a partner is owed for one confirmed payment. Called from `activate-service` Step 3.6 when an offer has `partner_id` and `partner_payout_model != 'none'` and payment is confirmed. **The transaction is the source of truth, not the partner type** — the caller passes the per-transaction model + rate.
@@ -38,23 +39,23 @@ Three distinct things that share the word "team" / "partner" — keep them separ
 - Backed by `internal_threads` / `internal_messages` (NOT `portal_messages` — that is the client chat). Rebuilt Phase 1 (2026-07-07, sandbox) into a full Slack-replacement workspace: channels, DMs, client discussions, reactions/edit/pin/search, @mentions + @claude AI worker, per-user unread. **Full detail: `docs/systems/team-workspace.md`.**
 - `portal_team_send` (`lib/mcp/tools/portal.ts`) — an **internal staff-only** message linked to an account/contact, writes to `internal_threads`/`internal_messages`, shown in CRM **Portal Chats → Team tab** (and the new `/team-chat`). **Never visible to clients.** Distinct from the client-facing portal chat in `portal.md`.
 
-## 3. Portal Team Access (PLANNED — NOT built)
-- Design goal: a client **owner** (SMLLC owner contact / MMLLC SS-4 signer) invites **employees** into ONE company's portal with per-section permission toggles (data-driven, server-enforced, default-deny). Non-delegable: signing legal docs (view-only for teammates) + team management.
-- Architecture (Option B): an **independent `portal_team_members` table**; teammates auth as `role='client'` with markers; a `resolvePortalIdentity` seam; teammates are NOT contacts and NOT in `account_contacts` (so they're invisible to billing/ops).
-- **Status: design FINAL, NOT built** — dev_task `4cf522c1`, design sysdoc `portal-team-access-design`. **Do not assume any of it exists in production** until verified.
+## 3. Portal Team Access (BUILT and LIVE — "Team Powers"; read `portal.md`)
+- What it is: any CURRENT **owner or member** of a company gives colleagues their own login for ONE company, limited by per-power ticks (data-driven, server-enforced, default-deny; never a tick: signing, generating documents, changing owners / members, managing the team). Giving more power needs the owner's notice AND their own password; every change is a line in an append-only record; staff can switch a login off or on from the company's Team card.
+- Architecture (Option B): an **independent `portal_team_members` table**; teammates auth as `role='client'` with the markers `kind='team_member'`, `account_id`, `must_change_password` (and a synthetic email); a `resolvePortalIdentity` seam; teammates are NOT contacts and NOT in `account_contacts` (so they're invisible to billing/ops).
+- **Status: BUILT and live on production** (Master Rules MM6 records the Team Powers exception; production has team logins). The original plan was dev_task `4cf522c1` + design sysdoc `portal-team-access-design` (history only). The code is `lib/portal/team/`, `app/api/portal/team/`, `app/portal/team/`, the staff card `components/accounts/team-section.tsx`; the dev-board job is `e59dd470`.
 
 ## Business rules
 - **Partner payout is per-transaction** and **EUR-denominated**; `price_difference` is clamped to ≥0; a missing base cost → `manual_review`, never a silent 0.
 - **A payment-plan deal's partner setup payout is deferred, not paid at ordinary activation (2026-08-14)** — release only via the account page's "Release commission" action once the whole plan is settled in real cash. See `referrals-circleback.md` for the shared guard.
 - **`portal_team_send` is staff-only** — never surfaces to a client.
-- **Portal Team Access is not live** — verify dev_task `4cf522c1` before acting on anything teammate-related.
+- **Portal Team Access is live** (Team Powers) — read `portal.md` (the dated "Team Powers" entries) and the dev-board job `e59dd470` before acting on anything teammate-related.
 
 ## How it's built — key files & tables
-- Files: `lib/partners/payout-calc.ts`, `lib/operations/activation.ts` (Step 3.6 caller), `lib/mcp/tools/portal.ts` (`portal_team_send`), `app/(dashboard)/partners`, `app/portal/partner/*`. Planned: per `portal-team-access-design`.
-- Tables: `client_partners`, `referrals`, `referral_payouts`, `payments` (partner invoices), `portal_messages` (the internal team thread). Planned: `portal_team_members`.
+- Files: `lib/partners/payout-calc.ts`, `lib/operations/activation.ts` (Step 3.6 caller), `lib/mcp/tools/portal.ts` (`portal_team_send`), `app/(dashboard)/partners`, `app/portal/partner/*`. Team Access: `lib/portal/team/*`, `app/api/portal/team/*`, `app/portal/team`, `components/accounts/team-section.tsx` (see `portal.md`).
+- Tables: `client_partners`, `referrals`, `referral_payouts`, `payments` (partner invoices), `portal_messages` (the internal team thread). Team Access: `portal_team_members`, `portal_team_events` (append-only record), `portal_team_document_shares`.
 
 ## Gotchas, invariants & past bugs
-- **"Team" is overloaded** — `portal_team_send` = internal staff messaging (built); Portal Team Access = client employees (NOT built). Don't conflate them.
+- **"Team" is overloaded** — `portal_team_send` = internal staff messaging (built); Portal Team Access = a company's colleagues with their own login (built, live). Don't conflate them.
 - **`calculatePartnerPayout` never throws** — it returns an `error` field; the caller must handle `manual_review` / skip. Treating `amount: null` as `0` would underpay a partner.
 - **`price_difference` needs `td_base_costs[service]`** — if absent, it's `manual_review`, not a zero payout.
 - **FX is the caller's job** — the helper assumes EUR; passing a USD amount silently mis-pays.
