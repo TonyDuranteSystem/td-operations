@@ -3,6 +3,7 @@
 import { useRef, useState } from 'react'
 import { Search, Loader2, X } from 'lucide-react'
 import { toast } from 'sonner'
+import { REFERRER_SEARCH_MIN_CHARS } from '@/lib/offers/referrer-draft'
 
 /**
  * The referrer attached to an offer. A referrer is normally a real client
@@ -41,9 +42,13 @@ const isPartnerAccount = (a: Actor) =>
 export function ReferrerPicker({
   value,
   onChange,
+  onDraftChange,
 }: {
   value: ReferrerValue
   onChange: (v: ReferrerValue) => void
+  /** Tells the window what is currently TYPED in the search box (empty once someone is picked or the box is left),
+   *  so Create Offer can refuse a name that was typed but never picked instead of saving no referrer. */
+  onDraftChange?: (typedSearch: string) => void
 }) {
   const [q, setQ] = useState('')
   const [hits, setHits] = useState<Actor[]>([])
@@ -58,6 +63,7 @@ export function ReferrerPicker({
 
   function search(term: string) {
     setQ(term)
+    onDraftChange?.(term)
     if (t.current) clearTimeout(t.current)
     if (term.trim().length < 2) { setHits([]); return }
     t.current = setTimeout(async () => {
@@ -78,6 +84,7 @@ export function ReferrerPicker({
   function pick(a: Actor) {
     setHits([])
     setQ('')
+    onDraftChange?.('')
     setFreeText(false)
     if (a.kind === 'account') {
       setContactCompanies([])
@@ -103,6 +110,7 @@ export function ReferrerPicker({
   function clearPick() {
     setContactCompanies([])
     setQ('')
+    onDraftChange?.('')
     onChange({ name: '', type: null, contactId: null, accountId: null })
   }
 
@@ -200,9 +208,14 @@ export function ReferrerPicker({
               </div>
             )}
           </div>
+          {q.trim().length >= REFERRER_SEARCH_MIN_CHARS && !loading && (
+            <p className="text-[11px] text-amber-700">
+              Not selected yet — click a result from the list, or clear the box. Typing alone does not set the referrer.
+            </p>
+          )}
           <button
             type="button"
-            onClick={() => setFreeText(true)}
+            onClick={() => { setFreeText(true); setQ(''); setHits([]); onDraftChange?.('') }}
             className="text-[11px] text-blue-600 hover:underline"
           >
             Not in the system? Enter a name manually

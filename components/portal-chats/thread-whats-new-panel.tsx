@@ -57,6 +57,8 @@ export const EVENT_KEY_LABELS: Record<string, string> = {
   aged_credit_applied: 'Credit Applied',
   financials_confirm_unlocked: 'Financials Unlocked',
   plan_referrer_ready_to_release: 'Referral',
+  plan_referrer_auto_released: 'Referral',
+  plan_referrer_auto_release_failed: 'Referral',
   recurring_invoice_generated: 'Invoice',
   itin_data_collection: 'ITIN',
   lease_signed: 'Lease',
