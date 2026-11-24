@@ -214,6 +214,18 @@ vi.mock("@/lib/whop-auto-plan", () => ({
   }),
 }))
 
+// Dev job 4bc21d49: an offer made from a lead with a PICKED referrer also sets that referrer on the lead.
+// The sync itself is tested in lead-referrer-sync.test.ts; here only the WIRING is asserted.
+const syncCalls: Array<{ leadId: string; offer: Record<string, unknown> }> = []
+let syncResult: { outcome: string; warning?: string } = { outcome: "set" }
+
+vi.mock("@/lib/operations/lead-referrer", () => ({
+  syncOfferReferrerToLead: vi.fn(async (leadId: string, offer: Record<string, unknown>) => {
+    syncCalls.push({ leadId, offer })
+    return syncResult
+  }),
+}))
+
 // ─── Reset ───────────────────────────────────────────────
 
 beforeEach(() => {
@@ -229,6 +241,8 @@ beforeEach(() => {
   whopCalls.length = 0
   creditLookups.length = 0
   creditHeld = { amount: 0, creditId: null }
+  syncCalls.length = 0
+  syncResult = { outcome: "set" }
 })
 
 // ─── Tests ───────────────────────────────────────────────
@@ -1020,5 +1034,70 @@ describe("createOffer — the dot-format warning must REACH the author", () => {
       token: "test-dot-clean",
     })
     expect((res.warnings ?? []).join(" ")).not.toContain("PRICE FORMAT")
+  })
+})
+
+describe("createOffer — the offer's picked referrer is set on the lead too (dev job 4bc21d49)", () => {
+  const base = {
+    client_name: "Lorenzo",
+    language: "it" as const,
+    payment_type: "bank_transfer" as const,
+    services: [{ name: "X", price: "$100" }],
+    cost_summary: [{ label: "Total", total: "$100" }],
+  }
+
+  it("a picked company referrer on an offer made from a lead is handed to the lead sync, with its ids and name", async () => {
+    leadFixture = { id: "lead-9", referrer_name: null, referrer_partner_id: null }
+    const { createOffer } = await import("@/lib/operations/offers")
+    const res = await createOffer({
+      ...base,
+      lead_id: "lead-9",
+      referrer_name: "HL International LLC",
+      referrer_type: "client",
+      referrer_account_id: "acct-hl",
+      referrer_contact_id: null,
+    })
+    expect(res.success).toBe(true)
+    expect(syncCalls).toEqual([
+      { leadId: "lead-9", offer: { referrerName: "HL International LLC", contactId: null, accountId: "acct-hl" } },
+    ])
+    const created = actionLogCalls.find((c) => c.action_type === "create")
+    expect((created?.details as Record<string, unknown>).lead_referrer_sync).toBe("set")
+  })
+
+  it("a typed name with no linked client is NEVER handed to the lead sync", async () => {
+    leadFixture = { id: "lead-9", referrer_name: null, referrer_partner_id: null }
+    const { createOffer } = await import("@/lib/operations/offers")
+    const res = await createOffer({ ...base, lead_id: "lead-9", referrer_name: "Instagram", referrer_type: "client" })
+    expect(res.success).toBe(true)
+    expect(syncCalls).toEqual([])
+    const created = actionLogCalls.find((c) => c.action_type === "create")
+    expect((created?.details as Record<string, unknown>).lead_referrer_sync).toBe("not_applicable")
+  })
+
+  it("an offer with no lead (a company or person page) never touches a lead", async () => {
+    const { createOffer } = await import("@/lib/operations/offers")
+    const res = await createOffer({ ...base, referrer_name: "HL International LLC", referrer_type: "client", referrer_account_id: "acct-hl" })
+    expect(res.success).toBe(true)
+    expect(syncCalls).toEqual([])
+  })
+
+  it("a mismatch with the lead's referrer comes back as a warning and the offer is still created", async () => {
+    syncResult = { outcome: "conflict", warning: "Referrer mismatch: the lead lists Y but this offer lists X." }
+    leadFixture = { id: "lead-9", referrer_name: null, referrer_partner_id: null }
+    const { createOffer } = await import("@/lib/operations/offers")
+    const res = await createOffer({ ...base, lead_id: "lead-9", referrer_name: "X", referrer_type: "client", referrer_contact_id: "contact-x" })
+    expect(res.success).toBe(true)
+    expect(res.warnings).toContain("Referrer mismatch: the lead lists Y but this offer lists X.")
+    expect(offerInserts.find((o) => !o.__update)?.referrer_contact_id).toBe("contact-x")
+  })
+
+  it("a referrer inherited from the lead (not picked) is handed over too, and the sync sees it is the same one", async () => {
+    leadFixture = { id: "lead-9", referrer_name: "Client Y", referrer_partner_id: null }
+    const { createOffer } = await import("@/lib/operations/offers")
+    const res = await createOffer({ ...base, lead_id: "lead-9", referrer_account_id: "acct-y" })
+    expect(res.success).toBe(true)
+    expect(syncCalls).toHaveLength(1)
+    expect(syncCalls[0].offer).toMatchObject({ accountId: "acct-y" })
   })
 })

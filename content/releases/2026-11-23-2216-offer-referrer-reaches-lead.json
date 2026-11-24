@@ -1,0 +1,12 @@
+{
+  "title": "Offers: a referrer can no longer be lost, and it now reaches the lead",
+  "tag": "fixed",
+  "text": "In the Create Offer window, a referrer you typed but did not pick from the list used to be silently dropped: the offer was saved with no referrer. Now the window stops you and says so, and the final \"Review Draft Details\" box shows the Referrer line (or None). When you pick a client, company or partner as referrer on an offer made from a lead, the lead gets that referrer too: it shows on the lead page, the referral appears in the referrer's Referrals list, and they get the usual thank-you message once. If the lead already has a different referrer, nothing is overwritten and a warning tells you to make them match.",
+  "points": [
+    "Create Offer: type a name in Referrer, do not click a result, press Review & Confirm — it stops you",
+    "Review Draft Details now shows who the referrer is",
+    "After creating the offer, open the lead: the Referrer box is filled in",
+    "A referrer typed as a plain name (not a client) stays on the offer only"
+  ],
+  "screenshot": "offer-referrer-review.png"
+}
