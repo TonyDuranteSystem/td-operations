@@ -1,0 +1,17 @@
+{
+  "title": "The referrer's reward on a split-payment deal is now issued automatically",
+  "tag": "improved",
+  "text": "When a client pays the setup fee in parts, the referrer's reward is now issued by itself as soon as every part is paid and the money has really been received. Before, someone had to click \"Release commission\". The team sees a note in the company's What's New feed saying it was issued. If the referrer was only typed as a name, the deal has a managed partner, or an invoice shows Paid without the money being recorded, nothing is paid by itself and the team gets a note instead. The Release commission button still works.",
+  "points": [
+    "Company page → What's New: \"reward was issued automatically\" appears once the last part is paid",
+    "Not paid by itself: a typed-name referrer, a managed partner, or money not confirmed on every invoice — the team gets a note to act on",
+    "If the automatic release ever fails, the team gets one note with the reason and the button still works"
+  ],
+  "stepsTitle": "How the reward is issued",
+  "steps": [
+    { "name": "Every part paid", "detail": "The client pays each part of the setup fee" },
+    { "name": "Money check", "detail": "Every part is marked Paid AND the money is really received", "flag": "auto" },
+    { "name": "Reward issued", "detail": "A credit on the referrer's account for the agreed share (normally 10%), in dollars", "flag": "auto" },
+    { "name": "Team told", "detail": "A line in the company's What's New feed", "flag": "new" }
+  ]
+}

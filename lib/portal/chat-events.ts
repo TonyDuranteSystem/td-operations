@@ -44,7 +44,9 @@ export type ChatEventKind =
   | "decision_responded"      // client answered a client_decision_request (approval/choice/text)
   | "aged_credit_applied"     // an old credit note reduced a bill (WS-A: credits never expire)
   | "financials_confirm_unlocked" // staff overrode the failed-statement hard block (card 4a39e0fd)
-  | "plan_referrer_ready_to_release" // a payment-plan deal with a referrer/partner is now fully paid — release commission
+  | "plan_referrer_ready_to_release" // a payment-plan deal with a referrer/partner is now fully paid — release commission (or: paid, cash not confirmed — check, then release)
+  | "plan_referrer_auto_released" // the 15-minute sweep issued the referrer's reward by itself once every part was paid in real cash (staff FYI, dev job e71d786c)
+  | "plan_referrer_auto_release_failed" // the automatic release was tried once and failed — staff fix the cause, then click Release commission (dev job e71d786c)
   | "recurring_invoice_generated" // the recurring-invoices cron auto-generated a Draft invoice — review + send it
   | "banking_wizard_submitted" // client submitted a Payset/Relay banking application via the portal wizard
   | "financials_attested" // client confirmed their generated P&L / Balance Sheet
@@ -497,6 +499,56 @@ export async function emitPlanReferrerReadyToReleaseEvent(params: {
     source: { table: "payments", id: params.payment_id },
     event_kind: "plan_referrer_ready_to_release",
   })
+}
+
+/** Staff FYI (dev job e71d786c): the reward was issued automatically. Idempotent on the settling payment's id. */
+export async function emitPlanReferrerAutoReleasedEvent(params: {
+  payment_id: string
+  contact_id?: string | null
+  account_id?: string | null
+  message: string
+}): Promise<EmitResult> {
+  return await emitClientChatEvent({
+    contact_id: params.contact_id ?? null,
+    account_id: params.account_id ?? null,
+    topic: "Referral",
+    message: params.message,
+    source: { table: "payments", id: params.payment_id },
+    event_kind: "plan_referrer_auto_released",
+  })
+}
+
+/** Staff action note (dev job e71d786c): the automatic release failed once. Its existence also STOPS further automatic attempts. */
+export async function emitPlanReferrerAutoReleaseFailedEvent(params: {
+  payment_id: string
+  contact_id?: string | null
+  account_id?: string | null
+  message: string
+}): Promise<EmitResult> {
+  return await emitClientChatEvent({
+    contact_id: params.contact_id ?? null,
+    account_id: params.account_id ?? null,
+    topic: "Referral",
+    message: params.message,
+    source: { table: "payments", id: params.payment_id },
+    event_kind: "plan_referrer_auto_release_failed",
+  })
+}
+
+/**
+ * Has this exact note already been written? Same global marker match `emitClientChatEvent` dedups on, exposed so a
+ * caller can decide BEFORE doing work (the sweep uses it to try an automatic release only once per deal).
+ */
+export async function chatEventExists(source: ChatEventSource, kind: ChatEventKind): Promise<boolean> {
+  const { data } = await supabaseAdmin
+    .from("portal_messages")
+    .select("id")
+    .eq("sender_type", "system")
+    .like("message", `%${buildMarker(source, kind)}%`)
+    .is("deleted_at", null)
+    .limit(1)
+    .maybeSingle()
+  return !!data
 }
 
 /**
