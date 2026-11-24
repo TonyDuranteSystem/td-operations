@@ -14,6 +14,7 @@ import { isOfficeOpen } from '@/lib/portal/office-hours'
 import { sendOfficeClosedAutoReply } from '@/lib/portal/auto-reply'
 import { buildChatQueryPlan, messageVisibleInPlan, type ChatQueryPlan } from '@/lib/portal/chat-scope'
 import { fetchClientUnreadRows, topicKey } from '@/lib/portal/client-chat-unread'
+import { buildTopicSummary, parseTopicParam, TOPIC_SUMMARY_ROW_LIMIT } from '@/lib/portal/chat-topic-summary'
 import { accountScopeWithHistory, filterByHistoryCutoff, historyKeepClauses } from '@/lib/documents/history-cutoff'
 import { getHistoryCutoffs, getHistoryView, getOpenedItemIds } from '@/lib/portal/history-cutoff'
 import { resolvePersonalNullInclusion } from '@/lib/portal/chat-scope-server'
@@ -25,6 +26,162 @@ import { resolveAccountMembersForChat } from '@/lib/portal/addressed-to'
 import { buildPortalChatLink } from '@/lib/portal/chat-link'
 import { chatPreviewText, stripSenderTranscripts, voiceUrls } from '@/lib/portal/chat-voice'
 import { NextRequest, NextResponse } from 'next/server'
+
+interface ReadScopeCtx {
+  isClientUser: boolean
+  authContactId: string | null | undefined
+  scopedPlan: ChatQueryPlan | null
+  contactIdParam: string | null
+  accountId: string | null
+  clientAccountIds: string[]
+}
+
+/**
+ * THE one place that decides which portal_messages rows a caller may read (visibility + thread scope). The message page, the
+ * pinned strip and the topic list (`topics=1`) all go through it, so the three can never drift apart — a topic list built with
+ * different scope rules than the messages is exactly the cross-chat leak class this route has had before (2026-07-08, 2026-08-07).
+ * It only ADDS filters to the query it is given, and hands it back as `{ query }`.
+ */
+async function applyChatReadScope<Q>(query: Q, ctx: ReadScopeCtx): Promise<{ query: Q }> {
+  const { isClientUser, authContactId, scopedPlan, contactIdParam, accountId, clientAccountIds } = ctx
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- supabase-js builder type changes with every filter; this only chains filters
+  let q = query as any
+
+  // Client users (contacts AND teammates) never see soft-deleted messages.
+  // Admins see them so they can render tombstones.
+  if (isClientUser) {
+    q = q.is('deleted_at', null)
+    // Hide ONLY internal chat-event notes — the ones carrying the
+    // `<!-- chat-event: -->` marker (e.g. "Client paid…", "fax to IRS"). These are
+    // written in OUR language ABOUT the client and feed the staff "What's New"
+    // view. Do NOT hide all sender_type='system' messages: the out-of-office
+    // auto-reply is sender_type='system' WITHOUT a marker and IS meant for the
+    // client. See sysdoc notification-center-workflow-integration-plan.
+    q = q.not('message', 'ilike', '%<!-- chat-event:%')
+  } else {
+    // STAFF reads: hide payment_received events from the Messages thread.
+    // "Client paid INV-…" is bookkeeping ABOUT the client, not conversation —
+    // it already surfaces as a What's New card (payment_received event key,
+    // lib/notifications/whats-new-defaults.ts), so rendering it inline in the
+    // chat duplicated it in the wrong place (Antonio, 2026-07-02, Umberto
+    // Moretti thread). Other event kinds keep their inline pills for now.
+    q = q.not('message', 'ilike', '%<!-- chat-event: kind=payment_received%')
+  }
+
+  // Per-company scoped plan takes precedence (client switched to a company /
+  // personal thread). Mirrors lib/portal/chat-scope.ts::messageVisibleInPlan.
+  if (scopedPlan) {
+    // A person who joined the company later sees its conversation only from their start date (dev job d14e823f). Their own
+    // messages, ones sent to them by name, and ones staff opened stay. The personal (no company) half is never cut.
+    let historyKeep: string | null = null
+    if (isClientUser && authContactId && scopedPlan.mode !== 'personal_only') {
+      const hv = await getHistoryView(scopedPlan.accountId, authContactId, 'message')
+      historyKeep = historyKeepClauses(hv.cutoff, { viewerContactId: authContactId, ownerColumns: ['contact_id', 'addressed_to_contact_id'], openedIds: Array.from(hv.opened) })
+    }
+    if (scopedPlan.mode === 'account') {
+      q = historyKeep ? q.or(accountScopeWithHistory(scopedPlan.accountId, historyKeep)) : q.eq('account_id', scopedPlan.accountId)
+    } else if (scopedPlan.mode === 'account_plus_personal') {
+      q = q.or(
+        `${accountScopeWithHistory(scopedPlan.accountId, historyKeep)},and(account_id.is.null,contact_id.eq.${scopedPlan.contactId})`
+      )
+    } else {
+      q = q.is('account_id', null).eq('contact_id', scopedPlan.contactId)
+    }
+  }
+  // Threading: contact_id param returns the unified per-contact thread.
+  // We also include messages saved with contact_id=NULL but account_id matching
+  // one of the contact's linked accounts — covers replies sent via the CRM
+  // dashboard or MCP tool that historically omitted contact_id.
+  else if (contactIdParam) {
+    // For client users, account IDs were already resolved above.
+    // For admin users, look them up now from account_contacts.
+    let threadAccountIds = clientAccountIds
+    if (!isClientUser && threadAccountIds.length === 0) {
+      threadAccountIds = await getClientAccountIds(contactIdParam)
+    }
+
+    // Superset rule shared with the What's New feed via lib/portal/thread-scope
+    // so the two thread definitions can never drift.
+    //
+    // STAFF ONLY (2026-07-08, "one message, one staff thread"): multi-member
+    // accounts have their own inbox thread, so the person thread excludes
+    // their messages — otherwise every MMLLC client message rendered in both
+    // the company AND the member's thread (Adam Mihaly / LUMA duplicate).
+    // Client callers on this legacy path keep the full superset: their portal
+    // views are scoped by buildChatQueryPlan, not by this exclusion.
+    const excludeAccountIds = !isClientUser
+      ? await multiMemberAccountIds(threadAccountIds)
+      : []
+    q = q.or(contactThreadOrFilter(contactIdParam, threadAccountIds, excludeAccountIds))
+  } else if (accountId) {
+    q = q.eq('account_id', accountId)
+  }
+
+
+  // Wrapped on purpose: a supabase-js query builder is awaitable, so returning it bare from an async function would RUN the query.
+  return { query: q as Q }
+}
+
+/** Per-tab unread for a client's scoped view, counted in the database (every row, not just the loaded page). '' = General. */
+async function clientUnreadByTopic(scopedPlan: ChatQueryPlan, authContactId: string): Promise<Record<string, number>> {
+  const planAccount = scopedPlan.mode === 'personal_only' ? [] : [scopedPlan.accountId]
+  const rows = await fetchClientUnreadRows(authContactId, planAccount)
+  const out: Record<string, number> = {}
+  for (const r of rows) {
+    if (!messageVisibleInPlan(scopedPlan, r)) continue
+    const k = topicKey(r.topic)
+    out[k] = (out[k] ?? 0) + 1
+  }
+  return out
+}
+
+/**
+ * `GET /api/portal/chat?...&topics=1` — the conversation's topic list (lib/portal/chat-topic-summary.ts), so a screen can show every
+ * topic's tab and unread badge however old its messages are. Built through applyChatReadScope with three narrow reads, so it sees
+ * exactly the rows the message page would (a client's start-date rule, a member's own thread, a teammate's one company included).
+ *  - names + newest message: visible rows that carry a topic (soft-deleted rows excluded, so a topic with only deleted messages has no tab);
+ *  - General's newest message: one row;
+ *  - unread: staff = a client/system message not yet read (not deleted, not a chat-event note — those belong to What's New), newest
+ *            first, with the time of the newest unread message per topic; client = not counted here (its screen reads
+ *            `unreadByTopic` from the message read).
+ * A client on the old unscoped paths gets `topics: null` (their start-date rule runs in code after the read, which a list cannot
+ * mirror); the screen then keeps working from the messages it has loaded.
+ */
+async function topicSummaryResponse(ctx: ReadScopeCtx): Promise<NextResponse> {
+  const { isClientUser, authContactId, scopedPlan } = ctx
+  if (isClientUser && authContactId && !scopedPlan) return NextResponse.json({ topics: null, truncated: false })
+  try {
+    const named = (async () => (await applyChatReadScope(supabaseAdmin.from('portal_messages').select('topic, created_at'), ctx)).query
+      .not('topic', 'is', null).is('deleted_at', null)
+      .order('created_at', { ascending: false }).limit(TOPIC_SUMMARY_ROW_LIMIT))()
+    const general = (async () => (await applyChatReadScope(supabaseAdmin.from('portal_messages').select('created_at'), ctx)).query
+      .is('topic', null).is('deleted_at', null)
+      .order('created_at', { ascending: false }).limit(1))()
+    const staffUnread = !isClientUser
+      ? (async () => (await applyChatReadScope(supabaseAdmin.from('portal_messages').select('topic, created_at'), ctx)).query
+          .neq('sender_type', 'admin').is('read_at', null).is('deleted_at', null)
+          .not('message', 'ilike', '%<!-- chat-event:%')
+          .order('created_at', { ascending: false }).limit(TOPIC_SUMMARY_ROW_LIMIT))()
+      : Promise.resolve(null)
+    // (A client screen reads its unread counts from the message read, not from this list — see use-portal-chat — so none is counted here.)
+    const clientUnread: Promise<Record<string, number>> = Promise.resolve({})
+    const [namedRes, generalRes, staffUnreadRes, unreadByKey] = await Promise.all([named, general, staffUnread, clientUnread])
+    const failed = namedRes.error ?? generalRes.error ?? staffUnreadRes?.error
+    if (failed) return NextResponse.json({ error: failed.message }, { status: 500 })
+    const namedRows = (namedRes.data ?? []) as Array<{ topic: string | null; created_at: string }>
+    const unreadRows = (staffUnreadRes?.data ?? []) as Array<{ topic: string | null; created_at: string }>
+    const topics = buildTopicSummary({
+      namedRows,
+      generalLastAt: ((generalRes.data ?? [])[0] as { created_at: string } | undefined)?.created_at ?? null,
+      unreadRows,
+      unreadByKey,
+    })
+    return NextResponse.json({ topics, truncated: namedRows.length >= TOPIC_SUMMARY_ROW_LIMIT || unreadRows.length >= TOPIC_SUMMARY_ROW_LIMIT })
+  } catch (err) {
+    console.error('[portal/chat GET topics] failed:', err)
+    return NextResponse.json({ error: 'Could not load the topic list.' }, { status: 500 })
+  }
+}
 
 /**
  * GET /api/portal/chat?account_id=xxx&before=timestamp&limit=50
@@ -126,78 +283,24 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  const scopeCtx: ReadScopeCtx = { isClientUser, authContactId, scopedPlan, contactIdParam, accountId, clientAccountIds }
+
+  // `topics=1` = the conversation's TOPIC LIST (name, newest message, unread) instead of messages — see lib/portal/chat-topic-summary.ts.
+  if (searchParams.get('topics') === '1') {
+    return topicSummaryResponse(scopeCtx)
+  }
+
   let query = supabaseAdmin
     .from('portal_messages')
     .select('*, contacts:contact_id(full_name), addressed_to_contact:addressed_to_contact_id(full_name)')
+  query = (await applyChatReadScope(query, scopeCtx)).query
 
-  // Client users (contacts AND teammates) never see soft-deleted messages.
-  // Admins see them so they can render tombstones.
-  if (isClientUser) {
-    query = query.is('deleted_at', null)
-    // Hide ONLY internal chat-event notes — the ones carrying the
-    // `<!-- chat-event: -->` marker (e.g. "Client paid…", "fax to IRS"). These are
-    // written in OUR language ABOUT the client and feed the staff "What's New"
-    // view. Do NOT hide all sender_type='system' messages: the out-of-office
-    // auto-reply is sender_type='system' WITHOUT a marker and IS meant for the
-    // client. See sysdoc notification-center-workflow-integration-plan.
-    query = query.not('message', 'ilike', '%<!-- chat-event:%')
-  } else {
-    // STAFF reads: hide payment_received events from the Messages thread.
-    // "Client paid INV-…" is bookkeeping ABOUT the client, not conversation —
-    // it already surfaces as a What's New card (payment_received event key,
-    // lib/notifications/whats-new-defaults.ts), so rendering it inline in the
-    // chat duplicated it in the wrong place (Antonio, 2026-07-02, Umberto
-    // Moretti thread). Other event kinds keep their inline pills for now.
-    query = query.not('message', 'ilike', '%<!-- chat-event: kind=payment_received%')
-  }
-
-  // Per-company scoped plan takes precedence (client switched to a company /
-  // personal thread). Mirrors lib/portal/chat-scope.ts::messageVisibleInPlan.
-  if (scopedPlan) {
-    // A person who joined the company later sees its conversation only from their start date (dev job d14e823f). Their own
-    // messages, ones sent to them by name, and ones staff opened stay. The personal (no company) half is never cut.
-    let historyKeep: string | null = null
-    if (isClientUser && authContactId && scopedPlan.mode !== 'personal_only') {
-      const hv = await getHistoryView(scopedPlan.accountId, authContactId, 'message')
-      historyKeep = historyKeepClauses(hv.cutoff, { viewerContactId: authContactId, ownerColumns: ['contact_id', 'addressed_to_contact_id'], openedIds: Array.from(hv.opened) })
-    }
-    if (scopedPlan.mode === 'account') {
-      query = historyKeep ? query.or(accountScopeWithHistory(scopedPlan.accountId, historyKeep)) : query.eq('account_id', scopedPlan.accountId)
-    } else if (scopedPlan.mode === 'account_plus_personal') {
-      query = query.or(
-        `${accountScopeWithHistory(scopedPlan.accountId, historyKeep)},and(account_id.is.null,contact_id.eq.${scopedPlan.contactId})`
-      )
-    } else {
-      query = query.is('account_id', null).eq('contact_id', scopedPlan.contactId)
-    }
-  }
-  // Threading: contact_id param returns the unified per-contact thread.
-  // We also include messages saved with contact_id=NULL but account_id matching
-  // one of the contact's linked accounts — covers replies sent via the CRM
-  // dashboard or MCP tool that historically omitted contact_id.
-  else if (contactIdParam) {
-    // For client users, account IDs were already resolved above.
-    // For admin users, look them up now from account_contacts.
-    let threadAccountIds = clientAccountIds
-    if (!isClientUser && threadAccountIds.length === 0) {
-      threadAccountIds = await getClientAccountIds(contactIdParam)
-    }
-
-    // Superset rule shared with the What's New feed via lib/portal/thread-scope
-    // so the two thread definitions can never drift.
-    //
-    // STAFF ONLY (2026-07-08, "one message, one staff thread"): multi-member
-    // accounts have their own inbox thread, so the person thread excludes
-    // their messages — otherwise every MMLLC client message rendered in both
-    // the company AND the member's thread (Adam Mihaly / LUMA duplicate).
-    // Client callers on this legacy path keep the full superset: their portal
-    // views are scoped by buildChatQueryPlan, not by this exclusion.
-    const excludeAccountIds = !isClientUser
-      ? await multiMemberAccountIds(threadAccountIds)
-      : []
-    query = query.or(contactThreadOrFilter(contactIdParam, threadAccountIds, excludeAccountIds))
-  } else if (accountId) {
-    query = query.eq('account_id', accountId)
+  // `topic=` = one tab's messages: absent = the whole conversation (as always), empty = General, otherwise exactly that topic. It only
+  // NARROWS what the scope above already allows, so it cannot show anything the caller could not read before.
+  const topicParam = parseTopicParam(searchParams)
+  if (!pinnedOnly) {
+    if (topicParam.kind === 'named') query = query.eq('topic', topicParam.name)
+    else if (topicParam.kind === 'general') query = query.is('topic', null)
   }
 
   if (pinnedOnly) {
@@ -278,16 +381,9 @@ export async function GET(request: NextRequest) {
   // (and appears at all), so it can be opened and cleared. Same rule as the
   // sidebar total (lib/portal/client-chat-unread). First page only.
   let unreadByTopic: Record<string, number> | undefined
-  if (isClientUser && authContactId && scopedPlan && !before && !pinnedOnly) {
+  if (isClientUser && authContactId && scopedPlan && !before && !pinnedOnly && topicParam.kind === 'none') {
     try {
-      const planAccount = scopedPlan.mode === 'personal_only' ? [] : [scopedPlan.accountId]
-      const rows = await fetchClientUnreadRows(authContactId, planAccount)
-      unreadByTopic = {}
-      for (const r of rows) {
-        if (!messageVisibleInPlan(scopedPlan, r)) continue
-        const k = topicKey(r.topic)
-        unreadByTopic[k] = (unreadByTopic[k] ?? 0) + 1
-      }
+      unreadByTopic = await clientUnreadByTopic(scopedPlan, authContactId)
     } catch (err) {
       console.error('[portal/chat GET] unread summary failed:', err)
     }

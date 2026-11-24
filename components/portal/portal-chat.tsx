@@ -118,7 +118,11 @@ function formatTime(dateStr: string): string {
 }
 
 export function PortalChat({ scope, accountId, contactId, userId, locale = 'en', entities = [], selectedEntityId, companyEntityId = '', personalUnread = 0, initialTopic = null }: { scope: ChatScope; accountId?: string; contactId: string; userId: string; locale?: string; entities?: PortalChatEntity[]; selectedEntityId: string; companyEntityId?: string; personalUnread?: number; initialTopic?: string | null }) {
-  const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics, ready, serverUnread, markRead } = usePortalChat(scope, accountId || null, contactId)
+  // The open tab. Declared before the chat hook: the hook loads that tab's own messages (not just the newest 50 of the whole conversation).
+  const [activeTopic, setActiveTopic] = useState<string | null>(initialTopic)
+  const { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics, ready, serverUnread, markRead, topicSummary, tabMessages, tabHasMore, tabLoadingFirst, tabLoadingOlder, loadMoreTab } = usePortalChat(scope, accountId || null, contactId, activeTopic)
+  // What the open tab can show: its own messages once the conversation is longer than the newest page, else everything loaded.
+  const viewMessages = tabMessages ?? messages
   // Inside the client iPhone app (dev job 056a70d0, Step 3b): one Topic button instead of the row of topic pills, and the chat opens on the
   // topic of the newest unread answer. The website (appMode false) is exactly as it was.
   const appMode = useAppMode()
@@ -189,7 +193,6 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
   // Only the deep-linked entry changes; a client opening the chat normally
   // still lands on General (changing that default is PARKED — Antonio has not
   // ruled on the whole-chat product question).
-  const [activeTopic, setActiveTopic] = useState<string | null>(initialTopic)
   const [creatingTopic, setCreatingTopic] = useState(false)
   // Which tab we are still trying to open, and whether we may page back
   // through history to find it (dev job 05d997f2). The tab bar is built from
@@ -323,7 +326,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
   useEffect(() => {
     if (!ready || !pageVisible) return
     const key = activeTopic ?? ''
-    const inTab = messages.filter(m => (m.topic ?? '') === key && !m.deleted_at)
+    const inTab = viewMessages.filter(m => (m.topic ?? '') === key && !m.deleted_at)
     if (inTab.length === 0) return
     const unreadHere = inTab.some(m => m.sender_type === 'admin' && !m.read_at && !m.client_kept_unread)
     const keptHere = inTab.filter(m => m.sender_type === 'admin' && m.client_kept_unread).length
@@ -337,7 +340,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
     if (lastMarkRef.current === markKey) return
     lastMarkRef.current = markKey
     void markRead(activeTopic, newest.created_at)
-  }, [ready, pageVisible, activeTopic, messages, serverUnread, markRead, selectedEntityId])
+  }, [ready, pageVisible, activeTopic, viewMessages, serverUnread, markRead, selectedEntityId])
   const [newTopicInput, setNewTopicInput] = useState('')
   // Map a real account_id → company name for the per-message company badge.
   const accountNameById = new Map(entities.filter(e => e.accountId).map(e => [e.accountId as string, e.label]))
@@ -528,13 +531,15 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
     const sc = scrollRef.current
     const prevHeight = sc?.scrollHeight ?? 0
     const prevTop = sc?.scrollTop ?? 0
-    await loadMore()
+    // "Older" loads the OPEN tab's own history when the tab has its own pages, else the whole conversation's next page.
+    if (tabMessages) await loadMoreTab()
+    else await loadMore()
     requestAnimationFrame(() => {
       const el = scrollRef.current
       if (!el) return
       el.scrollTop = prevTop + (el.scrollHeight - prevHeight)
     })
-  }, [loadMore])
+  }, [loadMore, loadMoreTab, tabMessages])
 
   // Close emoji picker on click outside
   useEffect(() => {
@@ -665,7 +670,21 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
     if (stickToBottomRef.current) {
       sc.scrollTop = sc.scrollHeight
     }
-  }, [messages])
+  }, [viewMessages])
+
+  // A tab that loads its OWN messages grows upward when they arrive; land on the newest message once per tab (only for tabs that have their
+  // own pages — conversations under 50 messages behave exactly as before).
+  const tabScrolledRef = useRef('')
+  useEffect(() => {
+    if (!tabMessages || tabLoadingFirst) return
+    const key = `${selectedEntityId}|${activeTopic ?? ''}`
+    if (tabScrolledRef.current === key) return
+    tabScrolledRef.current = key
+    const sc = scrollRef.current
+    if (!sc) return
+    stickToBottomRef.current = true
+    requestAnimationFrame(() => { sc.scrollTop = sc.scrollHeight })
+  }, [tabMessages, tabLoadingFirst, selectedEntityId, activeTopic])
 
   const handleRefresh = async () => {
     setIsRefreshing(true)
@@ -840,8 +859,8 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
   }
 
   const filteredMessages = activeTopic
-    ? messages.filter(m => m.topic === activeTopic)
-    : messages.filter(m => !m.topic)
+    ? viewMessages.filter(m => m.topic === activeTopic)
+    : viewMessages.filter(m => !m.topic)
 
   // Keep the Jump button's unread-below count in sync with the visible list:
   // mirror the active-tab messages into a ref (read by the scroll handler) and
@@ -876,6 +895,11 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
     const key = m.topic ?? ''
     const t = new Date(m.created_at).getTime()
     if (!(key in topicLastActivity) || t > topicLastActivity[key]) topicLastActivity[key] = t
+  }
+  for (const e of topicSummary ?? []) {
+    if (!e.lastAt) continue
+    const t = new Date(e.lastAt).getTime()
+    if (!(e.topic in topicLastActivity) || t > topicLastActivity[e.topic]) topicLastActivity[e.topic] = t
   }
   const topicOrder = Array.from(new Set(['', ...tabTopics])).sort((a, b) => {
     const unreadA = (unreadByTopic[a] ?? 0) > 0 ? 1 : 0
@@ -1113,14 +1137,14 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
         ) : (
           <>
           {/* Load older messages */}
-          {hasMore && (
+          {(tabMessages ? tabHasMore : hasMore) && (
             <div className="flex justify-center mb-2">
               <button
                 onClick={handleLoadMore}
-                disabled={loadingMore}
+                disabled={tabMessages ? tabLoadingOlder : loadingMore}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-500 bg-zinc-100 rounded-full hover:bg-zinc-200 disabled:opacity-50 transition-colors"
               >
-                {loadingMore ? (
+                {(tabMessages ? tabLoadingOlder : loadingMore) ? (
                   <Loader2 className="h-3 w-3 animate-spin" />
                 ) : (
                   <ChevronUp className="h-3 w-3" />
@@ -1170,7 +1194,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
             const showDateHeader = messageDate !== lastDate
             lastDate = messageDate
             const isOwn = msg.sender_id === userId
-            const replyMsg = msg.reply_to_id ? messages.find(m => m.id === msg.reply_to_id) : null
+            const replyMsg = msg.reply_to_id ? (viewMessages.find(m => m.id === msg.reply_to_id) ?? messages.find(m => m.id === msg.reply_to_id)) : null
 
             return (
               <div

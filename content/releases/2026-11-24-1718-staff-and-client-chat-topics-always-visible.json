@@ -1,0 +1,12 @@
+{
+  "title": "Portal chat: every topic keeps its tab, and each topic shows its own messages",
+  "tag": "improved",
+  "text": "In a long chat, a topic whose messages were all old used to disappear from the row of topic tabs until you clicked \"Older messages\", and each tab only showed its share of the newest 50 messages. Now every topic of a conversation always has its tab, with its red unread number, however old its messages are. Clicking a topic shows that topic's own latest messages, and \"Older messages available\" loads 100 more of that topic at a time. The client's own chat in the portal works the same way.",
+  "points": [
+    "Open a chat with many messages: all its topics are in the row at the top, unread ones with a red number",
+    "Click a topic: you see that topic's latest messages; use \"Older messages available\" to go further back",
+    "A chat with fewer than 50 messages looks and behaves as before",
+    "Clients see the same in their portal chat"
+  ],
+  "screenshot": "chat-topics-always-visible.png"
+}
