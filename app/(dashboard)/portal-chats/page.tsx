@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useSelectionHistory } from '@/lib/hooks/use-selection-history'
 import Link from 'next/link'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { MessageSquare, Send, Loader2, Building2, Mic, Square, Bell, BellOff, Sparkles, X, Check, Wand2, Search, CheckCheck, ChevronUp, Reply, MoreVertical, ClipboardList, Receipt, Truck, MailOpen, MailCheck, Plus, User, Paperclip, FileText, Smile, Users, CheckCircle2, ArrowLeft, AlertCircle, Clock, Hourglass, RotateCw, Trash2, Pencil, FileSignature, Landmark, Calculator, Home, XCircle, MessageCircle, ChevronDown, Pin, Mail, StickyNote, Link2, Languages, Lightbulb, FolderInput, HandHelping } from 'lucide-react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { cn } from '@/lib/utils'
@@ -31,6 +31,7 @@ import { chatPreviewText, isVoiceAttachment } from '@/lib/portal/chat-voice'
 import { isChatEventMessage } from '@/lib/portal/chat-scope'
 import { mergePins, pinSetChanged, PIN_JUMP_MAX_PAGES } from '@/lib/portal/pins'
 import { applyLandingToUrl, parseStaffChatTab, parseStaffChatTopic, pickUnreadTopicToOpen } from '@/lib/portal/staff-chat-landing'
+import { GENERAL_TOPIC_KEY, TOPIC_OLDER_PAGE_SIZE, TOPIC_PAGE_SIZE, applyMessageToSummary, foldFirstPage, mergeTabPages, mergeTopicView, oldestCreatedAt, pickUnreadTopicFromSummary, topicKeyOf, type TopicSummaryEntry } from '@/lib/portal/chat-topic-summary'
 import { subscribeToDashboardPush } from '@/lib/push/dashboard-push'
 import { NewCardDialog } from '@/components/dashboard/action-board-new-card-dialog'
 import { ChatQuickActionsErrorBoundary } from '@/components/chat/chat-quick-actions-error-boundary'
@@ -211,6 +212,19 @@ interface ChatMessage {
   pinned_at?: string | null
   pinned_by_type?: 'client' | 'staff' | null
   reactions?: MessageReaction[] | null
+}
+
+/** Stable empty list (keeps memo/effect inputs from changing every render). */
+const NO_CHAT_MESSAGES: ChatMessage[] = []
+
+/** After this screen marked a topic read (null = General): its badge is 0 at once, without re-reading the topic list. */
+function clearTopicUnread(queryClient: QueryClient, threadId: string | null, topic: string | null): void {
+  if (!threadId) return
+  const key = topicKeyOf(topic)
+  queryClient.setQueryData<TopicSummaryEntry[] | null>(
+    ['portal-chat-topics', threadId],
+    prev => (prev ? prev.map(e => (e.topic === key && e.unread > 0 ? { ...e, unread: 0 } : e)) : prev),
+  )
 }
 
 interface MessageAction {
@@ -1069,15 +1083,123 @@ export default function PortalChatsPage() {
     }
   }, [chatQueryParam, oldestTimestamp, loadingOlder])
 
-  // Topics derived from messages — deduplicated, sorted
+  // ── The topic list + the open tab's own messages (Antonio, 2026-11-24) ────────────────────────────────────────────────
+  // The live window above is the newest 50 messages of the WHOLE conversation, so a topic's tab, its place in the row and its unread badge
+  // used to exist only if one of those 50 belonged to it, and a tab showed only its share of them. Now the server lists every topic
+  // (`topics=1`), and the open tab loads its OWN newest messages (`topic=`) with its own "Older messages" paging. The window, its older
+  // pages and the message-jump logic are unchanged and still feed what the tab shows (mergeTopicView).
+  const topicThreadKey = selectedAccountId || selectedContactId
+  const { data: topicSummary, isLoading: topicSummaryLoading } = useQuery<TopicSummaryEntry[] | null>({
+    queryKey: ['portal-chat-topics', topicThreadKey],
+    queryFn: async () => {
+      const res = await fetch(`/api/portal/chat?${chatQueryParam}&topics=1`)
+      if (!res.ok) throw new Error('Could not load the topic list.')
+      const d = await res.json()
+      return Array.isArray(d.topics) ? (d.topics as TopicSummaryEntry[]) : null
+    },
+    enabled: !!topicThreadKey,
+    staleTime: 15_000,
+    refetchInterval: 60_000,
+    retry: 1,
+  })
+
+  const activeTopicKey = adminActiveTopic ?? GENERAL_TOPIC_KEY
+  // A conversation of fewer than 50 messages is entirely inside the window: nothing more to load, so no extra request.
+  const tabStoreEnabled = !!topicThreadKey && (messages?.length ?? 0) >= TOPIC_PAGE_SIZE
+  const { data: tabFirstPage, isLoading: tabLoading } = useQuery<ChatMessage[]>({
+    queryKey: ['portal-chat-messages', topicThreadKey, 'topic', activeTopicKey],
+    queryFn: async () => {
+      const res = await fetch(`/api/portal/chat?${chatQueryParam}&topic=${encodeURIComponent(activeTopicKey)}&limit=${TOPIC_PAGE_SIZE}`)
+      // an error must NOT become "this tab has no messages" (it would replace good data and hide the history): throw, React Query keeps what it had
+      if (!res.ok) throw new Error('Could not load this topic.')
+      const d = await res.json()
+      return Array.isArray(d.messages) ? (d.messages as ChatMessage[]) : []
+    },
+    enabled: tabStoreEnabled,
+    refetchInterval: 60_000,
+  })
+
+  // Older pages of the OPEN tab (its own cursor — never the window's, which would skip other topics' rows). Keyed by conversation + tab, so
+  // a response that lands after the staff member moved on is ignored.
+  const tabKey = `${topicThreadKey ?? ''}|${activeTopicKey}`
+  const tabKeyRef = useRef(tabKey)
+  tabKeyRef.current = tabKey
+  const [tabOlder, setTabOlder] = useState<{ key: string; pages: ChatMessage[]; hasMore: boolean | null; loading: boolean }>(
+    { key: '', pages: [], hasMore: null, loading: false },
+  )
+  const tabOlderHere = tabOlder.key === tabKey ? tabOlder : null
+  const tabOlderPages = tabOlderHere?.pages ?? NO_CHAT_MESSAGES
+  const tabCursor = oldestCreatedAt([...(tabFirstPage ?? NO_CHAT_MESSAGES), ...tabOlderPages])
+  const tabHasMore = tabStoreEnabled && (tabOlderHere?.hasMore ?? ((tabFirstPage?.length ?? 0) >= TOPIC_PAGE_SIZE))
+  const tabLoadingOlder = !!tabOlderHere?.loading
+
+  // The tab's first page is refetched (poll, reply, wake): it is the newest 50, so it can start later than before. The rows it no longer
+  // covers are FOLDED into the older pages (a reader who loaded history and then sent one message keeps it); only a real hole (more than a
+  // page of new messages) drops the older pages. See foldFirstPage.
+  const prevFirstRef = useRef<{ key: string; rows: ChatMessage[] } | null>(null)
+  useEffect(() => {
+    if (!tabFirstPage) return
+    const prev = prevFirstRef.current
+    prevFirstRef.current = { key: tabKey, rows: tabFirstPage }
+    if (!prev || prev.key !== tabKey || prev.rows === tabFirstPage) return
+    setTabOlder(cur => {
+      const here = cur.key === tabKey ? cur : { key: tabKey, pages: [], hasMore: null as boolean | null, loading: false }
+      const r = foldFirstPage({ prevFirst: prev.rows, nextFirst: tabFirstPage, older: here.pages, pageSize: TOPIC_PAGE_SIZE })
+      if (r.older.length === here.pages.length && !r.dropped && cur.key === tabKey) return cur
+      return { ...here, pages: r.older, hasMore: r.dropped ? null : here.hasMore }
+    })
+  }, [tabFirstPage]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const loadOlderTab = useCallback(async () => {
+    const key = tabKeyRef.current
+    if (!chatQueryParam || !tabCursor || tabLoadingOlder) return
+    setTabOlder(prev => ({ ...(prev.key === key ? prev : { pages: [], hasMore: null }), key, loading: true }))
+    try {
+      const res = await fetch(`/api/portal/chat?${chatQueryParam}&topic=${encodeURIComponent(activeTopicKey)}&before=${encodeURIComponent(tabCursor)}&limit=${TOPIC_OLDER_PAGE_SIZE}`)
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Failed to load older messages.')
+      const older: ChatMessage[] = data.messages ?? []
+      // (If the staff member moved to another tab meanwhile the page is still kept for this tab, and its loading flag is cleared either way —
+      // otherwise coming back would find the button stuck on "Loading…".)
+      setTabOlder(prev => prev.key !== key ? prev : {
+        key, pages: mergeTabPages(prev.pages, older), hasMore: older.length >= TOPIC_OLDER_PAGE_SIZE, loading: false,
+      })
+    } catch (err) {
+      toast.error(err instanceof Error && err.message ? err.message : 'Failed to load older messages.')
+      setTabOlder(prev => prev.key === key ? { ...prev, loading: false } : prev)
+    }
+  }, [chatQueryParam, tabCursor, tabLoadingOlder, activeTopicKey])
+
+  // Topics = the ones in the loaded messages ∪ every topic the server lists
   const adminTopics = Array.from(
-    new Set(combinedMessages.map(m => m.topic).filter((t): t is string => !!t))
+    new Set([
+      ...combinedMessages.filter(m => !m.deleted_at || m.topic === adminActiveTopic).map(m => m.topic).filter((t): t is string => !!t),
+      ...(topicSummary ?? []).map(e => e.topic).filter(t => !!t),
+    ])
   ).sort()
 
-  // Messages filtered by active topic tab
-  const adminFilteredMessages = adminActiveTopic
-    ? combinedMessages.filter(m => m.topic === adminActiveTopic)
-    : combinedMessages.filter(m => !m.topic)
+  // Messages shown in the active topic tab
+  const adminFilteredMessages = tabStoreEnabled
+    ? mergeTopicView({ topicKey: activeTopicKey, held: combinedMessages, tabPages: [...(tabFirstPage ?? NO_CHAT_MESSAGES), ...tabOlderPages] })
+    : adminActiveTopic
+      ? combinedMessages.filter(m => m.topic === adminActiveTopic)
+      : combinedMessages.filter(m => !m.topic)
+
+  // When a tab opens — and again when its own messages arrive and add history ABOVE what was showing — land on the newest message; otherwise
+  // the list grows upward and leaves the view on older rows. Once per tab; never while a message jump owns the scroll position.
+  const scrolledTabRef = useRef('')
+  useEffect(() => {
+    // Only when the tab has its own pages (conversations under 50 messages behave exactly as before).
+    if (!tabStoreEnabled || !tabFirstPage) return
+    const loadedFor = `${tabKey}|tab`
+    if (scrolledTabRef.current === loadedFor) return
+    scrolledTabRef.current = loadedFor // marked even when a message jump owns the scroll, so a later refresh cannot pull the view down
+    if (targetMessageIdRef.current) return
+    const jump = () => messagesEndRef.current?.scrollIntoView({ block: 'end' })
+    requestAnimationFrame(() => requestAnimationFrame(jump))
+    const t = setTimeout(jump, 200)
+    return () => clearTimeout(t)
+  }, [tabKey, tabStoreEnabled, tabFirstPage])
 
   // "Jump to latest" — recompute whether the user is scrolled away from the
   // bottom (>200px) and, if so, how many unread client/system messages sit below
@@ -1215,7 +1337,7 @@ export default function PortalChatsPage() {
   // and counting them here too duplicated the same notice on two surfaces.
   // What's New remains the only place a chat-event contributes an unread
   // count; this pill only reflects genuine unread chat text.
-  const adminUnreadByTopic = combinedMessages.reduce<Record<string, number>>((acc, m) => {
+  const adminUnreadFromLoaded = combinedMessages.reduce<Record<string, number>>((acc, m) => {
     // deleted_at: a retired chat-event note (e.g. client resubmitted before
     // staff handled the original) must not count — it can never be cleared
     // any other way, since it's invisible to both the read-clear queries and
@@ -1226,6 +1348,11 @@ export default function PortalChatsPage() {
     acc[key] = (acc[key] ?? 0) + 1
     return acc
   }, {})
+  // The server counts EVERY unread message of the conversation, not just the loaded ones, so a badge never hides in an unloaded topic.
+  // Until its list arrives (or if it cannot be read) the badges come from the loaded messages, as before.
+  const adminUnreadByTopic: Record<string, number> = topicSummary
+    ? Object.fromEntries(topicSummary.map(e => [e.topic, e.unread]))
+    : adminUnreadFromLoaded
 
   // Tab order (2026-08-30, Antonio): unread topics first — General included,
   // not pinned — so an unread topic is never buried behind a read one just
@@ -1237,6 +1364,11 @@ export default function PortalChatsPage() {
     const key = m.topic ?? ''
     const t = new Date(m.created_at).getTime()
     if (!(key in adminTopicLastActivity) || t > adminTopicLastActivity[key]) adminTopicLastActivity[key] = t
+  }
+  for (const e of topicSummary ?? []) {
+    if (!e.lastAt) continue
+    const t = new Date(e.lastAt).getTime()
+    if (!(e.topic in adminTopicLastActivity) || t > adminTopicLastActivity[e.topic]) adminTopicLastActivity[e.topic] = t
   }
   const adminTopicOrder = Array.from(new Set(['', ...adminTopics])).sort((a, b) => {
     const unreadA = (adminUnreadByTopic[a] ?? 0) > 0 ? 1 : 0
@@ -1282,9 +1414,14 @@ export default function PortalChatsPage() {
       return !msg.contact_id && !!msg.account_id && !accountThreadIdsRef.current.has(msg.account_id)
     }
 
+    // A coalesced reload of the topic list after a read mark / delete (an UPDATE carries no "before" row, so a count cannot be adjusted by hand).
+    let topicsDebounce: ReturnType<typeof setTimeout> | null = null
+
     const handleInsert = (payload: { new: unknown }) => {
       const newMessage = payload.new as ChatMessage
       if (!belongsToThisThread(newMessage)) return
+      // The same row can be delivered twice (this screen listens on two filters): only a message not seen yet may raise a badge.
+      const alreadySeen = (queryClient.getQueryData<ChatMessage[]>(['portal-chat-messages', threadId]) ?? []).some(m => m.id === newMessage.id)
       queryClient.setQueryData<ChatMessage[]>(
         ['portal-chat-messages', threadId],
         (prev) => {
@@ -1293,6 +1430,18 @@ export default function PortalChatsPage() {
           return [...prev, newMessage]
         }
       )
+      // The open tab's own first page (only when it is loaded — never creates a one-message tab), and the topic list: a new topic gets its
+      // tab and an unread client message raises its badge at once.
+      queryClient.setQueryData<ChatMessage[]>(
+        ['portal-chat-messages', threadId, 'topic', topicKeyOf(newMessage.topic)],
+        (prev) => (prev && !prev.some(m => m.id === newMessage.id) ? [...prev, newMessage] : prev),
+      )
+      if (!alreadySeen) {
+        queryClient.setQueryData<TopicSummaryEntry[] | null>(
+          ['portal-chat-topics', threadId],
+          (prev) => applyMessageToSummary(prev, newMessage) as TopicSummaryEntry[] | null | undefined,
+        )
+      }
     }
 
     const handleUpdate = (payload: { new: unknown }) => {
@@ -1301,6 +1450,19 @@ export default function PortalChatsPage() {
         ['portal-chat-messages', threadId],
         (prev) => prev ? prev.map(m => m.id === updated.id ? { ...m, ...updated } : m) : prev
       )
+      // The same change for the topic tabs' own pages (a delete / pin / edit / read of a message older than the window), and a coalesced
+      // reload of the topic list (its unread counts and tabs can change).
+      queryClient.setQueriesData<ChatMessage[]>(
+        { queryKey: ['portal-chat-messages', threadId, 'topic'] },
+        (prev) => prev ? prev.map(m => m.id === updated.id ? { ...m, ...updated } : m) : prev,
+      )
+      setTabOlder(prev => prev.pages.some(m => m.id === updated.id) ? { ...prev, pages: prev.pages.map(m => m.id === updated.id ? { ...m, ...updated } : m) } : prev)
+      // A read mark on a topic that already shows 0 unread (we zeroed it ourselves when we marked it read) changes nothing in the list.
+      const listed = queryClient.getQueryData<TopicSummaryEntry[] | null>(['portal-chat-topics', threadId])?.find(e => e.topic === topicKeyOf(updated.topic))
+      if (updated.deleted_at || !listed || listed.unread > 0) {
+        if (topicsDebounce) clearTimeout(topicsDebounce)
+        topicsDebounce = setTimeout(() => { queryClient.invalidateQueries({ queryKey: ['portal-chat-topics', threadId] }) }, 1500)
+      }
       // someone pinned / unpinned / deleted a pinned message (maybe an old one that is not on screen): refresh the Pinned strip's list
       if (pinSetChanged(queryClient.getQueryData<ChatMessage[]>(['portal-chat-pins', threadId]), updated)) {
         queryClient.invalidateQueries({ queryKey: ['portal-chat-pins', threadId] })
@@ -1331,6 +1493,7 @@ export default function PortalChatsPage() {
 
     channel.subscribe()
     return () => {
+      if (topicsDebounce) clearTimeout(topicsDebounce)
       supabase.removeChannel(channel)
     }
   }, [selectedAccountId, selectedContactId, selectedThreadContactId, panelCompanyId, queryClient])
@@ -1754,8 +1917,9 @@ export default function PortalChatsPage() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(readBody),
-    }).then(() => {
+    }).then(res => {
       queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
+      if (res.ok) clearTopicUnread(queryClient, selectedAccountId || selectedContactId, null)
     }).catch(() => {})
   }, [selectedAccountId, selectedContactId, queryClient])
 
@@ -1770,8 +1934,9 @@ export default function PortalChatsPage() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(readBody),
-    }).then(() => {
+    }).then(res => {
       queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
+      if (res.ok) clearTopicUnread(queryClient, selectedAccountId || selectedContactId, adminActiveTopic)
     }).catch(() => {})
   }, [adminActiveTopic, selectedAccountId, selectedContactId, queryClient])
 
@@ -2222,12 +2387,14 @@ export default function PortalChatsPage() {
     if (!key) { autoTopicConversationRef.current = null; return }
     if (autoTopicConversationRef.current === key) return
     if (messagesLoading || !messages) return
+    // wait for the server's topic list: an unread topic whose messages are all older than the loaded ones is only known there
+    if (topicSummaryLoading) return
     autoTopicConversationRef.current = key
     if (adminActiveTopic !== null || targetMessageId) return
-    const topic = pickUnreadTopicToOpen(messages)
+    const topic = topicSummary ? pickUnreadTopicFromSummary(topicSummary) : pickUnreadTopicToOpen(messages)
     if (topic) setAdminActiveTopic(topic)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedAccountId, selectedContactId, messages, messagesLoading])
+  }, [selectedAccountId, selectedContactId, messages, messagesLoading, topicSummary, topicSummaryLoading])
 
   // Keep the topic and sub-tab in the address bar (replace, never a new Back step) so a refresh
   // lands in the same place. Defaults are removed, other keys untouched.
@@ -2628,6 +2795,8 @@ export default function PortalChatsPage() {
       body: JSON.stringify(body),
     })
     queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
+    // the topic badges follow ("mark unread" puts the newest client message back to unread)
+    queryClient.invalidateQueries({ queryKey: ['portal-chat-topics', thread.account_id || thread.contact_id] })
   }
 
   const markAsRead = async (thread: { account_id: string | null; contact_id: string | null }) => {
@@ -4168,7 +4337,7 @@ export default function PortalChatsPage() {
                   </div>
                 )}
                 {/* Empty topic thread */}
-                {messages && messages.length > 0 && adminFilteredMessages.length === 0 && !messagesLoading && (
+                {messages && messages.length > 0 && adminFilteredMessages.length === 0 && !messagesLoading && !tabLoading && (
                   <div className="flex-1 flex items-center justify-center py-12">
                     <div className="text-center">
                       <MessageSquare className="h-10 w-10 text-zinc-200 mx-auto mb-3" />
@@ -4177,20 +4346,20 @@ export default function PortalChatsPage() {
                     </div>
                   </div>
                 )}
-                {/* Load older messages */}
-                {hasMoreOlder && (messages?.length ?? 0) >= 50 && (
+                {/* Load older messages — of the OPEN tab (its own history, 100 at a time); the window's own paging is only used by message jumps */}
+                {tabHasMore && (
                   <div className="flex justify-center mb-2">
                     <button
                       className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-500 bg-zinc-100 rounded-full hover:bg-zinc-200 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-                      onClick={loadOlderMessages}
-                      disabled={loadingOlder}
+                      onClick={loadOlderTab}
+                      disabled={tabLoadingOlder}
                     >
-                      {loadingOlder ? (
+                      {tabLoadingOlder ? (
                         <Loader2 className="h-3 w-3 animate-spin" />
                       ) : (
                         <ChevronUp className="h-3 w-3" />
                       )}
-                      {loadingOlder ? 'Loading…' : 'Older messages available'}
+                      {tabLoadingOlder ? 'Loading…' : 'Older messages available'}
                     </button>
                   </div>
                 )}

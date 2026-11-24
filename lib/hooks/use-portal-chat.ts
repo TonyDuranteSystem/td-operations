@@ -1,11 +1,22 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import type { PortalMessage, ChatAttachment } from '@/lib/types'
 import { buildChatQueryPlan, messageVisibleInPlan, type ChatQueryPlan } from '@/lib/portal/chat-scope'
 import { mergeRefreshedMessages, parseTimestamp, sortMessagesAscending } from '@/lib/portal/chat-refresh-merge'
 import { useWakeSignal } from '@/lib/hooks/use-wake-signal'
+import {
+  TOPIC_OLDER_PAGE_SIZE,
+  TOPIC_PAGE_SIZE,
+  applyMessageToSummary,
+  foldFirstPage,
+  mergeTabPages,
+  mergeTopicView,
+  messageInTopic,
+  oldestCreatedAt,
+  type TopicSummaryEntry,
+} from '@/lib/portal/chat-topic-summary'
 
 /**
  * The thread a client is currently viewing. Per-company scoping (2026-06-24):
@@ -32,12 +43,21 @@ export type ChatScope =
  * lib/portal/chat-scope.ts. accountId/contactId are still passed to the send
  * helpers so a message is tagged to the company currently in view.
  */
-export function usePortalChat(scope: ChatScope, accountId: string | null, contactId: string) {
+export function usePortalChat(scope: ChatScope, accountId: string | null, contactId: string, activeTopic: string | null = null) {
   const [messages, setMessages] = useState<PortalMessage[]>([])
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const [hasMore, setHasMore] = useState(true)
+  // The conversation's topic list and the OPEN tab's own messages (Antonio, 2026-11-24 — "a topic disappears until I load older messages").
+  // `messages` stays the newest 50 of the WHOLE conversation; the tab bar used to be built from it alone. The server now also lists every
+  // topic (`topics=1`), and the open tab loads its OWN newest messages (`topic=`) with its own older-page cursor. What the tab shows is
+  // `tabMessages` (the window's messages of that topic ∪ the tab's own pages — see mergeTopicView).
+  const topicKey = activeTopic ?? ''
+  const [topicSummary, setTopicSummary] = useState<{ key: string; topics: TopicSummaryEntry[] | null } | null>(null)
+  const [tab, setTab] = useState<TabState>(EMPTY_TAB)
+  // Messages the team deleted while this view was open: they must never come back from a tab page that was fetched a moment earlier.
+  const deletedIdsRef = useRef<Set<string>>(new Set())
   const channelRef = useRef<ReturnType<ReturnType<typeof createClient>['channel']> | null>(null)
   // Mirror of `messages` so refresh() can size its refetch to what we already
   // hold WITHOUT taking `messages` as a dependency (that would rebuild the
@@ -84,6 +104,113 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
   const [serverUnread, setServerUnread] = useState<Record<string, number> | null>(null)
   const loadedKeyRef = useRef<string | null>(null)
   const markLoaded = (q: string) => { loadedKeyRef.current = q; setLoadedKey(q) }
+
+  // ── Topic list + the open tab's own pages (see the state above) ──────────────────────────────────────────────────────────────────
+  // Only for the scoped views (company / personal / account). The old unscoped 'unified' view keeps the loaded-messages behaviour.
+  const topicScoped = scope.mode !== 'unified'
+  const tabKey = `${queryParam}|${topicKey}`
+  const tabKeyRef = useRef(tabKey)
+  tabKeyRef.current = tabKey
+  const tabHere = tab.key === tabKey ? tab : null
+  // A conversation of fewer than 50 messages is entirely inside the window: nothing more to load, so no extra request. Once a tab has its
+  // own pages the store stays on (a live delete can take the window to 49 rows; the tab must not fall back to the window's share).
+  const tabStoreEnabled = topicScoped && loadedKey === queryParam && !loading && (messages.length >= TOPIC_PAGE_SIZE || !!tabHere?.first)
+  // Another company / personal view: forget everything the tab held (a deletion made while this view was away must not come back from a
+  // stale older page — R100).
+  useEffect(() => {
+    deletedIdsRef.current = new Set()
+    setTab(EMPTY_TAB)
+  }, [queryParam])
+
+  const summaryAtRef = useRef(0)
+  const loadSummary = useCallback(async () => {
+    if (!topicScoped) return
+    const q = queryParam
+    summaryAtRef.current = Date.now()
+    try {
+      const res = await fetch(`/api/portal/chat?${q}&topics=1`)
+      if (!res.ok) return
+      const data = await res.json()
+      if (q !== currentQueryRef.current) return // the client switched view meanwhile
+      setTopicSummary({ key: q, topics: Array.isArray(data.topics) ? (data.topics as TopicSummaryEntry[]) : null })
+    } catch {
+      // silent — the tabs fall back to the topics of the loaded messages
+    }
+  }, [queryParam, topicScoped])
+  const loadSummaryRef = useRef(loadSummary)
+  useEffect(() => { loadSummaryRef.current = loadSummary }, [loadSummary])
+  useEffect(() => { void loadSummary() }, [loadSummary])
+
+  // The open tab's newest page. If it slid forward, the rows it no longer covers fold into the older pages; only a real hole (more than a
+  // page of new messages) drops them — the next "older" click then reloads from the new start.
+  const fetchTabFirst = useCallback(async () => {
+    if (!tabStoreEnabled) return
+    const key = tabKey
+    const q = queryParam
+    const topic = topicKey
+    const startMark = eventMarkRef.current
+    try {
+      const res = await fetch(`/api/portal/chat?${q}&topic=${encodeURIComponent(topic)}&limit=${TOPIC_PAGE_SIZE}`)
+      if (!res.ok) return
+      const data = await res.json()
+      if (tabKeyRef.current !== key) return // another tab or company meanwhile
+      const deleted = idsSince(deletedMarksRef.current, startMark)
+      const msgs = ((data.messages ?? []) as PortalMessage[]).filter(m => !deleted.has(m.id) && !deletedIdsRef.current.has(m.id))
+      setTab(prev => {
+        const same = prev.key === key
+        // the new first page may start later than the old one: keep the rows it no longer covers (see foldFirstPage)
+        const folded = foldFirstPage({ prevFirst: same ? prev.first : null, nextFirst: msgs, older: same ? prev.older : [], pageSize: TOPIC_PAGE_SIZE })
+        return {
+          key, topicKey: topic, first: msgs,
+          older: folded.older,
+          hasMore: same && !folded.dropped ? prev.hasMore : null,
+          loadingOlder: same ? prev.loadingOlder : false,
+        }
+      })
+    } catch {
+      // silent — what is already shown stays
+    }
+  }, [tabStoreEnabled, tabKey, queryParam, topicKey])
+  const fetchTabFirstRef = useRef(fetchTabFirst)
+  useEffect(() => { fetchTabFirstRef.current = fetchTabFirst }, [fetchTabFirst])
+  useEffect(() => { void fetchTabFirst() }, [fetchTabFirst])
+
+  // "Older messages" of the OPEN tab: its own history (100 at a time), paged from the oldest message the TAB itself holds.
+  const loadMoreTab = useCallback(async () => {
+    const key = tabKey
+    const q = queryParam
+    const topic = topicKey
+    const cur = tab.key === key ? tab : null
+    const cursor = cur ? oldestCreatedAt([...(cur.first ?? []), ...cur.older]) : null
+    if (!cur || !cursor || cur.loadingOlder) return
+    setTab(prev => (prev.key === key ? { ...prev, loadingOlder: true } : prev))
+    try {
+      // encodeURIComponent is REQUIRED (see loadMore): created_at carries a "+00:00" offset.
+      const res = await fetch(`/api/portal/chat?${q}&topic=${encodeURIComponent(topic)}&before=${encodeURIComponent(cursor)}&limit=${TOPIC_OLDER_PAGE_SIZE}`)
+      if (!res.ok) throw new Error('older messages')
+      const data = await res.json()
+      const page = (data.messages ?? []) as PortalMessage[]
+      const older = page.filter(m => !deletedIdsRef.current.has(m.id))
+      // kept for this tab and its loading flag cleared even if the client moved to another tab meanwhile (else "older" could stay stuck on return)
+      setTab(prev => (prev.key !== key ? prev : {
+        ...prev,
+        older: mergeTabPages(prev.older, older),
+        hasMore: page.length >= TOPIC_OLDER_PAGE_SIZE,
+        loadingOlder: false,
+      }))
+    } catch {
+      setTab(prev => (prev.key === key ? { ...prev, loadingOlder: false } : prev))
+    }
+  }, [tab, tabKey, queryParam, topicKey])
+
+  const tabMessages = useMemo<PortalMessage[] | null>(() => {
+    if (!tabStoreEnabled) return null
+    return mergeTopicView({ topicKey, held: messages, tabPages: [...(tabHere?.first ?? []), ...(tabHere?.older ?? [])] })
+      .filter(m => !deletedIdsRef.current.has(m.id))
+  }, [tabStoreEnabled, topicKey, messages, tabHere])
+  const tabHasMore = tabStoreEnabled && !!tabHere?.first && (tabHere.hasMore ?? tabHere.first.length >= TOPIC_PAGE_SIZE)
+  const tabLoadingFirst = tabStoreEnabled && !tabHere?.first
+  const tabLoadingOlder = !!tabHere?.loadingOlder
 
   // Load initial messages + mark as read
   const load = useCallback(async () => {
@@ -168,6 +295,10 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
   // started and (b) paged-back history older than the fetched window. See that
   // helper for why a blind replace made messages vanish.
   const refresh = useCallback(async (_opts?: { markRead?: boolean }) => {
+    // the open tab's own page and the topic list follow the same wake / reconnect / manual reload (the list is skipped when it was
+    // read a moment ago — a chat that just opened asks for it once, not twice)
+    void fetchTabFirstRef.current()
+    if (Date.now() - summaryAtRef.current > 15_000) void loadSummaryRef.current()
     const seq = ++fetchSeqRef.current
     const startMark = eventMarkRef.current
     try {
@@ -300,6 +431,9 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
         if (prev.some(m => m.id === newMessage.id)) return prev
         return [...prev, newMessage]
       })
+      // the open tab's own first page (only once it is loaded) and the topic list (a new topic gets its tab at once)
+      setTab(prev => (prev.first && messageInTopic(newMessage, prev.topicKey) && !prev.first.some(m => m.id === newMessage.id) ? { ...prev, first: [...prev.first, newMessage] } : prev))
+      setTopicSummary(prev => (prev ? { ...prev, topics: applyMessageToSummary(prev.topics, newMessage) as TopicSummaryEntry[] | null } : prev))
     }
 
     const handleUpdate = (payload: { new: unknown }) => {
@@ -308,12 +442,16 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
       if (updated.deleted_at) {
         liveMarksRef.current.delete(updated.id)
         deletedMarksRef.current.set(updated.id, ++eventMarkRef.current)
+        deletedIdsRef.current.add(updated.id)
         setMessages(prev => prev.filter(m => m.id !== updated.id))
+        setTab(prev => ({ ...prev, first: prev.first ? prev.first.filter(m => m.id !== updated.id) : prev.first, older: prev.older.filter(m => m.id !== updated.id) }))
+        void loadSummaryRef.current() // a topic may have lost its last message
         return
       }
       if (!belongs(updated)) return
       // Content edit: update the message in place so the client sees the corrected text.
       setMessages(prev => prev.map(m => m.id === updated.id ? { ...m, ...updated } : m))
+      setTab(prev => ({ ...prev, first: prev.first ? prev.first.map(m => m.id === updated.id ? { ...m, ...updated } : m) : prev.first, older: prev.older.map(m => m.id === updated.id ? { ...m, ...updated } : m) }))
     }
 
     // One subscription per scope filter (account_id and/or contact_id). The
@@ -421,8 +559,13 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accountId, contactId, sending])
 
+  // Tabs = the topics of the loaded messages ∪ every topic the server lists (a topic whose messages are all older has a tab too).
+  const topicSummaryHere = topicSummary && topicSummary.key === queryParam ? topicSummary.topics : null
   const topics = Array.from(
-    new Set(messages.map(m => m.topic).filter((t): t is string => !!t))
+    new Set([
+      ...messages.map(m => m.topic).filter((t): t is string => !!t),
+      ...(topicSummaryHere ?? []).map(e => e.topic).filter(t => !!t),
+    ])
   ).sort()
 
   // Mark ONE tab read, up to the newest message the client has on screen.
@@ -433,11 +576,12 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
     // Optimistic: those rows are on screen and being read now.
     const now = new Date().toISOString()
     const upToMs = parseTimestamp(upTo)
-    setMessages(prev => prev.map(m =>
+    const markOne = (m: PortalMessage): PortalMessage =>
       m.sender_type === 'admin' && !m.read_at && !m.client_kept_unread && (m.topic ?? '') === key && parseTimestamp(m.created_at) <= upToMs
         ? { ...m, read_at: now }
-        : m,
-    ))
+        : m
+    setMessages(prev => prev.map(markOne))
+    setTab(prev => ({ ...prev, first: prev.first ? prev.first.map(markOne) : prev.first, older: prev.older.map(markOne) }))
     setServerUnread(prev => {
       if (!prev) return prev
       const kept = messagesRef.current.filter(m => m.sender_type === 'admin' && m.client_kept_unread && (m.topic ?? '') === key).length
@@ -467,10 +611,24 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
   // True once the messages on screen belong to the view currently selected.
   const ready = !loading && loadedKey === queryParam
 
-  return { messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics, ready, serverUnread, markRead }
+  return {
+    messages, loading, sending, sendMessage, loadMore, loadingMore, hasMore, refresh, topics, ready, serverUnread, markRead,
+    topicSummary: topicSummaryHere, tabMessages, tabHasMore, tabLoadingFirst, tabLoadingOlder, loadMoreTab,
+  }
 }
 
 type RealtimeFilter = { column: 'account_id' | 'contact_id'; value: string }
+
+/** The open tab's own pages (see usePortalChat): its newest page, older pages, and the cursor bookkeeping. */
+interface TabState {
+  key: string
+  topicKey: string
+  first: PortalMessage[] | null
+  older: PortalMessage[]
+  hasMore: boolean | null
+  loadingOlder: boolean
+}
+const EMPTY_TAB: TabState = { key: '', topicKey: '', first: null, older: [], hasMore: null, loadingOlder: false }
 
 /** Ids whose live-event mark is newer than `since` (i.e. happened after a fetch started). */
 function idsSince(marks: Map<string, number>, since: number): Set<string> {
