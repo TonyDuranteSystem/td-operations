@@ -1,0 +1,11 @@
+{
+  "title": "Portal Chats: \"Waiting\" and \"Waiting on us\" turn red when something is in them",
+  "tag": "improved",
+  "text": "In the Portal Chats list, the \"Waiting\" chip (we are waiting for the client) and the \"Waiting on us\" chip (the client is waiting for us) now turn red as soon as at least one conversation is inside, so you see at a glance that something needs attention. When nothing is in them they look like the other chips. They stay red when you select them, and go back to normal on their own once the last conversation leaves (someone answered, or you cleared the mark). Only the colour changed: what each chip shows is the same.",
+  "points": [
+    "Mark a conversation as waiting: the chip turns red at once",
+    "Clear the mark, or let the client answer: the chip goes back to normal",
+    "Both chips empty: they look like the other chips"
+  ],
+  "screenshot": "portal-chats-waiting-chips-red.png"
+}

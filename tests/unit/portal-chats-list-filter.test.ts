@@ -5,9 +5,11 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'fs'
 import {
+  ATTENTION_CHIPS,
   DEFAULT_LIST_FILTER,
   LIST_FILTER_CHIPS,
   buildPeopleThreadKeySet,
+  chipHasAttention,
   loadPeopleThreadKeys,
   matchesListFilter,
   orderThreadsForChip,
@@ -237,5 +239,42 @@ describe('Waiting on us chip (2026-11-21)', () => {
     expect(us.map(x => x.account_id)).toEqual(['a', 'b'])
     expect(orderThreadsForChip(us, 'waitingus').map(x => x.account_id)).toEqual(['b', 'a'])
     expect(list.filter(x => matchesListFilter(x, 'waiting')).map(x => x.account_id)).toEqual(['c'])
+  })
+})
+
+describe('chipHasAttention (Waiting / Waiting on us turn red when something is inside — 2026-11-25)', () => {
+  it('only the two waiting chips can turn red', () => {
+    expect([...ATTENTION_CHIPS].sort()).toEqual(['waiting', 'waitingus'])
+  })
+
+  it('Waiting is red when a conversation is waiting for the client, normal when none is', () => {
+    expect(chipHasAttention([thread({ waiting_since: '2026-11-20T10:00:00Z' })], 'waiting')).toBe(true)
+    expect(chipHasAttention([thread(), thread({ waiting_since: null })], 'waiting')).toBe(false)
+    expect(chipHasAttention([], 'waiting')).toBe(false)
+  })
+
+  it('Waiting on us is red when a conversation is waiting on us, normal when none is', () => {
+    expect(chipHasAttention([thread({ waiting_us_since: '2026-11-20T10:00:00Z' })], 'waitingus')).toBe(true)
+    expect(chipHasAttention([thread(), thread({ waiting_us_since: null })], 'waitingus')).toBe(false)
+  })
+
+  it('the two chips are independent of each other', () => {
+    const onlyClient = [thread({ waiting_since: '2026-11-20T10:00:00Z' })]
+    expect(chipHasAttention(onlyClient, 'waiting')).toBe(true)
+    expect(chipHasAttention(onlyClient, 'waitingus')).toBe(false)
+  })
+
+  it('every other chip stays normal even when full of conversations', () => {
+    const busy = [thread({ unread_count: 4, is_pinned: true, has_people_messages: true, waiting_since: '2026-11-20T10:00:00Z' })]
+    for (const key of ['all', 'unread', 'whatsnew', 'chats', 'pinned'] as const) {
+      expect(chipHasAttention(busy, key)).toBe(false)
+    }
+  })
+
+  it('agrees with what the chip lists (same rule as matchesListFilter)', () => {
+    const rows = [thread({ waiting_since: '2026-11-20T10:00:00Z' }), thread({ waiting_us_since: '2026-11-21T10:00:00Z' }), thread()]
+    for (const key of ['waiting', 'waitingus'] as const) {
+      expect(chipHasAttention(rows, key)).toBe(rows.filter(t => matchesListFilter(t, key)).length > 0)
+    }
   })
 })

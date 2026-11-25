@@ -23,7 +23,7 @@ import { ThreadIdeasPanel } from '@/components/portal-chats/thread-ideas-panel'
 import { ThreadEmailPanel } from '@/components/portal-chats/thread-email-panel'
 import { ThreadWorkerPanel } from '@/components/portal-chats/thread-worker-panel'
 import { ContactLanguageField } from '@/components/portal-chats/contact-language-field'
-import { DEFAULT_LIST_FILTER, LIST_FILTER_CHIPS, matchesListFilter, orderThreadsForChip, type ListFilter } from '@/lib/portal-chats/list-filter'
+import { DEFAULT_LIST_FILTER, LIST_FILTER_CHIPS, chipHasAttention, matchesListFilter, orderThreadsForChip, type ListFilter } from '@/lib/portal-chats/list-filter'
 import { daysWaiting } from '@/lib/portal-chats/waiting'
 import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { VoiceNote } from '@/components/team-chat/voice-note'
@@ -2991,16 +2991,28 @@ export default function PortalChatsPage() {
         </div>
         {/* Filter chips + issues total */}
         <div className="px-3 py-2 border-b flex items-center gap-1.5 flex-wrap">
-          {LIST_FILTER_CHIPS.map(([key, label]) => (
-            <button
-              key={key}
-              onClick={() => setListFilter(key)}
-              aria-pressed={listFilter === key}
-              className={`text-[11px] px-2 py-0.5 rounded-full border transition-colors ${listFilter === key ? 'bg-blue-600 text-white border-blue-600' : 'border-zinc-200 text-zinc-600 hover:bg-zinc-50'}`}
-            >
-              {label}
-            </button>
-          ))}
+          {LIST_FILTER_CHIPS.map(([key, label]) => {
+            // "Waiting" and "Waiting on us" turn red while a conversation is inside (Antonio, 2026-11-25). Same reds as elsewhere on this page.
+            const red = chipHasAttention(threads ?? [], key, whatsNewCounts)
+            const selected = listFilter === key
+            return (
+              <button
+                key={key}
+                onClick={() => setListFilter(key)}
+                aria-pressed={selected}
+                data-testid={`chat-filter-chip-${key}`}
+                data-attention={red ? 'true' : 'false'}
+                className={cn(
+                  'text-[11px] px-2 py-0.5 rounded-full border transition-colors',
+                  selected
+                    ? (red ? 'bg-red-600 text-white border-red-600' : 'bg-blue-600 text-white border-blue-600')
+                    : (red ? 'text-red-700 bg-red-100/70 border-red-300 hover:bg-red-100' : 'border-zinc-200 text-zinc-600 hover:bg-zinc-50')
+                )}
+              >
+                {label}
+              </button>
+            )
+          })}
         </div>
         <div className="flex-1 overflow-y-auto">
           {threadsLoading ? (

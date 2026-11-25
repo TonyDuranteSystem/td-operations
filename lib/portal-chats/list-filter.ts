@@ -40,6 +40,12 @@ export const LIST_FILTER_CHIPS: ReadonlyArray<readonly [ListFilter, string]> = [
   ["waitingus", "Waiting on us"],
 ]
 
+/**
+ * Chips that turn RED while at least one conversation is inside (Antonio, 2026-11-25: "the 'on us' and 'waiting for clients' chips
+ * must be red if there are messages inside"). Colour only — what these chips filter is unchanged. The other chips never turn red.
+ */
+export const ATTENTION_CHIPS: ReadonlySet<ListFilter> = new Set<ListFilter>(["waiting", "waitingus"])
+
 export interface FilterableThread extends SortableThread {
   /** True when at least one non-deleted message was written by the client or the team. Undefined = unknown. */
   has_people_messages?: boolean
@@ -75,6 +81,15 @@ export function matchesListFilter(
     default:
       return true
   }
+}
+
+/**
+ * Should this chip be drawn red? Yes when it is one of the attention chips and at least one conversation (of ALL loaded ones —
+ * the search box is deliberately not applied, so the chip does not blink on and off while typing) belongs under it.
+ */
+export function chipHasAttention<T extends FilterableThread>(threads: ReadonlyArray<T>, filter: ListFilter, counts?: WhatsNewCounts | null): boolean {
+  if (!ATTENTION_CHIPS.has(filter)) return false
+  return threads.some(t => matchesListFilter(t, filter, counts))
 }
 
 /**
