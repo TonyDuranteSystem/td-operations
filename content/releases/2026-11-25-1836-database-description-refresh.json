@@ -1,0 +1,6 @@
+{
+  "title": "Housekeeping: the code's description of the database is up to date again",
+  "tag": "behind-the-scenes",
+  "text": "A small automatic update so the code's description of our database matches the database after the chat owner change. It fixes a failing automatic check on every change. Nothing changes on any screen.",
+  "points": []
+}
