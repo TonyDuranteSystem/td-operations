@@ -1,0 +1,6 @@
+{
+  "title": "Portal Chats: the QA test login is no longer offered as an owner",
+  "tag": "behind-the-scenes",
+  "text": "The \"Waiting on us\" owner list no longer includes the QA test login, because it is not a person who answers clients. It does not appear in the card's filter, in the owner menus, or in the \"Who answers?\" menu, and it can no longer be picked as an owner. The login itself is untouched.",
+  "points": []
+}

@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { isDashboardUser } from '@/lib/auth'
 import { NextResponse } from 'next/server'
-import { staffInitials, tidyStaffName, type WaitingStaff } from '@/lib/portal-chats/waiting-owner'
+import { ownerPickerMembers, staffInitials, tidyStaffName, type WaitingStaff } from '@/lib/portal-chats/waiting-owner'
 
 /**
  * GET /api/portal/chat/waiting-staff — Admin/staff only.
@@ -16,7 +16,7 @@ export async function GET() {
   }
   try {
     const { listTeamMembers } = await import('@/lib/team/directory')
-    const staff: WaitingStaff[] = (await listTeamMembers())
+    const staff: WaitingStaff[] = ownerPickerMembers(await listTeamMembers())
       .map(m => ({ id: m.id, name: tidyStaffName(m.name), initials: staffInitials(m.name) }))
       .sort((a, b) => a.name.localeCompare(b.name))
     return NextResponse.json(staff, { headers: { 'Cache-Control': 'no-store' } })
