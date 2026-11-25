@@ -307,7 +307,7 @@ export function DocumentsPanel({ accountId, isAdmin, appBaseUrl, onGenerateOA, o
           const StatusIcon = config?.icon || AlertCircle
 
           return (
-            <div key={doc.key} className="flex items-center justify-between px-4 py-2.5 text-sm">
+            <div key={doc.key} className="flex flex-wrap items-center justify-between gap-y-2 px-4 py-2.5 text-sm">
               <div className="flex items-center gap-2 min-w-0">
                 {doc.data ? (
                   <StatusIcon className={cn('h-4 w-4 shrink-0', config?.color)} />
@@ -319,7 +319,7 @@ export function DocumentsPanel({ accountId, isAdmin, appBaseUrl, onGenerateOA, o
                 </span>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0 ml-2">
+              <div className="flex max-w-full flex-wrap items-center gap-2 ml-2">
                 {doc.data ? (
                   <>
                     <span className={cn('text-xs', config?.color)}>

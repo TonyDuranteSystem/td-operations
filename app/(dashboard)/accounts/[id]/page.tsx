@@ -677,10 +677,10 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
 
   return (
     <div className="p-6 lg:p-8">
-      <div className="mb-4 flex justify-end gap-2">
+      <div className="mb-4 flex flex-wrap justify-start gap-2 sm:justify-end">
         <Link
           href={`/tools/esign/new?account=${params.id}${primaryContact ? `&contact=${primaryContact.id}` : ''}`}
-          className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-100"
+          className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-100"
         >
           ✍️ Create e-sign document
         </Link>
@@ -688,7 +688,7 @@ export default async function AccountDetailPage({ params }: { params: { id: stri
           href={HARBOR.url}
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-3 py-1.5 text-sm font-medium text-amber-700 hover:bg-amber-100"
+          className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border border-amber-200 bg-amber-50 px-3 py-1.5 text-sm font-medium text-amber-700 hover:bg-amber-100"
         >
           🏛️ Open Harbor Compliance
         </a>

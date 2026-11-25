@@ -397,8 +397,8 @@ export function ContactDetail({
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex min-w-0 items-center gap-3">
           <button onClick={() => router.back()} className="p-2 rounded-lg hover:bg-zinc-100 transition-colors">
             <ArrowLeft className="h-5 w-5" />
           </button>
@@ -432,7 +432,7 @@ export function ContactDetail({
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <ComposeEmailButton
             contactId={contact.id}
             to={contact.email || undefined}
