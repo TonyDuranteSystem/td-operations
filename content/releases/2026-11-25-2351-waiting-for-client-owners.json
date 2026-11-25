@@ -1,0 +1,12 @@
+{
+  "title": "Portal Chats: each \"Waiting for client\" conversation now has an owner too",
+  "tag": "new",
+  "text": "Clicking \"Waiting for client\" now opens the same small card as \"Waiting on us\": every conversation we are waiting on the client for, with the team member who follows it up and the days waited. Filters show everyone's, one person's, or the ones nobody has taken yet, and the card opens on your own. The hourglass button under a message now asks who follows up, with you first, and the owner's initials show in the conversation list. You can change the owner from the small menu on its line. Conversations marked before today show under \"Not assigned\". The automatic reminder to the client is unchanged.",
+  "points": [
+    "Click \"Waiting for client\": the card opens on your own conversations",
+    "Mark a conversation with the hourglass button: choose who follows up",
+    "Change the owner from the line in the card",
+    "Click \"Waiting on us\" to switch to the other card"
+  ],
+  "screenshot": "waiting-for-client-owners.png"
+}

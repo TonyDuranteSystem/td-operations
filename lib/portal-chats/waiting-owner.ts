@@ -1,9 +1,10 @@
 /**
- * Who a "Waiting on us" conversation belongs to (Antonio, 2026-11-25, dev job 40b5fd59).
+ * Who a "Waiting on us" / "Waiting for client" conversation belongs to (Antonio, 2026-11-25, dev job 40b5fd59).
  *
  * A conversation the client is waiting on us for has ONE owner: a team member (staff login) who answers it, or nobody yet.
- * The "Waiting on us" card lists them with the owner and a filter per team member; each person's card opens on their own.
- * Pure rules (no React, no database) so they are unit-tested; the card and the routes only call these.
+ * Since 2026-11-25 (later) a conversation WE are waiting on the client for has one too: the team member who follows it up.
+ * Each chip's card lists its conversations with the owner and a filter per team member; each person's card opens on their own.
+ * Pure rules (no React, no database) so they are unit-tested; the cards and the routes only call these.
  */
 
 /** The team member shape the card needs (the server turns the staff directory into this). */
@@ -16,11 +17,28 @@ export interface WaitingStaff {
 /** Filter on the card: everyone, nobody assigned yet, or one team member (their user id). */
 export type OwnerFilter = 'all' | 'none' | (string & {})
 
+/** Which mark: "us" = the client waits for the team; "client" = the team waits for the client. */
+export type WaitingKind = 'client' | 'us'
+
 export interface OwnedThread {
   /** When it was marked "waiting on us" (ISO); null/undefined = not waiting on us. */
   waiting_us_since?: string | null
   /** Staff user id of the owner; null/undefined = not assigned. */
   waiting_us_owner?: string | null
+  /** When it was marked "waiting for client" (ISO); null/undefined = not waiting for the client. */
+  waiting_since?: string | null
+  /** Staff user id who follows the "waiting for client" conversation up; null/undefined = not assigned. */
+  waiting_owner?: string | null
+}
+
+/** When this conversation was marked, for the given kind (null = it is not marked that way). */
+export function waitingSinceOf(t: OwnedThread, kind: WaitingKind): string | null {
+  return (kind === 'us' ? t.waiting_us_since : t.waiting_since) ?? null
+}
+
+/** The staff user id that owns this conversation's mark of the given kind (null = not assigned). */
+export function waitingOwnerOf(t: OwnedThread, kind: WaitingKind): string | null {
+  return (kind === 'us' ? t.waiting_us_owner : t.waiting_owner) ?? null
 }
 
 /**
@@ -45,11 +63,12 @@ export function defaultOwnerFilter(viewerId: string | null | undefined, staff: R
   return viewerId && staff.some(s => s.id === viewerId) ? viewerId : 'all'
 }
 
-/** Does this conversation belong under the card's filter? */
-export function matchesOwnerFilter(t: OwnedThread, filter: OwnerFilter): boolean {
+/** Does this conversation belong under the card's filter? (`kind` = which chip's card; "us" unless said otherwise.) */
+export function matchesOwnerFilter(t: OwnedThread, filter: OwnerFilter, kind: WaitingKind = 'us'): boolean {
   if (filter === 'all') return true
-  if (filter === 'none') return !t.waiting_us_owner
-  return t.waiting_us_owner === filter
+  const owner = waitingOwnerOf(t, kind)
+  if (filter === 'none') return !owner
+  return owner === filter
 }
 
 export interface OwnerCounts {
@@ -58,23 +77,29 @@ export interface OwnerCounts {
   byOwner: Record<string, number>
 }
 
-/** How many waiting-on-us conversations each pill holds. Only conversations that are waiting on us are counted. */
-export function ownerCounts(threads: ReadonlyArray<OwnedThread>): OwnerCounts {
+/** How many conversations each pill holds. Only conversations that are marked with this `kind` are counted. */
+export function ownerCounts(threads: ReadonlyArray<OwnedThread>, kind: WaitingKind = 'us'): OwnerCounts {
   const out: OwnerCounts = { all: 0, none: 0, byOwner: {} }
   for (const t of threads) {
-    if (!t.waiting_us_since) continue
+    if (!waitingSinceOf(t, kind)) continue
     out.all++
-    if (!t.waiting_us_owner) out.none++
-    else out.byOwner[t.waiting_us_owner] = (out.byOwner[t.waiting_us_owner] ?? 0) + 1
+    const owner = waitingOwnerOf(t, kind)
+    if (!owner) out.none++
+    else out.byOwner[owner] = (out.byOwner[owner] ?? 0) + 1
   }
   return out
 }
 
-/** The waiting-on-us conversations for the card: the chosen filter applied, longest-waiting first. */
-export function waitingUsForCard<T extends OwnedThread>(threads: ReadonlyArray<T>, filter: OwnerFilter): T[] {
+/** The conversations marked with this `kind` for the card: the chosen filter applied, longest-waiting first. */
+export function waitingForCard<T extends OwnedThread>(threads: ReadonlyArray<T>, filter: OwnerFilter, kind: WaitingKind = 'us'): T[] {
   return threads
-    .filter(t => !!t.waiting_us_since && matchesOwnerFilter(t, filter))
-    .sort((a, b) => (a.waiting_us_since ?? '').localeCompare(b.waiting_us_since ?? ''))
+    .filter(t => !!waitingSinceOf(t, kind) && matchesOwnerFilter(t, filter, kind))
+    .sort((a, b) => (waitingSinceOf(a, kind) ?? '').localeCompare(waitingSinceOf(b, kind) ?? ''))
+}
+
+/** The waiting-on-us conversations for the card (see waitingForCard). */
+export function waitingUsForCard<T extends OwnedThread>(threads: ReadonlyArray<T>, filter: OwnerFilter): T[] {
+  return waitingForCard(threads, filter, 'us')
 }
 
 /** One flat shape (not a union): this project's TypeScript is not strict, so `if (!d.ok)` would not narrow a union. */
@@ -85,18 +110,17 @@ export interface OwnerDecision {
 }
 
 /**
- * Who a NEW mark belongs to. Only "waiting on us" has an owner.
+ * Who a NEW mark belongs to. Both kinds have an owner and follow the same rules (before 2026-11-25 "later" only "waiting on us" did).
  * - not asked for (undefined) → the person marking it, if they are on the team list (that is the menu's default);
  * - asked for nobody (null or empty) → not assigned;
  * - asked for a person → they must be on the team list.
  */
 export function decideOwnerForMark(opts: {
-  kind: 'client' | 'us'
+  kind: WaitingKind
   requested: string | null | undefined
   markerId: string
   staffIds: ReadonlyArray<string>
 }): OwnerDecision {
-  if (opts.kind !== 'us') return { ok: true, owner: null }
   const { requested, markerId, staffIds } = opts
   if (requested === undefined) return { ok: true, owner: staffIds.includes(markerId) ? markerId : null }
   if (requested === null || requested === '') return { ok: true, owner: null }

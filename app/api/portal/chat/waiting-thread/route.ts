@@ -13,7 +13,8 @@ import { decideOwnerForMark, ownerPickerMembers } from '@/lib/portal-chats/waiti
  * Body: { account_id?: string, contact_id?: string, waiting: boolean, kind?: 'client' | 'us', assigned_to?: string | null }
  * Exactly one of account_id / contact_id identifies the conversation.
  * kind 'client' (default) = waiting for the client; 'us' = the client is waiting for us (ends when staff write).
- * assigned_to (kind 'us' only): the team member who answers. Left out = the person marking; null = nobody yet (see lib/portal-chats/waiting-owner.ts).
+ * assigned_to (either kind): the team member who answers ('us') or follows the client up ('client'). Left out = the person marking; null = nobody yet
+ * (see lib/portal-chats/waiting-owner.ts). Before 2026-11-25 (later) only 'us' had an owner.
  * One mark per conversation: marking replaces any existing mark, of either kind, and restarts the clock
  * (new marked_at, reminders back to zero).
  */
@@ -40,10 +41,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'account_id or contact_id required' }, { status: 400 })
   }
 
-  // Who a "waiting on us" mark belongs to (2026-11-25): the person marking it unless the screen asked for someone else (or nobody).
+  // Who a mark belongs to (2026-11-25; both kinds since the "later" change): the person marking it unless the screen asked for someone else (or nobody).
   // Decided BEFORE anything is deleted, so a refused owner leaves the existing mark untouched.
   let owner: string | null = null
-  if (waiting && kind === 'us') {
+  if (waiting) {
     const { listTeamMembers } = await import('@/lib/team/directory')
     let staffIds: string[]
     try {

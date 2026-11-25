@@ -51,6 +51,8 @@ export interface FilterableThread extends SortableThread {
   has_people_messages?: boolean
   /** When staff marked this conversation "waiting for client" and the client has not answered since (ISO). null/undefined = not waiting. */
   waiting_since?: string | null
+  /** Staff user id who follows the "waiting for client" conversation up; null/undefined = not assigned (see waiting-owner.ts). */
+  waiting_owner?: string | null
   /** When staff marked this conversation "waiting on us" (the client is waiting for the team) and the team has not written since (ISO). */
   waiting_us_since?: string | null
   /** Staff user id the "waiting on us" conversation belongs to; null/undefined = not assigned (see waiting-owner.ts). */

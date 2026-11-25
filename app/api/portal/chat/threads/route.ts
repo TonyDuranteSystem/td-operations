@@ -195,8 +195,10 @@ export async function GET() {
     // "us" mark ends when staff write) — so the mark ends by itself. Failure here never blocks the list (the chips are simply empty).
     const waitingSince = new Map<string, string>()
     const waitingUsSince = new Map<string, string>()
-    // Who each "waiting on us" mark belongs to (staff user id), same keys as waitingUsSince. Empty when nobody owns it or the column is not there yet.
+    // Who each mark belongs to (staff user id), same keys as the since-maps: the owner of a "waiting on us" mark answers it, the owner of a
+    // "waiting for client" mark follows the client up. Empty when nobody owns it or the column is not there yet.
     const waitingUsOwner = new Map<string, string>()
+    const waitingOwner = new Map<string, string>()
     try {
       type WaitRow = { account_id: string | null; contact_id: string | null; marked_at: string; kind: string | null; assigned_to?: string | null }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -231,7 +233,7 @@ export async function GET() {
           if (isStillWaiting(r.marked_at, times)) {
             const mapKey = r.account_id ? `account:${key}` : `contact:${key}`
             ;(waitingOnUs ? waitingUsSince : waitingSince).set(mapKey, r.marked_at)
-            if (waitingOnUs && r.assigned_to) waitingUsOwner.set(mapKey, r.assigned_to)
+            if (r.assigned_to) (waitingOnUs ? waitingUsOwner : waitingOwner).set(mapKey, r.assigned_to)
           }
         }
       }
@@ -277,6 +279,9 @@ export async function GET() {
       // Feeds the "Waiting" chip: when staff marked this conversation as waiting for the client and the client has not written since.
       waiting_since: (r.account_id ? waitingSince.get(`account:${r.account_id}`) : undefined)
         ?? (r.contact_id ? waitingSince.get(`contact:${r.contact_id}`) : undefined) ?? null,
+      // Who follows up a "waiting for client" conversation (staff user id); null = not assigned. Feeds the Waiting-for-client card and its filter.
+      waiting_owner: (r.account_id ? waitingOwner.get(`account:${r.account_id}`) : undefined)
+        ?? (r.contact_id ? waitingOwner.get(`contact:${r.contact_id}`) : undefined) ?? null,
       // Feeds the "Waiting on us" chip: the client is waiting for the team and the team has not written since.
       waiting_us_since: (r.account_id ? waitingUsSince.get(`account:${r.account_id}`) : undefined)
         ?? (r.contact_id ? waitingUsSince.get(`contact:${r.contact_id}`) : undefined) ?? null,

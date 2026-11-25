@@ -25,8 +25,8 @@ import { ThreadWorkerPanel } from '@/components/portal-chats/thread-worker-panel
 import { ContactLanguageField } from '@/components/portal-chats/contact-language-field'
 import { DEFAULT_LIST_FILTER, LIST_FILTER_CHIPS, chipHasAttention, matchesListFilter, orderThreadsForChip, type ListFilter } from '@/lib/portal-chats/list-filter'
 import { daysWaiting } from '@/lib/portal-chats/waiting'
-import { WaitingOnUsCard, OwnerBadge } from '@/components/portal-chats/waiting-on-us-card'
-import type { WaitingStaff } from '@/lib/portal-chats/waiting-owner'
+import { WaitingOwnersCard, OwnerBadge } from '@/components/portal-chats/waiting-owners-card'
+import type { WaitingKind, WaitingStaff } from '@/lib/portal-chats/waiting-owner'
 import { uploadChatAttachment, validateChatAttachment } from '@/lib/portal/chat-attachment'
 import { VoiceNote } from '@/components/team-chat/voice-note'
 import { chatPreviewText, isVoiceAttachment } from '@/lib/portal/chat-voice'
@@ -131,6 +131,8 @@ interface ChatThread {
   has_people_messages?: boolean
   /** Marked "waiting for client" by staff and the client has not written since (ISO of the mark). null = not waiting. */
   waiting_since?: string | null
+  /** Who follows the "waiting for client" conversation up (staff user id); null = not assigned. */
+  waiting_owner?: string | null
   /** Marked "waiting on us" (the client waits for the team) and the team has not written since (ISO). null = not. */
   waiting_us_since?: string | null
   /** Who the "waiting on us" conversation belongs to (staff user id); null = not assigned. */
@@ -500,8 +502,8 @@ export default function PortalChatsPage() {
   const [selectedMsgIds, setSelectedMsgIds] = useState<Set<string>>(new Set())
   // Chat-list filter chip: All / Unread / What's New / Chats / Pinned (lib/portal-chats/list-filter.ts). Opens on Chats.
   const [listFilter, setListFilter] = useState<ListFilter>(DEFAULT_LIST_FILTER)
-  // The small card under the "Waiting on us" chip (owners + per-person filter).
-  const [waitingCardOpen, setWaitingCardOpen] = useState(false)
+  // The small card under the "Waiting for client" / "Waiting on us" chip (owners + per-person filter): which one is open, or none.
+  const [waitingCardKind, setWaitingCardKind] = useState<WaitingKind | null>(null)
   // The conversation row currently swiped open on a phone ('<threadKey>|left' or '|right'); only one at a time.
   const [openSwipeKey, setOpenSwipeKey] = useState<string | null>(null)
   // "Open card" from a What's New note → opens the same dashboard card editor, preset to this client.
@@ -1853,7 +1855,7 @@ export default function PortalChatsPage() {
       const res = await fetch('/api/portal/chat/waiting-thread', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ account_id, contact_id, waiting, kind: kind ?? 'client', ...(kind === 'us' && assigned_to !== undefined ? { assigned_to } : {}) }),
+        body: JSON.stringify({ account_id, contact_id, waiting, kind: kind ?? 'client', ...(assigned_to !== undefined ? { assigned_to } : {}) }),
       })
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
@@ -1866,7 +1868,13 @@ export default function PortalChatsPage() {
       const since: string | null = vars.waiting ? (d?.waiting_since ?? new Date().toISOString()) : null
       queryClient.setQueryData<ChatThread[]>(['portal-chat-threads'], old => old?.map(t =>
         (vars.account_id ? t.account_id === vars.account_id : t.contact_id === vars.contact_id)
-          ? { ...t, waiting_since: vars.kind === 'us' ? null : since, waiting_us_since: vars.kind === 'us' ? since : null, waiting_us_owner: vars.waiting && vars.kind === 'us' ? (d?.assigned_to ?? null) : null }
+          ? {
+              ...t,
+              waiting_since: vars.kind === 'us' ? null : since,
+              waiting_us_since: vars.kind === 'us' ? since : null,
+              waiting_owner: vars.waiting && vars.kind !== 'us' ? (d?.assigned_to ?? null) : null,
+              waiting_us_owner: vars.waiting && vars.kind === 'us' ? (d?.assigned_to ?? null) : null,
+            }
           : t))
       queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
       toast.success(!vars.waiting ? 'Waiting mark cleared' : vars.kind === 'us' ? 'Marked: waiting on us' : 'Marked: waiting for client')
@@ -1876,7 +1884,7 @@ export default function PortalChatsPage() {
     },
   })
 
-  // The team members a "Waiting on us" conversation can belong to (same staff list as Team Chat). A failed read leaves the list empty and the
+  // The team members a waiting conversation can belong to (same staff list as Team Chat). A failed read leaves the list empty and the
   // owner menu falls back to a plain click that marks it for the person clicking.
   const { data: waitingStaff = [] } = useQuery<WaitingStaff[]>({
     queryKey: ['portal-chat-waiting-staff'],
@@ -1888,31 +1896,31 @@ export default function PortalChatsPage() {
     staleTime: 5 * 60_000,
   })
 
-  // Change who a "Waiting on us" conversation belongs to. The days waited do not restart.
+  // Change who a "Waiting on us" / "Waiting for client" conversation belongs to. The days waited do not restart.
   const waitingOwnerMutation = useMutation({
-    mutationFn: async ({ account_id, contact_id, assigned_to }: { account_id: string | null; contact_id: string | null; assigned_to: string | null }) => {
+    mutationFn: async ({ account_id, contact_id, assigned_to, kind }: { account_id: string | null; contact_id: string | null; assigned_to: string | null; kind: WaitingKind }) => {
       const res = await fetch('/api/portal/chat/waiting-owner', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ account_id, contact_id, assigned_to }),
+        body: JSON.stringify({ account_id, contact_id, assigned_to, kind }),
       })
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
-        throw new Error(d.error || 'Could not change who answers — please try again.')
+        throw new Error(d.error || 'Could not change who it belongs to — please try again.')
       }
       return res.json()
     },
     onSuccess: (_d, vars) => {
       queryClient.setQueryData<ChatThread[]>(['portal-chat-threads'], old => old?.map(t =>
         (vars.account_id ? t.account_id === vars.account_id : t.contact_id === vars.contact_id)
-          ? { ...t, waiting_us_owner: vars.assigned_to }
+          ? (vars.kind === 'us' ? { ...t, waiting_us_owner: vars.assigned_to } : { ...t, waiting_owner: vars.assigned_to })
           : t))
       queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
       toast.success(vars.assigned_to ? `Assigned to ${waitingStaff.find(s => s.id === vars.assigned_to)?.name ?? 'that person'}` : 'Marked as not assigned')
     },
     onError: (err) => {
       queryClient.invalidateQueries({ queryKey: ['portal-chat-threads'] })
-      toast.error(err instanceof Error && err.message ? err.message : 'Could not change who answers')
+      toast.error(err instanceof Error && err.message ? err.message : 'Could not change who it belongs to')
     },
   })
 
@@ -3084,13 +3092,13 @@ export default function PortalChatsPage() {
                 key={key}
                 onClick={() => {
                   setListFilter(key)
-                  // "Waiting on us" also opens the owners card (click it again to reopen); every other chip closes it.
-                  setWaitingCardOpen(key === 'waitingus')
+                  // "Waiting for client" and "Waiting on us" also open their owners card (click the chip again to reopen); every other chip closes it.
+                  setWaitingCardKind(key === 'waiting' ? 'client' : key === 'waitingus' ? 'us' : null)
                 }}
                 aria-pressed={selected}
                 data-testid={`chat-filter-chip-${key}`}
                 data-attention={red ? 'true' : 'false'}
-                {...(key === 'waitingus' ? { 'data-waiting-card-keep': '' } : {})}
+                {...(key === 'waiting' || key === 'waitingus' ? { 'data-waiting-card-keep': '' } : {})}
                 className={cn(
                   'text-[11px] px-2 py-0.5 rounded-full border transition-colors',
                   selected
@@ -3103,19 +3111,21 @@ export default function PortalChatsPage() {
             )
           })}
         </div>
-        {waitingCardOpen && listFilter === 'waitingus' && (
-          <WaitingOnUsCard
+        {waitingCardKind && listFilter === (waitingCardKind === 'us' ? 'waitingus' : 'waiting') && (
+          <WaitingOwnersCard
+            key={waitingCardKind}
+            kind={waitingCardKind}
             threads={threads ?? []}
             staff={waitingStaff}
             viewerId={meId}
             loading={threadsLoading}
-            onClose={() => setWaitingCardOpen(false)}
+            onClose={() => setWaitingCardKind(null)}
             onOpen={t => {
               openThread(t as ChatThread)
               // On a phone the list gives way to the chat, so the card goes too; on a computer it stays for the next one.
-              if (typeof window !== 'undefined' && window.innerWidth < 1024) setWaitingCardOpen(false)
+              if (typeof window !== 'undefined' && window.innerWidth < 1024) setWaitingCardKind(null)
             }}
-            onAssign={(t, ownerId) => waitingOwnerMutation.mutate({ account_id: t.account_id, contact_id: t.contact_id, assigned_to: ownerId })}
+            onAssign={(t, ownerId) => waitingOwnerMutation.mutate({ account_id: t.account_id, contact_id: t.contact_id, assigned_to: ownerId, kind: waitingCardKind })}
           />
         )}
         </div>
@@ -3235,11 +3245,12 @@ export default function PortalChatsPage() {
                             e.stopPropagation()
                             waitingThreadMutation.mutate({ account_id: thread.account_id, contact_id: thread.contact_id, waiting: false })
                           }}
-                          title={`Waiting for client — ${daysWaiting(thread.waiting_since, new Date())} day(s). Click to clear`}
-                          className="shrink-0 rounded p-0.5 cursor-pointer hover:bg-zinc-200 inline-flex items-center gap-0.5 text-amber-600"
+                          title={`Waiting for client — ${daysWaiting(thread.waiting_since, new Date())} day(s)${thread.waiting_owner ? ` — ${waitingStaff.find(s => s.id === thread.waiting_owner)?.name ?? 'former team member'}` : ' — not assigned'}. Click to clear`}
+                          className="shrink-0 rounded p-0.5 cursor-pointer hover:bg-zinc-200 inline-flex items-center gap-1 text-amber-600"
                         >
                           <Hourglass className="h-3.5 w-3.5" />
                           <span className="text-[10px] font-medium">{daysWaiting(thread.waiting_since, new Date())}d</span>
+                          <OwnerBadge staff={waitingStaff} ownerId={thread.waiting_owner} />
                         </span>
                       )}
                       {thread.waiting_us_since && (
@@ -4976,76 +4987,83 @@ export default function PortalChatsPage() {
                         {(selectedAccountId || selectedContactId) && !selectMode && (() => {
                           const waitingClient = !!openThreadRow?.waiting_since
                           const waitingUs = !!openThreadRow?.waiting_us_since
-                          const setMark = (kind: 'client' | 'us', on: boolean) =>
-                            waitingThreadMutation.mutate({ account_id: selectedAccountId, contact_id: selectedAccountId ? null : selectedContactId, waiting: on, kind })
-                          return (
-                            <span className="inline-flex items-center gap-0.5">
-                              <FastTooltip label={waitingClient ? `Waiting for client — ${daysWaiting(openThreadRow!.waiting_since as string, new Date())} day(s). Click to clear` : 'Waiting for client: mark this conversation'}>
-                                <button
-                                  type="button"
-                                  aria-label="Waiting for client"
-                                  aria-pressed={waitingClient}
-                                  onClick={() => setMark('client', !waitingClient)}
-                                  className={cn('inline-flex items-center justify-center rounded-full p-1 transition-colors', waitingClient ? 'text-amber-600 bg-amber-100 hover:bg-amber-200' : 'text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100')}
-                                >
-                                  <Hourglass className="h-3.5 w-3.5" />
-                                </button>
-                              </FastTooltip>
-                              {waitingUs || waitingStaff.length === 0 ? (
-                                <FastTooltip label={waitingUs ? `Waiting on us — ${daysWaiting(openThreadRow!.waiting_us_since as string, new Date())} day(s)${openThreadRow?.waiting_us_owner ? ` — ${waitingStaff.find(s => s.id === openThreadRow.waiting_us_owner)?.name ?? 'former team member'}` : ' — not assigned'}. Click to clear` : 'Waiting on us: the client is waiting for our answer'}>
+                          const markTarget = { account_id: selectedAccountId, contact_id: selectedAccountId ? null : selectedContactId }
+                          const setMark = (kind: WaitingKind, on: boolean) => waitingThreadMutation.mutate({ ...markTarget, waiting: on, kind })
+                          const ownerName = (id: string | null | undefined) => (id ? `${waitingStaff.find(s => s.id === id)?.name ?? 'former team member'}` : 'not assigned')
+                          // One hand/hourglass button per kind. Marked: a plain click clears (tooltip shows the days and the owner). Not marked: a short menu asks who
+                          // answers / follows up (the person clicking is the first choice). If the team list could not be read, the plain click marks it for the person clicking.
+                          const markButton = (kind: WaitingKind) => {
+                            const marked = kind === 'us' ? waitingUs : waitingClient
+                            const sinceIso = (kind === 'us' ? openThreadRow?.waiting_us_since : openThreadRow?.waiting_since) as string | null | undefined
+                            const ownerId = kind === 'us' ? openThreadRow?.waiting_us_owner : openThreadRow?.waiting_owner
+                            const name = kind === 'us' ? 'Waiting on us' : 'Waiting for client'
+                            const hint = kind === 'us' ? 'Waiting on us: the client is waiting for our answer' : 'Waiting for client: mark this conversation'
+                            const ask = kind === 'us' ? 'Waiting on us. Who answers?' : 'Waiting for client. Who follows up?'
+                            const Icon = kind === 'us' ? HandHelping : Hourglass
+                            const onClass = kind === 'us' ? 'text-rose-600 bg-rose-100 hover:bg-rose-200' : 'text-amber-600 bg-amber-100 hover:bg-amber-200'
+                            const offClass = 'text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100'
+                            if (marked || waitingStaff.length === 0) {
+                              return (
+                                <FastTooltip label={marked ? `${name} — ${daysWaiting(sinceIso as string, new Date())} day(s) — ${ownerName(ownerId)}. Click to clear` : hint}>
                                   <button
                                     type="button"
-                                    aria-label="Waiting on us"
-                                    aria-pressed={waitingUs}
-                                    onClick={() => setMark('us', !waitingUs)}
-                                    className={cn('inline-flex items-center justify-center rounded-full p-1 transition-colors', waitingUs ? 'text-rose-600 bg-rose-100 hover:bg-rose-200' : 'text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100')}
+                                    aria-label={name}
+                                    aria-pressed={marked}
+                                    onClick={() => setMark(kind, !marked)}
+                                    className={cn('inline-flex items-center justify-center rounded-full p-1 transition-colors', marked ? onClass : offClass)}
                                   >
-                                    <HandHelping className="h-3.5 w-3.5" />
+                                    <Icon className="h-3.5 w-3.5" />
                                   </button>
                                 </FastTooltip>
-                              ) : (
-                                // Not marked yet: ask who answers (the person clicking is the first choice). If the team list could not be read, the plain button above marks it for the person clicking.
-                                <DropdownMenu.Root>
-                                  <FastTooltip label="Waiting on us: the client is waiting for our answer">
-                                    <DropdownMenu.Trigger asChild>
-                                      <button
-                                        type="button"
-                                        aria-label="Waiting on us"
-                                        aria-pressed={false}
-                                        data-testid="waiting-us-mark"
-                                        className="inline-flex items-center justify-center rounded-full p-1 transition-colors text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100"
-                                      >
-                                        <HandHelping className="h-3.5 w-3.5" />
-                                      </button>
-                                    </DropdownMenu.Trigger>
-                                  </FastTooltip>
-                                  <DropdownMenu.Portal>
-                                    <DropdownMenu.Content className="min-w-[210px] rounded-lg bg-white shadow-lg border border-zinc-200 py-1 z-50" align="end" sideOffset={4}>
-                                      <DropdownMenu.Label className="px-3 py-1.5 text-xs font-semibold text-zinc-500">Waiting on us. Who answers?</DropdownMenu.Label>
-                                      {[...waitingStaff].sort((a, b) => (a.id === meId ? -1 : b.id === meId ? 1 : 0)).map(s => (
-                                        <DropdownMenu.Item
-                                          key={s.id}
-                                          data-testid={`waiting-us-owner-${s.id}`}
-                                          className="flex items-center gap-2 px-3 py-1.5 text-sm text-zinc-800 hover:bg-zinc-50 cursor-pointer outline-none"
-                                          onSelect={() => waitingThreadMutation.mutate({ account_id: selectedAccountId, contact_id: selectedAccountId ? null : selectedContactId, waiting: true, kind: 'us', assigned_to: s.id })}
-                                        >
-                                          <OwnerBadge staff={waitingStaff} ownerId={s.id} />
-                                          {s.name}{s.id === meId ? ' (me)' : ''}
-                                          {s.id === meId && <span className="ml-auto text-[11px] text-zinc-400">default</span>}
-                                        </DropdownMenu.Item>
-                                      ))}
+                              )
+                            }
+                            return (
+                              <DropdownMenu.Root>
+                                <FastTooltip label={hint}>
+                                  <DropdownMenu.Trigger asChild>
+                                    <button
+                                      type="button"
+                                      aria-label={name}
+                                      aria-pressed={false}
+                                      data-testid={`waiting-${kind}-mark`}
+                                      className={cn('inline-flex items-center justify-center rounded-full p-1 transition-colors', offClass)}
+                                    >
+                                      <Icon className="h-3.5 w-3.5" />
+                                    </button>
+                                  </DropdownMenu.Trigger>
+                                </FastTooltip>
+                                <DropdownMenu.Portal>
+                                  <DropdownMenu.Content className="min-w-[210px] rounded-lg bg-white shadow-lg border border-zinc-200 py-1 z-50" align="end" sideOffset={4}>
+                                    <DropdownMenu.Label className="px-3 py-1.5 text-xs font-semibold text-zinc-500">{ask}</DropdownMenu.Label>
+                                    {[...waitingStaff].sort((a, b) => (a.id === meId ? -1 : b.id === meId ? 1 : 0)).map(s => (
                                       <DropdownMenu.Item
-                                        data-testid="waiting-us-owner-none"
+                                        key={s.id}
+                                        data-testid={`waiting-${kind}-owner-${s.id}`}
                                         className="flex items-center gap-2 px-3 py-1.5 text-sm text-zinc-800 hover:bg-zinc-50 cursor-pointer outline-none"
-                                        onSelect={() => waitingThreadMutation.mutate({ account_id: selectedAccountId, contact_id: selectedAccountId ? null : selectedContactId, waiting: true, kind: 'us', assigned_to: null })}
+                                        onSelect={() => waitingThreadMutation.mutate({ ...markTarget, waiting: true, kind, assigned_to: s.id })}
                                       >
-                                        <OwnerBadge staff={waitingStaff} ownerId={null} />
-                                        Not assigned
+                                        <OwnerBadge staff={waitingStaff} ownerId={s.id} />
+                                        {s.name}{s.id === meId ? ' (me)' : ''}
+                                        {s.id === meId && <span className="ml-auto text-[11px] text-zinc-400">default</span>}
                                       </DropdownMenu.Item>
-                                    </DropdownMenu.Content>
-                                  </DropdownMenu.Portal>
-                                </DropdownMenu.Root>
-                              )}
+                                    ))}
+                                    <DropdownMenu.Item
+                                      data-testid={`waiting-${kind}-owner-none`}
+                                      className="flex items-center gap-2 px-3 py-1.5 text-sm text-zinc-800 hover:bg-zinc-50 cursor-pointer outline-none"
+                                      onSelect={() => waitingThreadMutation.mutate({ ...markTarget, waiting: true, kind, assigned_to: null })}
+                                    >
+                                      <OwnerBadge staff={waitingStaff} ownerId={null} />
+                                      Not assigned
+                                    </DropdownMenu.Item>
+                                  </DropdownMenu.Content>
+                                </DropdownMenu.Portal>
+                              </DropdownMenu.Root>
+                            )
+                          }
+                          return (
+                            <span className="inline-flex items-center gap-0.5">
+                              {markButton('client')}
+                              {markButton('us')}
                             </span>
                           )
                         })()}
