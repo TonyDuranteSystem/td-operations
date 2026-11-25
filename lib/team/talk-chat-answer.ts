@@ -35,8 +35,11 @@ export type TalkChatResult =
 /** What the screen shows when the server could not read the chat (a temporary fault, never "the chat is empty"). */
 export const TALK_CHAT_LOAD_FAILED = 'Could not load this chat. Please try again.'
 
-/** PostgREST says "no row" with this code; any other error on the chat row is a fault, not a missing chat. */
-const NO_ROW_CODE = 'PGRST116'
+/**
+ * "No such chat": PostgREST's no-row code, or Postgres refusing an id that is not even a uuid (a mistyped `?thread=` link). Any other error on the chat
+ * row is a fault, not a missing chat.
+ */
+const NO_SUCH_CHAT_CODES = ['PGRST116', '22P02']
 
 /**
  * `client` is the service-role Supabase client (the route's `supabaseAdmin`); injected so the rules can be tested without a database.
@@ -63,7 +66,7 @@ export async function buildTalkChatAnswer(client: any, a: TalkChatArgs): Promise
   ])
   const thread = threadRes?.data
   if (!thread) {
-    if (threadRes?.error && threadRes.error.code !== NO_ROW_CODE) return fault('chat lookup failed', threadRes.error)
+    if (threadRes?.error && !NO_SUCH_CHAT_CODES.includes(threadRes.error.code)) return fault('chat lookup failed', threadRes.error)
     return { status: 404, body: { error: 'Thread not found' } }
   }
 

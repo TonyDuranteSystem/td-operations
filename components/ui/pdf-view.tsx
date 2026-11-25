@@ -35,7 +35,7 @@ export function PdfView({ src, title, className }: { src: string; title: string;
       >
         <ExternalLink className="h-4 w-4" /> Open PDF
       </a>
-      <p className="max-w-xs text-xs text-zinc-500">Opens in your phone&apos;s PDF viewer with every page. Use Back to return here.</p>
+      <p className="max-w-xs text-xs text-zinc-500">Opens the PDF with every page. When you are done, close it or go back to return here.</p>
     </div>
   )
 }

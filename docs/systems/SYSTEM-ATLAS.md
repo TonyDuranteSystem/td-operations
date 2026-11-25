@@ -209,7 +209,7 @@ _Regenerated 2026-11-25. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [incoming-payments.md](incoming-payments.md) — Incoming payments (Stripe payments with no label — "Payments to confirm") _(verified 2026-11-15)_
 - [leads.md](leads.md) — Leads — the Leads list (a tab of the Booking page) and the lead page _(verified 2026-11-23)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-11-21)_
-- [marketing.md](marketing.md) — TD Marketing (Rocco's and Ale's sales workspace) _(verified 2026-11-13)_
+- [marketing.md](marketing.md) — TD Marketing (Rocco's and Ale's sales workspace) _(verified 2026-11-25)_
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-11-23)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-11-20)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-11-11)_
@@ -236,7 +236,7 @@ _Regenerated 2026-11-25. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [storage-app.md](storage-app.md) — TD Storage Mac app (the CRM storage as a Finder location) _(verified 2026-11-23)_
 - [storage.md](storage.md) — CRM Storage _(verified 2026-11-24)_
 - [supabase-status.md](supabase-status.md) — Supabase status (the "it is Supabase, not you" message) _(verified 2026-11-05)_
-- [talk.md](talk.md) — TD Talk (standalone Team Chat app) _(verified 2026-11-24)_
+- [talk.md](talk.md) — TD Talk (standalone Team Chat app) _(verified 2026-11-25)_
 - [tax-returns.md](tax-returns.md) — Tax Returns & Filings _(verified 2026-11-22)_
 - [td-books-ledger-plan.md](td-books-ledger-plan.md) — TD Books — 2025 filing, then the ledger, then the agent _(no date recorded)_
 - [td-books.md](td-books.md) — TD Books (My Finances — the owner's company books) _(verified 2026-11-06)_
