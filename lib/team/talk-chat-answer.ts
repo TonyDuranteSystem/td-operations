@@ -30,28 +30,51 @@ export const OLDER_PINS_LIMIT = 20
 
 export type TalkChatResult =
   | { status: 200; body: Record<string, unknown> }
-  | { status: 403 | 404; body: { error: string } }
+  | { status: 403 | 404 | 500; body: { error: string } }
 
-/** `client` is the service-role Supabase client (the route's `supabaseAdmin`); injected so the rules can be tested without a database. */
+/** What the screen shows when the server could not read the chat (a temporary fault, never "the chat is empty"). */
+export const TALK_CHAT_LOAD_FAILED = 'Could not load this chat. Please try again.'
+
+/** PostgREST says "no row" with this code; any other error on the chat row is a fault, not a missing chat. */
+const NO_ROW_CODE = 'PGRST116'
+
+/**
+ * `client` is the service-role Supabase client (the route's `supabaseAdmin`); injected so the rules can be tested without a database.
+ *
+ * A lookup that FAILS is answered as a fault (500), never as an empty chat: an empty answer is painted as "No messages yet" and — because the read
+ * pointer moves in the same answer — would also mark the chat read, so the person loses both the messages and the signal that someone was waiting
+ * (2026-11-24, Antonio's lock-screen tap). The fault is decided BEFORE the read pointer is touched.
+ */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function buildTalkChatAnswer(client: any, a: TalkChatArgs): Promise<TalkChatResult> {
   const { threadId, userId, limit } = a
+  const startedAt = Date.now()
+  const fault = (what: string, err: unknown): TalkChatResult => {
+    console.error(`team/threads/[id] (talk view): ${what}`, { threadId, limit, markRead: a.markRead, elapsedMs: Date.now() - startedAt, error: err })
+    return { status: 500, body: { error: TALK_CHAT_LOAD_FAILED } }
+  }
 
   const [threadRes, messagesRes, groupIds] = await Promise.all([
     client.from('internal_threads').select('*').eq('id', threadId).single(),
     // one extra row only to know whether older messages exist (`has_more`)
     client.from('internal_messages').select('*').eq('thread_id', threadId).order('created_at', { ascending: false }).limit(limit + 1),
-    a.listGroupMemberIds(threadId),
+    // a failed members lookup must not read as "no members" (that would refuse a real member with "You are not in this group")
+    a.listGroupMemberIds(threadId).catch((e: unknown) => ({ failed: e })),
   ])
   const thread = threadRes?.data
-  if (!thread) return { status: 404, body: { error: 'Thread not found' } }
+  if (!thread) {
+    if (threadRes?.error && threadRes.error.code !== NO_ROW_CODE) return fault('chat lookup failed', threadRes.error)
+    return { status: 404, body: { error: 'Thread not found' } }
+  }
 
   // A GROUP is private to its members; a DIRECT MESSAGE to its two people (the id comes from the browser and this reads with the service role).
-  const groupMembers: string[] | null = thread.thread_type === 'group' ? groupIds : null
+  if (thread.thread_type === 'group' && !Array.isArray(groupIds)) return fault('group members lookup failed', (groupIds as { failed: unknown }).failed)
+  const groupMembers: string[] | null = thread.thread_type === 'group' ? (groupIds as string[]) : null
   if (groupMembers && !isGroupMember(groupMembers, userId)) return { status: 403, body: { error: 'You are not in this group.' } }
   if (thread.thread_type === 'dm' && !isDmParticipant(thread.dm_key, userId)) return { status: 403, body: { error: a.deniedMessage } }
 
-  if (messagesRes?.error) console.error('team/threads/[id] (talk view): messages lookup failed', messagesRes.error)
+  // access is settled: a failed messages lookup is a fault — answered BEFORE the read pointer below moves
+  if (messagesRes?.error) return fault('messages lookup failed', messagesRes.error)
   const newestFirst = (messagesRes?.data ?? []) as unknown[]
   const hasMore = newestFirst.length > limit
   const messages = newestFirst.slice(0, limit).reverse()
@@ -91,7 +114,8 @@ export async function buildTalkChatAnswer(client: any, a: TalkChatArgs): Promise
       peer_read_at: peerRead?.data?.last_read_at ?? null,
       peer_delivered_at: peerDelivered?.data?.delivered_at ?? null,
       messages: withPreviews,
-      older_pins: olderPins,
+      // a failed pins lookup leaves the key OUT (the screen keeps the pins it has); an empty list would clear the pinned bar
+      ...(pinsRes?.error ? {} : { older_pins: olderPins }),
       has_more: hasMore,
       current_user_id: userId,
       current_user_name: a.userName,

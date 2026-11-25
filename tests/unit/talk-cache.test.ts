@@ -309,7 +309,8 @@ describe("the TD Talk screen is wired as promised", () => {
   })
   it("a failed refresh cannot wipe what is on screen, and a guess that is gone raises no error pop-up", () => {
     expect(app).toContain("initialisedRef.current = true // a failed refresh must not wipe what is on screen")
-    expect(app).toContain("if (!opts.silent && listConfirmedRef.current) toast.error(")
+    // (2026-11-24) no pop-up any more: a failed open shows "Could not load this chat" with Retry on the screen; a refused / missing guess stays "Loading…" until the list corrects it
+    expect(app).toContain("guessGone = !listConfirmedRef.current && last.kind === 'http' && (last.status === 403 || last.status === 404)")
   })
   it("a message link (?message=) loads the normal way", () => {
     expect(app).toContain("if (savedChat && !pendingJumpRef.current) applyChat(")

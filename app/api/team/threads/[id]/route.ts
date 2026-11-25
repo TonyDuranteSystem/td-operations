@@ -1,5 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
-import { listGroupMemberIds, assertThreadAccess, THREAD_DENIED_MESSAGE } from '@/lib/team/groups'
+import { listGroupMemberIds, listGroupMemberIdsStrict, assertThreadAccess, THREAD_DENIED_MESSAGE } from '@/lib/team/groups'
 import { isDmParticipant, isGroupMember } from '@/lib/team/groups-rules'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser, isAdmin, getUserDisplayName } from '@/lib/auth'
@@ -54,7 +54,7 @@ export async function GET(
       limit: talkView.limit,
       markRead: request.nextUrl.searchParams.get('mark_read') !== '0',
       deniedMessage: THREAD_DENIED_MESSAGE,
-      listGroupMemberIds,
+      listGroupMemberIds: listGroupMemberIdsStrict, // TD Talk's answer: a failed lookup is a fault, not "no members"
     })
     return NextResponse.json(answer.body, { status: answer.status })
   }
