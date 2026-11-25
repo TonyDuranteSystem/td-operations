@@ -19,6 +19,13 @@ export async function listGroupMemberIds(threadId: string): Promise<string[]> {
   return ((data ?? []) as Array<{ user_id: string }>).map(r => r.user_id)
 }
 
+/** Same list, but a failed lookup THROWS instead of reading as "no members" (TD Talk's chat answer must tell a fault from "you are not in this group"). */
+export async function listGroupMemberIdsStrict(threadId: string): Promise<string[]> {
+  const { data, error } = await db().from('internal_thread_members').select('user_id').eq('thread_id', threadId)
+  if (error) throw error
+  return ((data ?? []) as Array<{ user_id: string }>).map(r => r.user_id)
+}
+
 /** Members of several groups at once: { threadId: [userId…] }. */
 export async function groupMembersFor(threadIds: string[]): Promise<Record<string, string[]>> {
   const out: Record<string, string[]> = {}

@@ -59,7 +59,7 @@ describe("wiring", () => {
   })
   it("TD Talk asks for its own view, keeps the read-rule line unchanged, and shows a saved chat when one is chosen", () => {
     expect(app).toContain("isBeingViewed() ? '' : '?mark_read=0'")
-    expect(app).toContain("withChatView(markReadQuery, limit)")
+    expect(app).toContain("withChatView(markReadQuery, limitUsed)")
     expect(app).toContain("getStoreRef.current()?.chatFor(id)")
   })
   it("the CRM Team Chat page and the floating chat do not ask for the view (their answer is unchanged)", () => {

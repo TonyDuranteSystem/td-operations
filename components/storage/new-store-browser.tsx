@@ -20,6 +20,7 @@ import {
   Building2, User, Hammer, Folder, FolderOpen, FolderPlus, FileText, FileImage, FileSpreadsheet, ChevronRight, ChevronDown, Eye, EyeOff,
   Lock, Trash2, Layers, X, Upload, Download, Loader2, RefreshCw, ScanText, MoreHorizontal, Pencil, FolderInput, Briefcase, CalendarPlus, CalendarRange, AlertTriangle, Check, Search, Tag, HardDriveDownload,
 } from 'lucide-react'
+import { PdfView } from '@/components/ui/pdf-view'
 import { OcrViewerModal } from '@/components/documents/ocr-viewer'
 import { useAiMarks, AiMarkChip, AiCheckFilesButton, AiReviewPanel } from './ai-check'
 import { MyDriveDialog } from '@/components/storage/my-drive-dialog'
@@ -270,6 +271,9 @@ function PreviewPanel({ file, onClose, src: srcOverride, title, viewSrc }: { fil
           ) : isImage ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={src} alt={file.name} className="mx-auto block h-auto max-w-full" />
+          ) : mime === 'application/pdf' ? (
+            // a computer keeps the frame; a touch phone gets an "Open PDF" button (the phone's engine shows a framed PDF as page 1 only — components/ui/pdf-view.tsx)
+            <PdfView src={src} title={file.name} className="h-full w-full border-0" />
           ) : (
             <iframe src={src} title={file.name} className="h-full w-full border-0" />
           )}

@@ -1,0 +1,12 @@
+{
+  "title": "TD Talk: a chat that fails to load now says so and tries again, instead of looking empty",
+  "tag": "fixed",
+  "text": "When TD Talk could not load a chat (for example right after you tap a lock-screen alert and the phone's connection has not woken up yet), it showed \"No messages yet. Say hello.\" as if the chat were empty, and it could also mark the chat as read, so you lost the unread number as well. Now the chat says \"Could not load this chat\" with a Try again button, and TD Talk first tries again by itself a couple of times. A chat that failed to load is no longer marked as read, so the unread number stays. A chat that really has no messages still says \"No messages yet\". If a load fails again, the app now records why, so the real cause on the phone can be found.",
+  "points": [
+    "Open a chat with a poor or no connection: you see \"Could not load this chat\" and Try again, never \"No messages yet\"",
+    "Tap a lock-screen alert: the chat opens on the message, and if the first try fails it tries again by itself",
+    "A chat that could not be loaded keeps its unread number",
+    "A chat with really no messages still says \"No messages yet\""
+  ],
+  "screenshot": "talk-chat-could-not-load.png"
+}

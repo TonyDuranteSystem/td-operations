@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { decideJump, pendingJumpFromSearch, type PendingJump } from '@/lib/talk/pending-jump'
+import { LOAD_STEPS, failureMessage, fetchChatAnswer, isRetryable, reportTalkLoad, sleep, type ChatLoadFailure } from '@/lib/talk/chat-load'
 import { ChevronLeft, Loader2, Plus, Search, Users, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { createClient } from '@/lib/supabase/client'
@@ -111,6 +112,15 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
   }, [fastOpen, viewerId])
   const [showingSaved, setShowingSaved] = useState(false)
   const listConfirmedRef = useRef(false)
+  // a chat that could not be loaded is NOT an empty chat: it says so and offers Retry (lib/talk/chat-load.ts)
+  const [loadFailed, setLoadFailed] = useState<{ threadId: string; message: string } | null>(null)
+  // counts the select() calls that really changed the chat: a load that started under an older one is ignored when it answers (A → B → A included)
+  const selectSeqRef = useRef(0)
+  // the chat select() chose — set at once (selectedIdRef only follows the next render, so at mount it is still null)
+  const lastSelectedRef = useRef<string | null>(null)
+  const openedWithSavedRef = useRef(false)
+  // one load per chat at a time: coming back from the background fires several signals together
+  const inflightRef = useRef<{ threadId: string; seq: number; silent: boolean; promise: Promise<void> } | null>(null)
 
   const [threads, setThreads] = useState<TalkThread[]>([])
   const [members, setMembers] = useState<TalkMember[]>([])
@@ -255,29 +265,74 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
   }, [])
 
   // opens a conversation's messages. `markRead` follows the READ RULE (only while the app is on screen).
-  const loadMessages = useCallback(async (threadId: string, opts: { silent?: boolean } = {}) => {
-    if (!opts.silent) setLoadingMsgs(true)
-    const seq = changeSeqRef.current
-    const markReadQuery = isBeingViewed() ? '' : '?mark_read=0' // asked once: it decides both what the server is told and whether the list's number is cleared
-    const viewed = markReadQuery === ''
-    try {
-      // TD Talk's own, lighter answer (newest messages only, no Threads-panel work) — see lib/talk/chat-open-scope.ts
-      const limit = chatOpenLimit(windowRef.current.length, !!pendingJumpRef.current)
-      const r = await fetch(`/api/team/threads/${threadId}${withChatView(markReadQuery, limit)}`)
-      if (!r.ok) throw new Error('Could not load this chat.')
-      const d = await r.json()
-      if (selectedIdRef.current !== threadId) return // switched chats while loading
-      if (opts.silent && seq !== changeSeqRef.current) return // a kept change was confirmed while this refresh was on its way: its answer is older than what is on screen; the next refresh brings the truth
-      applyChat(d, !!opts.silent)
-      // the server has just marked this chat read: its number on the list goes to 0 now, so "Back" does not show the old number until the next refresh
-      if (viewed) setThreads(prev => withUnreadCleared(prev, threadId))
-      getStore()?.saveChat(threadId, d)
-    } catch (e) {
-      // before the real chat list is in, the chat shown early is a guess that may be gone: no error pop-up for a guess
-      if (!opts.silent && listConfirmedRef.current) toast.error(e instanceof Error ? e.message : 'Could not load this chat.')
-    } finally {
-      if (!opts.silent) setLoadingMsgs(false)
-    }
+  // A load that FAILS is never drawn as an empty chat (2026-11-24, lib/talk/chat-load.ts): the person's own open tries again by itself
+  // (0.5 s, then the light request after 1.5 s) and then shows "Could not load this chat" with Retry; the 10-second refresh is silent and
+  // is one more try. What went wrong is reported so a real phone's cause becomes visible.
+  const loadMessages = useCallback((threadId: string, opts: { silent?: boolean } = {}): Promise<void> => {
+    const silent = !!opts.silent
+    const seq = selectSeqRef.current
+    const running = inflightRef.current
+    if (running && running.threadId === threadId && running.seq === seq && running.silent === silent) return running.promise
+    const promise = (async () => {
+      if (!silent) { setLoadingMsgs(true); setLoadFailed(null) }
+      const changeSeq = changeSeqRef.current
+      const markReadQuery = isBeingViewed() ? '' : '?mark_read=0' // asked once: it decides both what the server is told and whether the list's number is cleared
+      const viewed = markReadQuery === ''
+      const steps = silent ? [LOAD_STEPS[0]] : LOAD_STEPS
+      let first: ChatLoadFailure | null = null
+      let last: ChatLoadFailure | null = null
+      let attempts = 0
+      let limitUsed = 0
+      let guessGone = false
+      const context = () => ({
+        threadId, attempts, limit: limitUsed, hadMessageLink: !!pendingJumpRef.current, hadSavedCopy: openedWithSavedRef.current,
+        visibility: typeof document === 'undefined' ? 'unknown' : document.visibilityState, online: typeof navigator === 'undefined' ? true : navigator.onLine,
+        firstFailure: first ? { kind: first.kind, status: first.status, elapsedMs: first.elapsedMs } : undefined,
+      })
+      try {
+        for (const step of steps) {
+          if (step.delayMs) await sleep(step.delayMs)
+          if (selectSeqRef.current !== seq) return // another chat was chosen while this one was loading
+          attempts++
+          // TD Talk's own, lighter answer (newest messages only, no Threads-panel work) — see lib/talk/chat-open-scope.ts
+          limitUsed = chatOpenLimit(windowRef.current.length, step.light ? false : !!pendingJumpRef.current)
+          const res = await fetchChatAnswer(`/api/team/threads/${threadId}${withChatView(markReadQuery, limitUsed)}`)
+          if (selectSeqRef.current !== seq) return
+          if (res.ok === true) {
+            if (silent && changeSeq !== changeSeqRef.current) return // a kept change was confirmed while this refresh was on its way: its answer is older than what is on screen; the next refresh brings the truth
+            const d = res.data as ChatAnswer & Record<string, unknown>
+            applyChat(d, silent)
+            setLoadFailed(null)
+            // the server has just marked this chat read: its number on the list goes to 0 now, so "Back" does not show the old number until the next refresh
+            if (viewed) setThreads(prev => withUnreadCleared(prev, threadId))
+            getStore()?.saveChat(threadId, d)
+            if (!silent && attempts > 1) reportTalkLoad({ event: 'recovered', ...context() })
+            // the list says this chat has messages but the server's answer found none: report it (the answer is still shown as it is)
+            const row = threadsRef.current.find(t => t.id === threadId)
+            if (!silent && Array.isArray(d.messages) && d.messages.length === 0 && (row?.last_message_preview || row?.last_message_at)) reportTalkLoad({ event: 'suspect_empty', ...context() })
+            return
+          }
+          const fail = res as ChatLoadFailure
+          first = first ?? fail
+          last = fail
+          if (!isRetryable(fail)) break
+        }
+        if (!silent && last) {
+          // before the real chat list is in, the chat shown early is a guess that may be gone (refused / missing): it says nothing, it stays "Loading…" until the list corrects it
+          guessGone = !listConfirmedRef.current && last.kind === 'http' && (last.status === 403 || last.status === 404)
+          if (!guessGone) {
+            setLoadFailed({ threadId, message: failureMessage(last) })
+            reportTalkLoad({ event: 'failed', ...context() })
+          }
+        }
+      } finally {
+        // only the load that is still current ends the "Loading…": an older one that was overtaken must not stop a newer one's
+        if (!silent && !guessGone && selectSeqRef.current === seq) setLoadingMsgs(false)
+      }
+    })()
+    inflightRef.current = { threadId, seq, silent, promise }
+    void promise.finally(() => { if (inflightRef.current?.promise === promise) inflightRef.current = null })
+    return promise
   }, [applyChat, getStore])
 
   // the store is looked at when a chat is chosen, without making `select` change every time it is created
@@ -285,6 +340,13 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
   getStoreRef.current = getStore
 
   const select = useCallback((id: string | null) => {
+    // choosing the chat that is already chosen changes nothing (it used to empty the chat and load nothing: after a tapped alert the address
+    // change selected the chat a second time, once the chat list had answered — a second select cleared the messages the first had loaded)
+    if (id !== null && id === lastSelectedRef.current) return
+    lastSelectedRef.current = id
+    selectSeqRef.current += 1
+    setLoadFailed(null)
+    setLoadingMsgs(id !== null) // the opening shows "Loading…" at once, not "No messages yet" for the moment before the load starts
     setSelectedId(id)
     setMessages([])
     setOlder([]); setHasMore(false); setLoadingEarlier(false); olderRef.current = []; hasMoreRef.current = false; loadingEarlierRef.current = false
@@ -295,6 +357,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
     // phone app: a chat opened before shows its saved messages at once and the server's answer replaces them a moment later (dev job cf265457).
     // Saved messages are only shown: nothing here marks anything read or tells a sender "delivered". A message link (?message=) loads the normal way: its jump needs the real window.
     const savedChat = id ? getStoreRef.current()?.chatFor(id) ?? null : null
+    openedWithSavedRef.current = !!savedChat
     if (savedChat && !pendingJumpRef.current) applyChat(savedChat.payload as ChatAnswer, false)
     writeLastOpened(id)
     try {
@@ -309,6 +372,11 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
     if (leavingLosesRecording(recordingRef.current)) { setLeaveAsk({ go }); return }
     go()
   }, [])
+  // the Retry button of "Could not load this chat"
+  const retryLoad = useCallback(() => {
+    const id = selectedIdRef.current
+    if (id) void loadMessages(id)
+  }, [loadMessages])
   // "Back" to the list also asks for a fresh list at once (numbers and previews of the chat just left), instead of waiting for the next 10 s refresh.
   const requestSelect = useCallback((id: string | null) => {
     guardLeave(() => {
@@ -382,9 +450,11 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
 
   // a tapped notification (or any link) while the app is open: go to that chat
   useEffect(() => {
-    if (!initialisedRef.current || !urlThread || urlThread === selectedIdRef.current) return
+    // compared with what select() chose (lastSelectedRef), not with the last render: at mount the first-load effect has just chosen the chat but selectedIdRef still says null
+    if (!initialisedRef.current || !urlThread || urlThread === lastSelectedRef.current) return
     if (chatThreads(threadsRef.current).some(t => t.id === urlThread)) { requestSelect(urlThread); return }
     void loadThreads().then(list => {
+      if (lastSelectedRef.current === urlThread) return // it was opened while the list was on its way
       if (list && chatThreads(list).some(t => t.id === urlThread)) requestSelect(urlThread)
     })
   }, [urlThread, loadThreads, requestSelect])
@@ -452,10 +522,14 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
     const onVisible = () => { if (document.visibilityState === 'visible') tick() }
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('focus', onVisible) // coming back to a window that was behind another one = now it is read
+    window.addEventListener('online', onVisible) // the connection is back: a chat that could not be loaded tries again at once
+    window.addEventListener('pageshow', onVisible)
     return () => {
       clearInterval(timer)
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onVisible)
+      window.removeEventListener('online', onVisible)
+      window.removeEventListener('pageshow', onVisible)
       if (debounce) clearTimeout(debounce)
       supabase.removeChannel(channel)
     }
@@ -936,6 +1010,7 @@ export function TalkApp({ base = TALK_BASE }: { /** Where this chat lives: `/tal
           onReply={m => { setMode({ kind: 'reply', message: m, who: m.sender_id === meId ? 'yourself' : m.sender_name }); setSheetMsg(null) }}
           onReact={(m, emoji) => void react(m, emoji)}
           onJumpTo={jumpTo}
+          loadError={loadFailed && loadFailed.threadId === selected.id ? { message: loadFailed.message, onRetry: retryLoad } : null}
         />
       )}
       {!searchOpen && (

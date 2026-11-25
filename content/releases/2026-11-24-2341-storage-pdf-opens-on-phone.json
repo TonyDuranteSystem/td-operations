@@ -1,0 +1,11 @@
+{
+  "title": "Storage on a phone: a PDF now opens in the phone's own viewer, with every page",
+  "tag": "fixed",
+  "text": "On an iPhone (in Chrome, Safari or any other browser), opening a PDF from Storage showed only the first page, zoomed in and cut off, and you could not scroll to the other pages. Now, on a phone, the preview shows an Open PDF button. Tap it and the PDF opens in the phone's own viewer with every page, a page counter and pinch to zoom. Use Back to return to Storage. On a computer nothing changes: the PDF still shows inside the window. This fixes the Storage window only; PDFs opened from other places (a contact's documents, a company's signed contracts and similar) will follow.",
+  "points": [
+    "On your phone: Storage → open a company → open a PDF → tap Open PDF",
+    "Scroll through all the pages and pinch to zoom; tap Back to come back to Storage",
+    "On a computer the PDF opens inside the Storage window as before"
+  ],
+  "screenshot": "storage-pdf-open-on-phone.png"
+}
