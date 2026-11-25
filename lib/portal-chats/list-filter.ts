@@ -1,7 +1,7 @@
 /**
  * Portal Chats conversation-list filter chips (staff CRM, left list).
  *
- * Chips, in order: All · Unread · What's New · Chats · Pinned · Waiting · Waiting on us. The list opens on "Chats".
+ * Chips, in order: All · Unread · What's New · Chats · Pinned · Waiting for client · Waiting on us. The list opens on "Chats".
  *
  *   - All       every conversation.
  *   - Unread    the client wrote and nobody on the team has read it yet.
@@ -12,7 +12,7 @@
  *               notices (sender_type 'system') is left out. Pinned ones are also under Pinned and ones with an
  *               unhandled client action also under What's New.
  *   - Pinned    the manually pinned conversations (shared by all staff).
- *   - Waiting   conversations staff marked "waiting for client" where the client has not written since (2026-11-21).
+ *   - Waiting for client   (chip key `waiting`; labelled "Waiting" until 2026-11-25) conversations staff marked "waiting for client" where the client has not written since (2026-11-21).
  *               Longest-waiting first.
  *   - Waiting on us  conversations staff marked "waiting on us" (the client is waiting for the team) where the team has not
  *               written since. Longest-waiting first.
@@ -36,7 +36,7 @@ export const LIST_FILTER_CHIPS: ReadonlyArray<readonly [ListFilter, string]> = [
   ["whatsnew", "What's New"],
   ["chats", "Chats"],
   ["pinned", "Pinned"],
-  ["waiting", "Waiting"],
+  ["waiting", "Waiting for client"],
   ["waitingus", "Waiting on us"],
 ]
 
@@ -53,6 +53,8 @@ export interface FilterableThread extends SortableThread {
   waiting_since?: string | null
   /** When staff marked this conversation "waiting on us" (the client is waiting for the team) and the team has not written since (ISO). */
   waiting_us_since?: string | null
+  /** Staff user id the "waiting on us" conversation belongs to; null/undefined = not assigned (see waiting-owner.ts). */
+  waiting_us_owner?: string | null
 }
 
 /** Does this conversation belong under the given chip? (Search is applied separately by the page.) */
