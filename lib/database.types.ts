@@ -15208,6 +15208,7 @@ export type Database = {
       portal_chat_waiting_threads: {
         Row: {
           account_id: string | null
+          assigned_to: string | null
           contact_id: string | null
           id: string
           kind: string
@@ -15218,6 +15219,7 @@ export type Database = {
         }
         Insert: {
           account_id?: string | null
+          assigned_to?: string | null
           contact_id?: string | null
           id?: string
           kind?: string
@@ -15228,6 +15230,7 @@ export type Database = {
         }
         Update: {
           account_id?: string | null
+          assigned_to?: string | null
           contact_id?: string | null
           id?: string
           kind?: string

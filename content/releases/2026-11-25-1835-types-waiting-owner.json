@@ -1,0 +1,6 @@
+{
+  "title": "Behind the scenes: the app's list of database fields now includes the new owner field",
+  "tag": "behind-the-scenes",
+  "text": "A small housekeeping update so the app's built-in copy of the database layout matches the live database after the owner column for \"Waiting on us\" conversations was added. Nothing changes on screen.",
+  "points": []
+}
