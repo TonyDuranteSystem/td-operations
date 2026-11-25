@@ -662,7 +662,7 @@ function ContactsSection({
                   </button>
                 </FastTooltip>
               </div>
-              <div className="pl-9 grid gap-1.5">
+              <div className="pl-9 grid grid-cols-1 gap-1.5">
                 {memberAccess?.on ? (
                   <MemberAccessRow
                     accountId={account.id}
@@ -1476,7 +1476,7 @@ function InstallmentsSection({ account, payments, makeAccountSaver, contractMism
         <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">Annual Installments</h3>
         {/* Amber when a signed contract does not match these amounts (Antonio 2026-11-15); gone by itself once they match. */}
         {contractMismatches !== undefined && <ContractMismatchNote findings={contractMismatches} />}
-        <div className="grid gap-3 text-sm">
+        <div className="grid grid-cols-1 gap-3 text-sm">
           <EditableField icon={CreditCard} label="1st Installment" value={inst1Amount?.toString() ?? ''} onSave={makeAccountSaver('installment_1_amount')} />
           <EditableField icon={Globe} label="1st Currency" value={inst1Currency} type="select" options={[{ label: 'USD', value: 'USD' }, { label: 'EUR', value: 'EUR' }]} onSave={makeAccountSaver('installment_1_currency')} />
           {inst1Amount && <InstallmentBadge matches={inst1Matches} onInvoice={inst1Match ? undefined : () => setOpenForInst(1)} />}
@@ -1727,7 +1727,7 @@ function DBARow({
         </div>
       </div>
 
-      <div className="grid gap-1 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
         <EditableField icon={Briefcase} label="DBA Name" value={d.dba_name ?? ''} onSave={makeSaver('dba_name')} readOnly={!canEdit} />
         <EditableField icon={MapPin} label="Jurisdiction" value={d.jurisdiction ?? ''} onSave={makeSaver('jurisdiction')} readOnly={!canEdit} />
         <EditableField icon={Calendar} label="Filed Date" type="date" value={d.filed_date ?? ''} onSave={makeSaver('filed_date')} readOnly={!canEdit} />
@@ -1852,7 +1852,7 @@ function DBASection({
 
       {showForm && (
         <div className="border border-zinc-200 rounded-md p-3 space-y-2 bg-zinc-50/40">
-          <div className="grid gap-2 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <div>
               <label className="block text-xs text-muted-foreground mb-1">DBA Name *</label>
               <input
@@ -2188,8 +2188,8 @@ function MembersSection({ accountId, accountCompanyName, contacts, memberCount: 
 
   return (
     <div className="bg-white rounded-lg border p-5 space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-3">
           <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
             Members ({members.length})
           </h3>
@@ -2225,8 +2225,8 @@ function MembersSection({ accountId, accountCompanyName, contacts, memberCount: 
             )}
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1.5">
             <FastTooltip label={!hasPrimaryContact ? 'Primary member has no linked contact — link a contact to the primary member first' : 'Send member info form via portal chat'}>
               <button
                 onClick={handleSendMemberInfoForm}
@@ -2592,7 +2592,7 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
   const ACCOUNT_TYPE_OPTIONS = ACCOUNT_TYPE.map(t => ({ label: t, value: t }))
 
   return (
-    <div className="grid gap-6 lg:grid-cols-2">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
       {/* Who referred THIS company (staff only) — a full-width line at the top, shown only when it was referred */}
       <ReferredByLine accountId={account.id} />
 
@@ -2607,7 +2607,7 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
       {/* Company Info */}
       <div className="bg-white rounded-lg border p-5 space-y-4">
         <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">Company Info</h3>
-        <div className="grid gap-3 text-sm">
+        <div className="grid grid-cols-1 gap-3 text-sm">
           <EditableField icon={Briefcase} label="Account Type" value={account.account_type ?? ''} type="select" options={ACCOUNT_TYPE_OPTIONS} onSave={makeAccountSaver('account_type')} />
           <div className="flex items-center gap-2 group">
             <Shield className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -2721,7 +2721,7 @@ function PanoramicaTab({ account, contacts, deals, payments, isAdmin: _isAdmin, 
             ) : (
               <>
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Referral</p>
-                <div className="grid gap-3">
+                <div className="grid grid-cols-1 gap-3">
                   <EditableField icon={Users} label="Referrer" value={account.referrer ?? ''} onSave={makeAccountSaver('referrer')} />
                   <EditableField icon={CreditCard} label="Commission %" value={account.referral_commission_pct != null ? String(account.referral_commission_pct) : ''} onSave={makeAccountSaver('referral_commission_pct')} />
                   <EditableField icon={FileText} label="Referral Status" value={account.referral_status ?? ''} type="select" options={[{label: '—', value: ''}, {label: 'Pending', value: 'pending'}, {label: 'Converted', value: 'converted'}, {label: 'Credited', value: 'credited'}, {label: 'Paid', value: 'paid'}]} onSave={makeAccountSaver('referral_status')} />
@@ -2983,7 +2983,7 @@ function ServiziTab({
           <h3 className="font-semibold text-sm uppercase tracking-wide text-muted-foreground">
             Completed / Cancelled ({done.length})
           </h3>
-          <div className="grid gap-2 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             {done.map(sd => {
               const legacy = services.find(s => s.id === sd.id)
               if (legacy) return <ServiceCard key={sd.id} service={legacy} today={today} />

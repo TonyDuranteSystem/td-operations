@@ -13,7 +13,14 @@ const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), "utf8")
 
 const START = "const NEW_CALL_WINDOW_DAYS = 14"
 const bodyOf = (src: string) => src.slice(src.indexOf(START))
-const normalise = (s: string) => s.replace("export default async function LeadsPage({", "export async function LeadsWorkspace({").replace(/\s+$/g, "")
+// The ONLY other allowed differences: the two header rows now wrap on a phone (dev job b93caec4, 25 Nov 2026 — class names only, nothing the list reads or shows).
+// They are mapped back here so every other line is still proved identical.
+const PHONE_WRAP: Array<[string, string]> = [
+  ['<div className="flex flex-wrap items-center justify-between gap-3 mb-6">', '<div className="flex items-center justify-between mb-6">'],
+  ['<div className="flex flex-wrap items-center gap-3">\n          <CreateLeadButton />', '<div className="flex items-center gap-3">\n          <CreateLeadButton />'],
+]
+const normalise = (s: string) =>
+  PHONE_WRAP.reduce((acc, [now, old]) => acc.replace(now, old), s.replace("export default async function LeadsPage({", "export async function LeadsWorkspace({")).replace(/\s+$/g, "")
 
 describe("the Leads list body is the old page's body, moved unchanged", () => {
   const before = read("tests/unit/fixtures/leads-page-body-before-move.txt")
