@@ -31,6 +31,8 @@ import { PwaInstallPrompt } from '@/components/portal/pwa-install-prompt'
 import { DashboardInstallBanner } from '@/components/portal/dashboard-install-banner'
 import { EnablePushCard } from '@/components/portal/enable-push-card'
 import { PasswordGate } from '@/components/portal/password-gate'
+import { OffboardingCompanyCard } from '@/app/portal/offboarding-company-card'
+import { resolveOffboardedOnlyScreen } from '@/lib/portal/offboarded-only-login'
 import { SuspendedGuard } from '@/components/portal/suspended-guard'
 import { ViewAsBanner } from '@/components/portal/view-as-banner'
 import { TeamLoginNoticeBanner } from '@/components/portal/team-login-notice-banner'
@@ -306,6 +308,35 @@ export default async function PortalLayout({
   const userName = user.user_metadata?.full_name || ''
   const locale = getLocale(user)
   const translations = await loadTranslationsForLocale(locale)
+
+  // An offboarded client who NEVER set a password sees the offboarded message and nothing else: no "Set Your Password" page, no menu,
+  // none of the other portal pages (dev job 31dfd3a6, Antonio 25 Nov 2026). Same idea as a teammate still on a temporary password
+  // (above): a bare shell. The password step was only ever a browser-side redirect, so nothing server-side is loosened. Decided before
+  // the heavy per-company queries below because there is no company to load. One shared rule: lib/portal/offboarded-only-login.ts.
+  const offboardedOnly = await resolveOffboardedOnlyScreen({
+    email: user.email,
+    contactId,
+    mustChangePassword,
+    visibleCompanyCount: accounts.length,
+    inProgressCount: inProgress.length + inProgressOnboardings.length,
+    authTier: (user.app_metadata?.portal_tier as string) || 'lead',
+    isPartnerOrDual: portalModeCtx.dual || portalModeCtx.mode === 'partner' || effectivePortalRole === 'partner',
+  })
+  if (offboardedOnly) {
+    return (
+      <Providers>
+        <AppModeProvider initial={clientApp}>
+          <SandboxBanner />
+          {viewAsMarker && <ViewAsBanner clientName={viewAsName} />}
+          <LocaleProvider locale={locale} translations={translations}>
+            <main className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50/30 pt-10">
+              <OffboardingCompanyCard companyNames={offboardedOnly.companyNames} stop />
+            </main>
+          </LocaleProvider>
+        </AppModeProvider>
+      </Providers>
+    )
+  }
 
   // Account-level data: only if an account is selected
   // Phase C (ITIN Chain Fix 2026-05-11): pass contactId so the ITIN-at-Client-
