@@ -9,7 +9,9 @@ import {
   decideOwnerForMark,
   defaultOwnerFilter,
   matchesOwnerFilter,
+  OWNER_PICKER_HIDDEN_EMAILS,
   ownerCounts,
+  ownerPickerMembers,
   staffInitials,
   tidyStaffName,
   waitingUsForCard,
@@ -114,6 +116,34 @@ describe('who a new mark belongs to', () => {
   it('"Waiting for client" never has an owner, whatever was sent', () => {
     expect(decideOwnerForMark({ ...base, kind: 'client', requested: 'u-jodi' })).toEqual({ ok: true, owner: null })
     expect(decideOwnerForMark({ ...base, kind: 'client', requested: undefined })).toEqual({ ok: true, owner: null })
+  })
+})
+
+describe('the QA Staff login is not an owner (Antonio, 2026-11-25: "remove QA staff")', () => {
+  const MEMBERS = [
+    { id: 'u-antonio', email: 'antonio.durante@tonydurante.us' },
+    { id: 'u-qa', email: 'qa-staff@tonydurante.us' },
+    { id: 'u-support', email: 'support@tonydurante.us' },
+    { id: 'u-nomail', email: null },
+  ]
+  it('the QA Staff login is left out, whatever the capital letters or spaces; everyone else stays, including Support and a login with no email', () => {
+    expect(ownerPickerMembers(MEMBERS).map(m => m.id)).toEqual(['u-antonio', 'u-support', 'u-nomail'])
+    expect(ownerPickerMembers([{ id: 'x', email: ' QA-Staff@TonyDurante.us ' }])).toEqual([])
+  })
+  it('the hidden list holds only that one login', () => {
+    expect(OWNER_PICKER_HIDDEN_EMAILS).toEqual(['qa-staff@tonydurante.us'])
+  })
+  it('a hidden login can never be chosen as an owner, and the default owner is never the QA login itself', () => {
+    const ids = ownerPickerMembers(MEMBERS).map(m => m.id)
+    const d = decideOwnerForMark({ kind: 'us', requested: 'u-qa', markerId: 'u-antonio', staffIds: ids })
+    expect(d.ok).toBe(false)
+    expect(d.error).toMatch(/not on the team list/)
+    expect(decideOwnerForMark({ kind: 'us', requested: undefined, markerId: 'u-qa', staffIds: ids })).toEqual({ ok: true, owner: null })
+  })
+  it('the picker route AND both routes that check an owner use the same filtered list', () => {
+    for (const p of ['app/api/portal/chat/waiting-staff/route.ts', 'app/api/portal/chat/waiting-owner/route.ts', 'app/api/portal/chat/waiting-thread/route.ts']) {
+      expect(read(p)).toContain('ownerPickerMembers(await listTeamMembers())')
+    }
   })
 })
 

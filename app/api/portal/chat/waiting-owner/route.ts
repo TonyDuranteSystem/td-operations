@@ -2,7 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { isDashboardUser } from '@/lib/auth'
 import { NextResponse } from 'next/server'
-import { decideOwnerForMark } from '@/lib/portal-chats/waiting-owner'
+import { decideOwnerForMark, ownerPickerMembers } from '@/lib/portal-chats/waiting-owner'
 
 /**
  * POST /api/portal/chat/waiting-owner — Admin/staff only.
@@ -33,7 +33,7 @@ export async function POST(request: Request) {
   const { listTeamMembers } = await import('@/lib/team/directory')
   let staffIds: string[]
   try {
-    staffIds = (await listTeamMembers()).map(m => m.id)
+    staffIds = ownerPickerMembers(await listTeamMembers()).map(m => m.id)
   } catch {
     return NextResponse.json({ error: 'Could not read the team list. Please try again.' }, { status: 500 })
   }

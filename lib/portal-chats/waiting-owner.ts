@@ -103,3 +103,15 @@ export function decideOwnerForMark(opts: {
   if (!staffIds.includes(requested)) return { ok: false, owner: null, error: 'That person is not on the team list.' }
   return { ok: true, owner: requested }
 }
+
+/**
+ * Logins that are on the staff directory but are not a person who answers clients, so they are never offered as an owner
+ * (Antonio, 2026-11-25: "remove QA staff"). The login itself is untouched; it just does not appear in the owner picker and
+ * cannot be chosen as an owner. Compared in lower case.
+ */
+export const OWNER_PICKER_HIDDEN_EMAILS: ReadonlyArray<string> = ['qa-staff@tonydurante.us']
+
+/** The staff directory without the logins in OWNER_PICKER_HIDDEN_EMAILS. The one list the picker AND the owner checks both use. */
+export function ownerPickerMembers<T extends { email: string | null }>(members: ReadonlyArray<T>): T[] {
+  return members.filter(m => !OWNER_PICKER_HIDDEN_EMAILS.includes((m.email ?? '').trim().toLowerCase()))
+}
