@@ -12,7 +12,22 @@
  * Pure, so the page and the tests use the same rule.
  */
 export function showClosedCompanyNotice(p: { closedCompanyCount: number; offerStatus: string | null | undefined }): boolean {
-  if (p.closedCompanyCount <= 0) return false
-  const s = (p.offerStatus ?? "").toLowerCase()
+  return noticeApplies(p.closedCompanyCount, p.offerStatus)
+}
+
+/**
+ * The same screen problem for a company that is OFFBOARDING (dev job 31dfd3a6, found 24 Nov 2026 when staff offboarded several
+ * companies): an offboarding company is hidden from the portal just like a closed one, so a client whose companies are all
+ * offboarding has NO company and landed on "Thank you for your payment! Complete your setup…". The same rule applies — the notice
+ * shows unless the person is buying something new — and the login is NOT touched: they can still sign in and chat with us.
+ * A client who still has an Active or Suspended company never reaches this branch (the portal shows that company).
+ */
+export function showOffboardingCompanyNotice(p: { offboardingCompanyCount: number; offerStatus: string | null | undefined }): boolean {
+  return noticeApplies(p.offboardingCompanyCount, p.offerStatus)
+}
+
+function noticeApplies(companyCount: number, offerStatus: string | null | undefined): boolean {
+  if (companyCount <= 0) return false
+  const s = (offerStatus ?? "").toLowerCase()
   return s === "" || s === "completed"
 }

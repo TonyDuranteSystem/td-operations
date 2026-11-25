@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic'
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { getClientContactId } from '@/lib/portal-auth'
-import { getPortalAccounts, getPortalAccountDetail, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getPortalActionItemsByContact, getProfileBannerStatus, getFormationAccount, getFormationContext, getFormationTracker, getInProgressFormations, getInProgressOnboardings, getTaxTrackerCatalogStages, getPortalFlows, getClosedCompanyNames } from '@/lib/portal/queries'
+import { getPortalAccounts, getPortalAccountDetail, getPortalTaxReturns, getPortalMembers, getPortalTier, getPortalActionItems, getPortalActionItemsByContact, getProfileBannerStatus, getFormationAccount, getFormationContext, getFormationTracker, getInProgressFormations, getInProgressOnboardings, getTaxTrackerCatalogStages, getPortalFlows, getClosedCompanyNames, getOffboardingCompanyNames } from '@/lib/portal/queries'
 import { buildFormationTrackerSteps } from '@/lib/portal/formation-progress'
 import { buildTrackerSteps } from '@/lib/tax/progress-tracker'
 import { hasTaxReturnToSign } from '@/lib/tax/flow-banner'
@@ -29,7 +29,8 @@ import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase-admin'
 import { WelcomeDashboard } from './welcome-dashboard'
 import { ClosedCompanyCard } from './closed-company-card'
-import { showClosedCompanyNotice } from '@/lib/portal/closed-company'
+import { OffboardingCompanyCard } from './offboarding-company-card'
+import { showClosedCompanyNotice, showOffboardingCompanyNotice } from '@/lib/portal/closed-company'
 import { FormationDashboard } from '@/components/portal/formation-dashboard'
 import { TaxBanner } from '@/components/portal/tax-banner'
 import { TaxExtensionFiledBanner } from '@/components/portal/tax-extension-filed-banner'
@@ -482,12 +483,18 @@ export default async function PortalDashboardPage() {
 
     // A client whose company was CLOSED (the closure job finished) has no company left in the portal and used to land on the
     // new-client "complete your setup" screen. Say the true thing instead (lib/portal/closed-company.ts; Company Closure Part C).
+    // The same is true for a company that is being OFFBOARDED (hidden from the portal just like a closed one; dev job 31dfd3a6):
+    // say so, instead of "Thank you for your payment!". A client with both kinds sees both cards.
     const closedCompanyNames = contactId ? await getClosedCompanyNames(contactId) : []
-    if (showClosedCompanyNotice({ closedCompanyCount: closedCompanyNames.length, offerStatus: offerData?.status })) {
+    const offboardingCompanyNames = contactId ? await getOffboardingCompanyNames(contactId) : []
+    const showClosedNotice = showClosedCompanyNotice({ closedCompanyCount: closedCompanyNames.length, offerStatus: offerData?.status })
+    const showOffboardingNotice = showOffboardingCompanyNotice({ offboardingCompanyCount: offboardingCompanyNames.length, offerStatus: offerData?.status })
+    if (showClosedNotice || showOffboardingNotice) {
       return (
         <>
           {closureBanners}
-          <ClosedCompanyCard companyNames={closedCompanyNames} />
+          {showClosedNotice && <ClosedCompanyCard companyNames={closedCompanyNames} />}
+          {showOffboardingNotice && <OffboardingCompanyCard companyNames={offboardingCompanyNames} />}
           {personalCards}
         </>
       )
