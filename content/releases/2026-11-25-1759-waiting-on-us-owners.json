@@ -1,0 +1,12 @@
+{
+  "title": "Portal Chats: each \"Waiting on us\" conversation now has an owner",
+  "tag": "new",
+  "text": "The first waiting chip now says \"Waiting for client\", so it is clear whose answer we are waiting for. Clicking \"Waiting on us\" opens a small card listing every conversation the client is waiting on us for, with the team member it belongs to and how many days it has waited. A row of small filters lets you see everyone's, one person's, or the ones nobody has taken yet. The card opens on your own. When you mark a conversation \"Waiting on us\" with the hand button under a message, a short menu asks who answers, with you already first. You can change the owner later from the small menu on its line in the card. Conversations marked before today have no owner yet and show under \"Not assigned\".",
+  "points": [
+    "Click \"Waiting on us\": the card opens on your own conversations",
+    "Pick another name to see theirs, or \"Not assigned\"",
+    "Mark a conversation with the hand button: choose who answers",
+    "Change the owner from the line in the card"
+  ],
+  "screenshot": "waiting-on-us-owners.png"
+}

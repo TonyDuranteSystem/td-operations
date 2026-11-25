@@ -195,12 +195,22 @@ export async function GET() {
     // "us" mark ends when staff write) — so the mark ends by itself. Failure here never blocks the list (the chips are simply empty).
     const waitingSince = new Map<string, string>()
     const waitingUsSince = new Map<string, string>()
+    // Who each "waiting on us" mark belongs to (staff user id), same keys as waitingUsSince. Empty when nobody owns it or the column is not there yet.
+    const waitingUsOwner = new Map<string, string>()
     try {
+      type WaitRow = { account_id: string | null; contact_id: string | null; marked_at: string; kind: string | null; assigned_to?: string | null }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: waitRows } = await (supabaseAdmin as any)
+      let waitRes = await (supabaseAdmin as any)
         .from('portal_chat_waiting_threads')
-        .select('account_id, contact_id, marked_at, kind') as { data: { account_id: string | null; contact_id: string | null; marked_at: string; kind: string | null }[] | null }
-      const rows = waitRows ?? []
+        .select('account_id, contact_id, marked_at, kind, assigned_to') as { data: WaitRow[] | null; error: { code?: string } | null }
+      // The owner column ships with a migration; until it reaches this database the chips must keep working exactly as before.
+      if (waitRes.error?.code === '42703') {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        waitRes = await (supabaseAdmin as any)
+          .from('portal_chat_waiting_threads')
+          .select('account_id, contact_id, marked_at, kind') as { data: WaitRow[] | null; error: { code?: string } | null }
+      }
+      const rows = waitRes.data ?? []
       if (rows.length > 0) {
         const keys = rows.map(r => (r.account_id ? r.account_id : r.contact_id) as string)
         const oldest = rows.reduce((m, r) => (r.marked_at < m ? r.marked_at : m), rows[0].marked_at)
@@ -218,7 +228,11 @@ export async function GET() {
           const times = (sideMsgs ?? [])
             .filter(m => m.sender_type === otherSide && (r.account_id ? m.account_id === key : m.contact_id === key))
             .map(m => m.created_at as string)
-          if (isStillWaiting(r.marked_at, times)) (waitingOnUs ? waitingUsSince : waitingSince).set(r.account_id ? `account:${key}` : `contact:${key}`, r.marked_at)
+          if (isStillWaiting(r.marked_at, times)) {
+            const mapKey = r.account_id ? `account:${key}` : `contact:${key}`
+            ;(waitingOnUs ? waitingUsSince : waitingSince).set(mapKey, r.marked_at)
+            if (waitingOnUs && r.assigned_to) waitingUsOwner.set(mapKey, r.assigned_to)
+          }
         }
       }
     } catch (e) {
@@ -266,6 +280,9 @@ export async function GET() {
       // Feeds the "Waiting on us" chip: the client is waiting for the team and the team has not written since.
       waiting_us_since: (r.account_id ? waitingUsSince.get(`account:${r.account_id}`) : undefined)
         ?? (r.contact_id ? waitingUsSince.get(`contact:${r.contact_id}`) : undefined) ?? null,
+      // Whose turn it is on a "waiting on us" conversation (staff user id); null = not assigned. Feeds the Waiting-on-us card and its filter.
+      waiting_us_owner: (r.account_id ? waitingUsOwner.get(`account:${r.account_id}`) : undefined)
+        ?? (r.contact_id ? waitingUsOwner.get(`contact:${r.contact_id}`) : undefined) ?? null,
       // Feeds the "Chats" chip: true when a client or a team member wrote in this conversation
       // (not only automatic notices). undefined = unknown (function unavailable) → chip keeps it.
       has_people_messages: peopleKeys ? threadHasPeopleMessages(r, peopleKeys) : undefined,

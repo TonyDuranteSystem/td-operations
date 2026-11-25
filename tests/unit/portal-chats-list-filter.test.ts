@@ -28,7 +28,7 @@ const thread = (over: Partial<FilterableThread> = {}): FilterableThread => ({
 
 describe('chips', () => {
   it('are in the order Antonio asked for', () => {
-    expect(LIST_FILTER_CHIPS.map(([, label]) => label)).toEqual(['All', 'Unread', "What's New", 'Chats', 'Pinned', 'Waiting', 'Waiting on us'])
+    expect(LIST_FILTER_CHIPS.map(([, label]) => label)).toEqual(['All', 'Unread', "What's New", 'Chats', 'Pinned', 'Waiting for client', 'Waiting on us'])
     expect(LIST_FILTER_CHIPS.map(([key]) => key)).toEqual(['all', 'unread', 'whatsnew', 'chats', 'pinned', 'waiting', 'waitingus'])
   })
 
