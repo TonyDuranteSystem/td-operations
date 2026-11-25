@@ -195,26 +195,26 @@ _Regenerated 2026-11-25. Every subsystem doc under `docs/systems/` (64 docs), wi
 - [client-decision-requests.md](client-decision-requests.md) — Client Decision Requests _(verified 2026-11-18)_
 - [client-threads.md](client-threads.md) — Client Threads _(verified 2026-09-03)_
 - [compliance-renewals.md](compliance-renewals.md) — Compliance, Renewals & Deadlines _(verified 2026-11-21)_
-- [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-11-22)_
+- [crm-core.md](crm-core.md) — CRM Core — Accounts, Contacts, Tasks, Deals _(verified 2026-11-25)_
 - [dashboard-navigation.md](dashboard-navigation.md) — Dashboard Navigation (the left menu, and opening pages without leaving the current one) _(verified 2026-11-20)_
 - [dev-tracker.md](dev-tracker.md) — Dev-Tracker Board _(verified 2026-07-16)_
 - [documents.md](documents.md) — Documents & Storage _(verified 2026-11-23)_
 - [error-auto-audit.md](error-auto-audit.md) — Error Auto-Audit _(verified 2026-08-22)_
 - [esign.md](esign.md) — E-Sign (internal e-signature engine) _(verified 2026-11-21)_
 - [fax.md](fax.md) — Fax (Faxage integration) _(verified 2026-11-22)_
-- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-11-23)_
+- [flows.md](flows.md) — Service Flow Workspaces _(verified 2026-11-25)_
 - [formation.md](formation.md) — Company Formation _(verified 2026-11-21)_
 - [hooks-guardrails.md](hooks-guardrails.md) — Hooks, Guardrails & Safety System _(verified 2026-11-21)_
 - [inbox.md](inbox.md) — Inbox (CRM unified inbox — Gmail + WhatsApp/Telegram) _(verified 2026-11-20)_
 - [incoming-payments.md](incoming-payments.md) — Incoming payments (Stripe payments with no label — "Payments to confirm") _(verified 2026-11-15)_
-- [leads.md](leads.md) — Leads — the Leads list (a tab of the Booking page) and the lead page _(verified 2026-11-23)_
+- [leads.md](leads.md) — Leads — the Leads list (a tab of the Booking page) and the lead page _(verified 2026-11-25)_
 - [lease-oa.md](lease-oa.md) — Lease & Operating Agreement (OA) _(verified 2026-11-21)_
 - [marketing.md](marketing.md) — TD Marketing (Rocco's and Ale's sales workspace) _(verified 2026-11-25)_
 - [mcp-tools.md](mcp-tools.md) — MCP Tool Server _(verified 2026-11-23)_
 - [messaging.md](messaging.md) — Messaging (WhatsApp / Telegram) _(verified 2026-11-20)_
 - [new-calendar.md](new-calendar.md) — New Calendar (the day-by-day work list, built on the Open services data) _(verified 2026-11-11)_
 - [offers.md](offers.md) — Offers & Contracts _(verified 2026-11-23)_
-- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-11-21)_
+- [onboarding.md](onboarding.md) — Onboarding _(verified 2026-11-25)_
 - [open-services.md](open-services.md) — Open services (the read-only "what is open, who must move, what is late" page) _(verified 2026-10-22)_
 - [partners-team.md](partners-team.md) — Partners & Team Access _(verified 2026-11-23)_
 - [payment-plans.md](payment-plans.md) — Payment plans (a setup fee paid in parts) and the Calendar's "Invoices to raise" _(verified 2026-11-20)_
