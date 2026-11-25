@@ -12,7 +12,7 @@ import { useLocale } from '@/lib/portal/use-locale'
  * on your services" — for a client who is leaving. This says what is true instead, and offers the one thing that still makes sense:
  * the chat. No "Request a Service" button (the client is leaving), unlike the closed-company card it is modelled on.
  */
-export function OffboardingCompanyCard({ companyNames }: { companyNames: string[] }) {
+export function OffboardingCompanyCard({ companyNames, stop = false }: { companyNames: string[]; stop?: boolean }) {
   const { t } = useLocale()
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto space-y-4" data-testid="offboarding-company-notice">
@@ -24,13 +24,17 @@ export function OffboardingCompanyCard({ companyNames }: { companyNames: string[
             </div>
             <div className="min-w-0">
               <h1 className="text-xl font-semibold text-zinc-900">{t('offboardingCompany.title')}</h1>
-              <p className="mt-2 text-sm text-zinc-600">{t('offboardingCompany.body').replace('{company}', name)}</p>
-              <div className="mt-4 flex flex-wrap gap-3">
-                <Link href="/portal/chat" className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
-                  <MessageCircle className="h-4 w-4" />
-                  {t('offboardingCompany.chat')}
-                </Link>
-              </div>
+              <p className="mt-2 text-sm text-zinc-600">{t(stop ? 'offboardingCompany.stopBody' : 'offboardingCompany.body').replace('{company}', name)}</p>
+              {/* The "stop" screen (offboarded login that never set a password, lib/portal/offboarded-only-login.ts) has no menu and no
+                  other page, so no Chat button: the text gives the support address instead. */}
+              {!stop && (
+                <div className="mt-4 flex flex-wrap gap-3">
+                  <Link href="/portal/chat" className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
+                    <MessageCircle className="h-4 w-4" />
+                    {t('offboardingCompany.chat')}
+                  </Link>
+                </div>
+              )}
             </div>
           </div>
         </div>
