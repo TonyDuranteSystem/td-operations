@@ -42,13 +42,45 @@ export function isRetryable(f: ChatLoadFailure): boolean {
   return s >= 500 || s === 408 || s === 429
 }
 
+/** What the screen says when the server refused because the sign-in has ended (a retry can never fix that). */
+export const SIGNED_OUT_MESSAGE = 'Your sign-in has ended. Close TD Talk and open it again to sign in.'
+
+/** The server answered, but not with something the screen could read (a Wi-Fi sign-in page, a damaged body). */
+export const BAD_ANSWER = 'bad answer'
+
+/** The sign-in has ended: the server says 401, or 403 "Unauthorized" (the chat route's own words for no valid session). */
+export function isSignedOut(f: ChatLoadFailure): boolean {
+  return f.kind === 'http' && (f.status === 401 || (f.status === 403 && f.error === 'Unauthorized'))
+}
+
 /** What the screen says under "Could not load this chat." */
 export function failureMessage(f: ChatLoadFailure): string {
+  if (isSignedOut(f)) return SIGNED_OUT_MESSAGE
   if (f.kind === 'http' && (f.status === 403 || f.status === 404) && f.error) return f.error
   if (f.kind === 'timeout') return 'The connection is too slow. Check it and try again.'
+  if (f.kind === 'network' && f.error === BAD_ANSWER) return 'The answer could not be read. Try again in a moment.'
   if (f.kind === 'network') return 'No connection. Check it and try again.'
   return 'The server could not read this chat. Try again in a moment.'
 }
+
+/** Is a "Try again" button worth showing? Only for what a second try can fix (never a refusal, a missing chat or an ended sign-in). */
+export function canRetryAfter(f: ChatLoadFailure): boolean {
+  return isRetryable(f)
+}
+
+/**
+ * What a failed open means for the screen: `guess` = before the real chat list is in, the chat shown early may simply be gone or refused — say nothing,
+ * stay on "Loading…" until the list corrects it; `failed` = say so. An ended sign-in is NEVER a guess (a signed-out phone must say so).
+ */
+export function classifyFailure(last: ChatLoadFailure, listConfirmed: boolean): 'guess' | 'failed' {
+  if (isSignedOut(last)) return 'failed'
+  if (!listConfirmed && last.kind === 'http' && (last.status === 403 || last.status === 404)) return 'guess'
+  return 'failed'
+}
+
+/** Two loads are the same one only if they ask the same chat, under the same choice of chat, in the same silent/read mode (a "now I am looking at it" request must not be swallowed by an "I am not looking" one). */
+export interface LoadKey { threadId: string; seq: number; silent: boolean; viewed: boolean }
+export const sameLoad = (a: LoadKey, b: LoadKey): boolean => a.threadId === b.threadId && a.seq === b.seq && a.silent === b.silent && a.viewed === b.viewed
 
 /** One chat request with a time limit and the server's own words kept on a refusal (R099). `fetchFn` is injected so the rules can be tested. */
 export async function fetchChatAnswer(
@@ -76,6 +108,65 @@ export async function fetchChatAnswer(
 }
 
 export const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
+
+export type ChatLoadOutcome =
+  | { kind: 'applied'; attempts: number; first: ChatLoadFailure | null }
+  /** Nothing more to do: another chat was chosen, a newer answer is already on screen, or the caller chose to ignore this answer. */
+  | { kind: 'ignored' }
+  | { kind: 'failed'; attempts: number; first: ChatLoadFailure; last: ChatLoadFailure }
+
+export interface RunChatLoadArgs {
+  /** A background refresh: one try, no retry. */
+  silent: boolean
+  /** Still the chat (and the choice of chat) this load started for. */
+  isCurrent: () => boolean
+  /** A newer good answer was applied while this open was still trying (a background refresh got through): stop, it is not failed. */
+  newerGoodAnswer: () => boolean
+  /** Is the person looking at the screen RIGHT NOW? Asked before EVERY try: the server marks the chat read only for a request that says so. */
+  viewedNow: () => boolean
+  limitFor: (light: boolean) => number
+  urlFor: (markReadQuery: string, limit: number) => string
+  fetchAnswer: (url: string) => Promise<ChatFetchResult>
+  /** Puts an answer on screen. true = applied, false = deliberately ignored. A throw means the answer was unusable (it is tried again like any failure). */
+  apply: (data: unknown, viewed: boolean) => boolean
+  wait: (ms: number) => Promise<void>
+  /** Called before each try (the screen keeps a tapped message link alive while its chat is still loading). */
+  beforeAttempt?: () => void
+}
+
+/** The whole "open a chat" ladder as one function over injected parts, so its rules are tested by running it. */
+export async function runChatLoad(a: RunChatLoadArgs): Promise<ChatLoadOutcome> {
+  const steps = a.silent ? [LOAD_STEPS[0]] : LOAD_STEPS
+  let first: ChatLoadFailure | null = null
+  let last: ChatLoadFailure | null = null
+  let attempts = 0
+  for (const step of steps) {
+    if (step.delayMs) await a.wait(step.delayMs)
+    if (!a.isCurrent()) return { kind: 'ignored' }
+    if (!a.silent && a.newerGoodAnswer()) return { kind: 'ignored' }
+    a.beforeAttempt?.()
+    attempts++
+    const viewed = a.viewedNow()
+    const res = await a.fetchAnswer(a.urlFor(viewed ? '' : '?mark_read=0', a.limitFor(step.light)))
+    if (!a.isCurrent()) return { kind: 'ignored' }
+    let fail: ChatLoadFailure
+    if (res.ok === true) {
+      try {
+        if (!a.apply(res.data, viewed)) return { kind: 'ignored' }
+        return { kind: 'applied', attempts, first }
+      } catch {
+        fail = { kind: 'network', error: BAD_ANSWER, elapsedMs: res.elapsedMs }
+      }
+    } else {
+      fail = res as ChatLoadFailure
+    }
+    if (!a.silent && a.newerGoodAnswer()) return { kind: 'ignored' }
+    first = first ?? fail
+    last = fail
+    if (!isRetryable(fail)) break
+  }
+  return { kind: 'failed', attempts, first: first as ChatLoadFailure, last: last as ChatLoadFailure }
+}
 
 /** What is reported (to Sentry) so the real cause on a real phone becomes visible the next time. No message text, no names. */
 export interface TalkLoadReport {

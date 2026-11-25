@@ -7,7 +7,8 @@ import { describe, it, expect, vi } from "vitest"
 import { readFileSync } from "fs"
 import { join } from "path"
 import {
-  CHAT_LOAD_TIMEOUT_MS, LOAD_STEPS, buildLoadReport, failureMessage, fetchChatAnswer, isRetryable, type ChatLoadFailure,
+  BAD_ANSWER, CHAT_LOAD_TIMEOUT_MS, LOAD_STEPS, SIGNED_OUT_MESSAGE, buildLoadReport, canRetryAfter, classifyFailure, failureMessage, fetchChatAnswer,
+  isRetryable, isSignedOut, runChatLoad, sameLoad, type ChatFetchResult, type ChatLoadFailure, type RunChatLoadArgs,
 } from "@/lib/talk/chat-load"
 
 vi.mock("@/lib/supabase-admin", () => ({ supabaseAdmin: {} }))
@@ -92,6 +93,179 @@ describe("the report that makes a real phone's cause visible", () => {
   })
 })
 
+describe("sign-in, damaged answers and what a failure means for the screen", () => {
+  it("an ended sign-in is said as such, and has no Try again (a second try can never fix it)", () => {
+    for (const f of [fail({ kind: "http", status: 401 }), fail({ kind: "http", status: 403, error: "Unauthorized" })]) {
+      expect(isSignedOut(f)).toBe(true)
+      expect(failureMessage(f)).toBe(SIGNED_OUT_MESSAGE)
+      expect(canRetryAfter(f)).toBe(false)
+    }
+    expect(isSignedOut(fail({ kind: "http", status: 403, error: "You are not in this group." }))).toBe(false)
+  })
+  it("Try again only where a second try can help", () => {
+    expect(canRetryAfter(fail({ kind: "network" }))).toBe(true)
+    expect(canRetryAfter(fail({ kind: "timeout" }))).toBe(true)
+    expect(canRetryAfter(fail({ kind: "http", status: 500 }))).toBe(true)
+    expect(canRetryAfter(fail({ kind: "http", status: 404, error: "Thread not found" }))).toBe(false)
+    expect(canRetryAfter(fail({ kind: "http", status: 403, error: "denied" }))).toBe(false)
+  })
+  it("a damaged answer has its own line", () => {
+    expect(failureMessage(fail({ kind: "network", error: BAD_ANSWER }))).toMatch(/could not be read/i)
+  })
+  it("before the chat list is in, a refused or missing chat is only a guess; an ended sign-in never is", () => {
+    expect(classifyFailure(fail({ kind: "http", status: 404 }), false)).toBe("guess")
+    expect(classifyFailure(fail({ kind: "http", status: 403, error: "denied" }), false)).toBe("guess")
+    expect(classifyFailure(fail({ kind: "http", status: 403, error: "Unauthorized" }), false)).toBe("failed")
+    expect(classifyFailure(fail({ kind: "http", status: 401 }), false)).toBe("failed")
+    expect(classifyFailure(fail({ kind: "http", status: 404 }), true)).toBe("failed")
+    expect(classifyFailure(fail({ kind: "network" }), false)).toBe("failed")
+    expect(classifyFailure(fail({ kind: "http", status: 500 }), false)).toBe("failed")
+  })
+  it("two loads are the same one only when chat, choice, silent mode and read mode all match", () => {
+    const k = { threadId: "a", seq: 1, silent: true, viewed: false }
+    expect(sameLoad(k, { ...k })).toBe(true)
+    expect(sameLoad(k, { ...k, threadId: "b" })).toBe(false)
+    expect(sameLoad(k, { ...k, seq: 2 })).toBe(false)
+    expect(sameLoad(k, { ...k, silent: false })).toBe(false)
+    // "I am looking at it now" must not be swallowed by a request made while the person was away
+    expect(sameLoad(k, { ...k, viewed: true })).toBe(false)
+  })
+})
+
+// ── the ladder, run for real over fake parts ──
+const okAnswer = (data: unknown = { messages: [{ id: "m1" }] }): ChatFetchResult => ({ ok: true, data, elapsedMs: 3 })
+const failed = (f: Partial<ChatLoadFailure> & { kind: ChatLoadFailure["kind"] }): ChatFetchResult => ({ ok: false, elapsedMs: 4, ...f })
+
+function ladder(script: ChatFetchResult[], over: Partial<RunChatLoadArgs> = {}) {
+  const urls: string[] = []
+  const waits: number[] = []
+  const applied: Array<{ data: unknown; viewed: boolean }> = []
+  const lights: boolean[] = []
+  let beforeCount = 0
+  const args: RunChatLoadArgs = {
+    silent: false,
+    isCurrent: () => true,
+    newerGoodAnswer: () => false,
+    viewedNow: () => true,
+    limitFor: light => { lights.push(light); return light ? 60 : 500 },
+    urlFor: (q, limit) => `/chat${q}${q ? "&" : "?"}limit=${limit}`,
+    fetchAnswer: async url => { urls.push(url); return script[Math.min(urls.length - 1, script.length - 1)] },
+    apply: (data, viewed) => { applied.push({ data, viewed }); return true },
+    wait: async ms => { waits.push(ms) },
+    beforeAttempt: () => { beforeCount += 1 },
+    ...over,
+  }
+  return { run: () => runChatLoad(args), urls, waits, applied, lights, before: () => beforeCount }
+}
+
+describe("runChatLoad: the open-a-chat ladder", () => {
+  it("an answer on the first try is applied at once, with no waiting", async () => {
+    const l = ladder([okAnswer()])
+    const out = await l.run()
+    expect(out).toMatchObject({ kind: "applied", attempts: 1, first: null })
+    expect(l.waits).toEqual([])
+    expect(l.applied).toHaveLength(1)
+    expect(l.urls).toEqual(["/chat?limit=500"])
+  })
+  it("a first request that fails is tried again by itself and the person never sees a failure", async () => {
+    const l = ladder([failed({ kind: "network" }), okAnswer()])
+    const out = await l.run()
+    expect(out).toMatchObject({ kind: "applied", attempts: 2 })
+    expect((out as { first: ChatLoadFailure }).first.kind).toBe("network")
+    expect(l.waits).toEqual([500])
+  })
+  it("a server fault twice then an answer: three tries, the third is the light request", async () => {
+    const l = ladder([failed({ kind: "http", status: 500 }), failed({ kind: "http", status: 500 }), okAnswer()])
+    const out = await l.run()
+    expect(out).toMatchObject({ kind: "applied", attempts: 3 })
+    expect(l.waits).toEqual([500, 1500])
+    expect(l.lights).toEqual([false, false, true])
+    expect(l.urls[2]).toBe("/chat?limit=60")
+  })
+  it("every try failing ends as failed, with the first and the last failure", async () => {
+    const l = ladder([failed({ kind: "timeout" }), failed({ kind: "http", status: 502 }), failed({ kind: "network" })])
+    const out = await l.run()
+    expect(out.kind).toBe("failed")
+    const f = out as { attempts: number; first: ChatLoadFailure; last: ChatLoadFailure }
+    expect(f.attempts).toBe(3)
+    expect(f.first.kind).toBe("timeout")
+    expect(f.last.kind).toBe("network")
+    expect(l.applied).toHaveLength(0)
+  })
+  it("a refusal or a missing chat stops at once (no waiting, no second try)", async () => {
+    const l = ladder([failed({ kind: "http", status: 404, error: "Thread not found" })])
+    const out = await l.run()
+    expect(out).toMatchObject({ kind: "failed", attempts: 1 })
+    expect(l.waits).toEqual([])
+    expect(l.urls).toHaveLength(1)
+  })
+  it("the READ RULE is asked before EVERY try: a retry after the person left the screen does not mark the chat read", async () => {
+    const seen = [true, false, false]
+    let i = 0
+    const l = ladder([failed({ kind: "network" }), okAnswer()], { viewedNow: () => seen[i++] })
+    const out = await l.run()
+    expect(out.kind).toBe("applied")
+    expect(l.urls[0]).toBe("/chat?limit=500") // looking at it: the server may mark it read
+    expect(l.urls[1]).toBe("/chat?mark_read=0&limit=500") // gone by the second try: reads without marking
+    expect(l.applied[0].viewed).toBe(false) // so the list's number is not cleared either
+  })
+  it("a load that was overtaken by another chat does nothing more: no request after the wait, no apply after the answer", async () => {
+    let current = true
+    const l = ladder([failed({ kind: "network" }), okAnswer()], { isCurrent: () => current, wait: async () => { current = false } })
+    expect((await l.run()).kind).toBe("ignored")
+    expect(l.urls).toHaveLength(1) // the second try never went out
+    const l2 = ladder([okAnswer()], { isCurrent: () => false })
+    expect((await l2.run()).kind).toBe("ignored")
+    expect(l2.applied).toHaveLength(0)
+    // chosen away while the request was on its way
+    let live = true
+    const l3 = ladder([okAnswer()], { isCurrent: () => live, fetchAnswer: async () => { live = false; return okAnswer() } })
+    expect((await l3.run()).kind).toBe("ignored")
+    expect(l3.applied).toHaveLength(0)
+  })
+  it("when a background refresh got through while the open was still trying, the open stops and is NOT reported failed", async () => {
+    let good = false
+    const l = ladder([failed({ kind: "network" })], { newerGoodAnswer: () => good, fetchAnswer: async () => { good = true; return failed({ kind: "network" }) } })
+    expect((await l.run()).kind).toBe("ignored")
+    const l2 = ladder([okAnswer()], { newerGoodAnswer: () => true })
+    expect((await l2.run()).kind).toBe("ignored")
+    expect(l2.urls).toHaveLength(0)
+  })
+  it("an answer the screen cannot use is tried again like any failure, and a good one then works", async () => {
+    let n = 0
+    const l = ladder([okAnswer(null), okAnswer()], { apply: (data, viewed) => { n += 1; if (n === 1) throw new TypeError("null"); l.applied.push({ data, viewed }); return true } })
+    const out = await l.run()
+    expect(out).toMatchObject({ kind: "applied", attempts: 2 })
+    expect((out as { first: ChatLoadFailure }).first).toMatchObject({ kind: "network", error: BAD_ANSWER })
+  })
+  it("an answer that is unusable every time ends as failed (never as an empty chat)", async () => {
+    const l = ladder([okAnswer(null)], { apply: () => { throw new TypeError("null") } })
+    const out = await l.run()
+    expect(out.kind).toBe("failed")
+    expect(failureMessage((out as { last: ChatLoadFailure }).last)).toMatch(/could not be read/i)
+  })
+  it("an answer the caller chooses to ignore ends the load quietly", async () => {
+    const l = ladder([okAnswer()], { apply: () => false })
+    expect((await l.run()).kind).toBe("ignored")
+  })
+  it("a background refresh makes ONE try and never waits", async () => {
+    const l = ladder([failed({ kind: "network" })], { silent: true })
+    const out = await l.run()
+    expect(out).toMatchObject({ kind: "failed", attempts: 1 })
+    expect(l.waits).toEqual([])
+    expect(l.urls).toHaveLength(1)
+  })
+  it("a background refresh ignores the 'newer answer' rule (it is the newer answer)", async () => {
+    const l = ladder([okAnswer()], { silent: true, newerGoodAnswer: () => true })
+    expect((await l.run()).kind).toBe("applied")
+  })
+  it("the screen is told before each try (a tapped message link is kept alive while its chat loads)", async () => {
+    const l = ladder([failed({ kind: "network" }), failed({ kind: "network" }), okAnswer()])
+    await l.run()
+    expect(l.before()).toBe(3)
+  })
+})
+
 // ── the server's answer, with a fake database that can fail ──
 type Row = Record<string, unknown>
 function fakeDb(tables: Record<string, Row[] | Row | null>, o: { errors?: Record<string, { code?: string; message: string }>; pinsError?: boolean } = {}) {
@@ -149,6 +323,9 @@ describe("the server: a failed lookup is a fault, never an empty chat", () => {
     expect(gone.status).toBe(404)
     const missing = await buildTalkChatAnswer(fakeDb({ internal_threads: null }).client, base)
     expect(missing.status).toBe(404)
+    // an id that is not even a uuid (a mistyped link) is "no such chat" too, not a fault
+    const notUuid = await buildTalkChatAnswer(fakeDb({}, { errors: { internal_threads: { code: "22P02", message: 'invalid input syntax for type uuid: "x"' } } }).client, base)
+    expect(notUuid.status).toBe(404)
     spy.mockRestore()
   })
   it("a failed members lookup on a group is a fault, not 'You are not in this group'", async () => {
@@ -196,39 +373,58 @@ describe("wiring", () => {
     expect(route).toContain("listGroupMemberIds: listGroupMemberIdsStrict")
     expect(read("lib/team/groups.ts")).toContain("if (error) throw error")
   })
-  it("the chat is loaded through the retrying, time-limited fetch, and a failure is reported", () => {
-    expect(app).toContain("await fetchChatAnswer(")
-    expect(app).toContain("withChatView(markReadQuery, limitUsed)")
-    expect(app).toContain("const steps = silent ? [LOAD_STEPS[0]] : LOAD_STEPS")
+  it("the screen loads a chat through the ladder, asks the read rule per try, and reports failures", () => {
+    expect(app).toContain("await runChatLoad({")
+    expect(app).toContain("viewedNow: () => isBeingViewed()")
+    expect(app).toContain("fetchAnswer: fetchChatAnswer")
     expect(app).toContain("reportTalkLoad({ event: 'failed'")
     expect(app).toContain("reportTalkLoad({ event: 'recovered'")
+    expect(read("lib/talk/chat-load.ts")).toContain("viewed ? '' : '?mark_read=0'")
   })
-  it("the read-rule line is unchanged", () => {
-    expect(app).toContain("isBeingViewed() ? '' : '?mark_read=0'")
+  it("a caller holding the previous chat's id can never load it into the chat just chosen", () => {
+    expect(app).toContain("if (lastSelectedRef.current !== threadId) return Promise.resolve()")
+    expect(app).toContain("if (lastSelectedRef.current) void loadMessages(lastSelectedRef.current, { silent: true })")
+    expect(app).toContain("const isCurrent = () => selectSeqRef.current === seq && lastSelectedRef.current === threadId")
   })
   it("choosing the chat that is already chosen changes nothing, and the address change compares with what select() chose", () => {
     expect(app).toContain("if (id !== null && id === lastSelectedRef.current) return")
     expect(app).toContain("urlThread === lastSelectedRef.current")
     expect(app).toContain("if (lastSelectedRef.current === urlThread) return")
   })
-  it("a load that was overtaken by another chat is ignored, and only the current load ends the 'Loading…'", () => {
-    expect(app).not.toContain("if (selectedIdRef.current !== threadId) return // switched chats while loading") // the old thread-id check (it let A → B → A through)
-    expect(app).toContain("selectSeqRef.current !== seq")
-    expect(app).toContain("if (!silent && !guessGone && selectSeqRef.current === seq) setLoadingMsgs(false)")
+  it("a guessed chat that the list still has is shown as a failure once the list has answered (or failed)", () => {
+    expect(app).toContain("guessRef.current = shown")
+    expect(app).toContain("resolveGuess()")
+    expect(app).toContain("if (cancelled || !list) { resolveGuess(); setBooting(false); return }")
   })
-  it("one load per chat at a time, and coming back online or from the cache tries again", () => {
-    expect(app).toContain("running.threadId === threadId && running.seq === seq && running.silent === silent")
+  it("one chat load and one chat-list load at a time; the list after Back is always fresh", () => {
+    expect(app).toContain("if (running && sameLoad(running.key, key)) return running.promise")
+    expect(app).toContain("if (!fresh && listInflightRef.current) return listInflightRef.current")
+    expect(app).toContain("if (id === null) void loadThreads(true)")
+    expect(app).toContain("setBootError(null)")
+  })
+  it("coming back online tries again; the browser-cache page show only when the page came from the cache", () => {
     expect(app).toContain("window.addEventListener('online', onVisible)")
-    expect(app).toContain("window.addEventListener('pageshow', onVisible)")
+    expect(app).toContain("if (e.persisted) onVisible()")
+    expect(app).not.toContain("window.addEventListener('pageshow', onVisible)")
   })
-  it("the screen draws a failed load as 'Could not load this chat' with Retry, never as an empty chat, and only when TD Talk asks for it", () => {
+  it("a chat that failed to load keeps its unread number (the server did not mark it read)", () => {
+    expect(app).toContain("unreadTotal(chats, selectedId, isBeingViewed() && !loadFailed)")
+    expect(app).toContain("isBeingViewed() && !(loadFailed && loadFailed.threadId === t.id)")
+  })
+  it("Try again says it is working, and an ended sign-in has no Try again", () => {
+    expect(app).toContain("setRetrying(true)")
+    expect(app).toContain("onRetry: loadFailed.canRetry ? retryLoad : undefined")
+    expect(view).toContain('data-testid="talk-retrying"')
+    expect(view).toContain("{loadError.onRetry && <button")
+  })
+  it("the screen draws a failed load as 'Could not load this chat', never as an empty chat, and only when TD Talk asks for it", () => {
     expect(app).toContain("loadError={loadFailed && loadFailed.threadId === selected.id")
     const failedBlock = view.indexOf("groups.length === 0 && loadError")
     const emptyBlock = view.indexOf("groups.length === 0 ? (\n")
     expect(failedBlock).toBeGreaterThan(0)
-    expect(failedBlock).toBeLessThan(emptyBlock) // the failure is decided before the empty wording
-    expect(view).toContain("data-testid=\"talk-load-retry\"")
+    expect(failedBlock).toBeLessThan(emptyBlock)
+    expect(view).toContain('data-testid="talk-load-retry"')
     expect(read("components/marketing/lead-chat.tsx")).not.toContain("loadError={") // TD Marketing has its own load error; it passes nothing to the shared screen
-    expect(view).toContain("loadError?:") // optional: anything that does not pass it (TD Marketing's chats) is drawn exactly as before
+    expect(view).toContain("loadError?:") // optional
   })
 })
