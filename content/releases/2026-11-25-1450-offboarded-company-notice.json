@@ -1,0 +1,11 @@
+{
+  "title": "Offboarded clients now see a clear message in their portal",
+  "tag": "fixed",
+  "text": "When every company a client has is being offboarded, the client portal now says so: \"Your company is being offboarded and no longer appears in your portal. If you need anything, write to us in the chat\", with a Chat With Us button. Before, that client saw the new-client welcome screen (\"Thank you for your payment! Complete your setup\"), which was wrong for someone who is leaving. The message comes in English and Italian. Their login still works and nothing else changes. A client who still has another active company sees that company as before, with no message.",
+  "points": [
+    "Open a client in the CRM and press View as client (read-only) to see their home page",
+    "The message only appears when all of the client's companies are being offboarded",
+    "A client who also has an active company sees that company as before"
+  ],
+  "screenshot": "offboarded-company-notice.png"
+}

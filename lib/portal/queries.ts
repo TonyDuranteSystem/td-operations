@@ -59,13 +59,27 @@ export async function getPortalAccounts(contactId: string): Promise<PortalAccoun
  * (getPortalAccounts), so this is how the home page can still say "your company has been closed" (lib/portal/closed-company.ts).
  */
 export async function getClosedCompanyNames(contactId: string): Promise<string[]> {
+  return getLinkedCompanyNamesWithStatus(contactId, 'Closed')
+}
+
+/**
+ * The names of the companies this person is linked to that are now OFFBOARDING. Like a closed company, an offboarding one is hidden
+ * from the portal (getPortalAccounts lists only Active / Suspended), so a client whose companies are all offboarding has none left —
+ * this is how the home page can still say "your company is being offboarded" (lib/portal/closed-company.ts; dev job 31dfd3a6).
+ */
+export async function getOffboardingCompanyNames(contactId: string): Promise<string[]> {
+  return getLinkedCompanyNamesWithStatus(contactId, 'Offboarding')
+}
+
+/** One lookup for both notices: the names of this person's linked companies (access not revoked) that have exactly this status. */
+async function getLinkedCompanyNamesWithStatus(contactId: string, status: 'Closed' | 'Offboarding'): Promise<string[]> {
   const { data: links } = await supabaseAdmin.from('account_contacts').select('account_id').is('access_revoked_at', null).eq('contact_id', contactId)
   if (!links || links.length === 0) return []
   const { data } = await supabaseAdmin
     .from('accounts')
     .select('company_name')
     .in('id', links.map(l => l.account_id))
-    .eq('status', 'Closed')
+    .eq('status', status)
     .order('company_name')
   return (data ?? []).map(a => a.company_name as string).filter(Boolean)
 }
