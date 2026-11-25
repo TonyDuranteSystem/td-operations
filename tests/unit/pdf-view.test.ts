@@ -32,7 +32,7 @@ describe("wiring", () => {
     expect(view).toContain("href={src}")
     expect(view).toContain('target="_blank"')
     expect(view).toContain("Open PDF")
-    expect(view).toContain("Use Back to return here")
+    expect(view).toContain("close it or go back to return here")
   })
   it("it follows the screen if the device changes (a tablet with a keyboard attached)", () => {
     expect(view).toContain("mq.addEventListener('change', on)")

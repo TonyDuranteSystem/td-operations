@@ -167,7 +167,9 @@ describe('UI + read-mark source guards', () => {
   it('neither the CRM Team Chat page nor TD Talk uses hasFocus (unreliable on phones/installed apps); both use the fail-open rule', () => {
     const crm = read('app/(dashboard)/team-chat/page.tsx'); const talk = read('components/talk/talk-app.tsx')
     expect(crm).toContain("isBeingViewed() ? '' : 'mark_read=0'")
-    expect(talk).toContain("isBeingViewed() ? '' : '?mark_read=0'")
+    // TD Talk's rule moved into the load ladder (2026-11-25): the screen says whether it is being viewed, lib/talk/chat-load.ts builds the query before EVERY try
+    expect(talk).toContain('viewedNow: () => isBeingViewed()')
+    expect(read('lib/talk/chat-load.ts')).toContain("viewed ? '' : '?mark_read=0'")
     expect(crm).not.toContain('hasFocus'); expect(talk).not.toContain('hasFocus')
   })
 })

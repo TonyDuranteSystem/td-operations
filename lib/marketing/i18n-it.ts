@@ -681,6 +681,7 @@ export const IT: Record<string, string> = {
   "Could not delete the message.": "Non sono riuscita a eliminare il messaggio.",
   "That message is older than the latest 500 in this chat.": "Quel messaggio è più vecchio degli ultimi 500 di questa chat.",
   "Try again": "Riprova",
+  "Trying again…": "Riprovo…",
   "Someone": "Qualcuno",
   "Only you can read this chat for now": "Per ora solo tu puoi leggere questa chat",
   "Search this chat": "Cerca in questa chat",

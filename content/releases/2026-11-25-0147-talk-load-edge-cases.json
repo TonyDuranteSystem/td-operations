@@ -1,0 +1,11 @@
+{
+  "title": "TD Talk loading: a failed load no longer marks the chat read, and a signed-out phone says so",
+  "tag": "fixed",
+  "text": "Follow-up to the TD Talk fix for chats that fail to load. If you leave the app while TD Talk is still trying again, the late retry no longer marks the chat read, so the unread number stays, and a chat that failed to load keeps its unread number on the list and the app icon. If your sign-in has ended, TD Talk says so instead of offering a Try again button that could never work. A small \"Trying again…\" line shows while Try again is working. A broken answer from the server now shows \"Could not load this chat\", and a mistyped chat link no longer shows an error.",
+  "points": [
+    "Open TD Talk after your sign-in has ended: you see the sign-in message and no Try again button",
+    "Open a chat on a poor connection and leave the app: the chat stays unread until you really open it",
+    "Tap Try again on a chat that already shows messages: a small \"Trying again…\" line shows"
+  ],
+  "screenshot": "talk-sign-in-ended.png"
+}

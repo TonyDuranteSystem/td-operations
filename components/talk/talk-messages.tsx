@@ -264,10 +264,12 @@ function Bubble({
  * and never yanks you down while you are reading older ones.
  */
 export function TalkMessages({
-  threadId, messages, meId, tickOf, showSender, loading, highlightId, onMenu, onReply, onReact, onJumpTo, voiceApi, tools, readByOf, outbox, earlier, loadError,
+  threadId, messages, meId, tickOf, showSender, loading, highlightId, onMenu, onReply, onReact, onJumpTo, voiceApi, tools, readByOf, outbox, earlier, loadError, retrying,
 }: {
   /** TD Talk passes this when the chat could not be loaded: it is then NOT drawn as an empty chat. Absent = nothing changes (TD Marketing). */
-  loadError?: { message: string; onRetry: () => void } | null
+  loadError?: { message: string; onRetry?: () => void } | null
+  /** "Try again" is working while messages are on screen (the banner is gone): a small line says so. Absent = nothing changes (TD Marketing). */
+  retrying?: boolean
   /** TD Talk passes this when older messages exist than the ones loaded: a "Load earlier messages" button at the top (absent = nothing changes). */
   earlier?: { has: boolean; loading: boolean; load: () => void }
   /** Retry / Delete for the messages still in the phone's outbox (they arrive in `messages` marked `local`). */
@@ -373,8 +375,11 @@ export function TalkMessages({
       {loadError && groups.length > 0 && (
         <div className="mb-2 flex items-center justify-between gap-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900" data-testid="talk-load-banner">
           <span>{t('Could not load this chat.')}</span>
-          <button type="button" onClick={loadError.onRetry} className="font-semibold underline">{t('Try again')}</button>
+          {loadError.onRetry && <button type="button" onClick={loadError.onRetry} className="font-semibold underline">{t('Try again')}</button>}
         </div>
+      )}
+      {retrying && !loadError && groups.length > 0 && (
+        <p className="mb-2 text-center text-xs text-zinc-500" data-testid="talk-retrying">{t('Trying again…')}</p>
       )}
       {loading && messages.length === 0 ? (
         <p className="py-10 text-center text-sm text-zinc-400">{t('Loading…')}</p>
@@ -382,7 +387,7 @@ export function TalkMessages({
         <div className="py-10 text-center" data-testid="talk-load-failed">
           <p className="text-sm font-semibold text-zinc-700">{t('Could not load this chat.')}</p>
           <p className="mt-1 text-sm text-zinc-500">{loadError.message}</p>
-          <button type="button" onClick={loadError.onRetry} data-testid="talk-load-retry" className="mt-3 rounded-full bg-[#BE1E2D] px-5 py-2 text-sm font-semibold text-white active:opacity-80">{t('Try again')}</button>
+          {loadError.onRetry && <button type="button" onClick={loadError.onRetry} data-testid="talk-load-retry" className="mt-3 rounded-full bg-[#BE1E2D] px-5 py-2 text-sm font-semibold text-white active:opacity-80">{t('Try again')}</button>}
         </div>
       ) : groups.length === 0 ? (
         <p className="py-10 text-center text-sm text-zinc-400">{t('No messages yet. Say hello.')}</p>
