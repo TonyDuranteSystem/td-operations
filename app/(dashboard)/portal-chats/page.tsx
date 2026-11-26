@@ -46,6 +46,8 @@ import { FastTooltip } from '@/components/ui/fast-tooltip'
 import { QuickCreateModal } from '@/components/dashboard/quick-create-modal'
 import { HelpDot } from '@/components/help/help-dot'
 import { useAppMode } from '@/lib/app-mode/app-mode-context'
+import { useVisibleHeight } from '@/lib/app-mode/use-visible-height'
+import { composerMaxHeight, composerHeight } from '@/lib/portal-chats/composer-height'
 import { AppYouButton } from '@/components/app-mode/app-you-button'
 import { PhoneConvNav, PhoneViewStrip, PhoneMoreSheet, PhoneReplyToLine, PhoneReplyToSheet, PhonePlusButton, PhonePlusSheet } from '@/components/portal-chats/app-phone-chrome'
 import { AttachChoiceMenu } from '@/components/scan/attach-choice-menu'
@@ -498,6 +500,8 @@ export default function PortalChatsPage() {
   const [selectMode, setSelectMode] = useState(false)
   // TD Social phone app: a conversation gets the slim phone layout (components/portal-chats/app-phone-chrome.tsx). The computer layout never reads this.
   const appMode = useAppMode()
+  // In the app the message box may grow only to about a third of what is visible above the keyboard (dev job cb02b03d); the website keeps 300 px.
+  const composerCap = composerMaxHeight(useVisibleHeight(appMode), appMode)
   const [appSheet, setAppSheet] = useState<'more' | 'replyTo' | 'plus' | null>(null)
   const [selectedMsgIds, setSelectedMsgIds] = useState<Set<string>>(new Set())
   // Chat-list filter chip: All / Unread / What's New / Chats / Pinned (lib/portal-chats/list-filter.ts). Opens on Chats.
@@ -2508,15 +2512,15 @@ export default function PortalChatsPage() {
     const el = inputRef.current
     if (!el) return
     el.style.height = '0px'
-    el.style.height = Math.max(44, Math.min(el.scrollHeight, 300)) + 'px'
-  }, [replyText])
+    el.style.height = composerHeight(el.scrollHeight, composerCap) + 'px'
+  }, [replyText, composerCap])
 
   useEffect(() => {
     const el = internalInputRef.current
     if (!el) return
     el.style.height = '0px'
-    el.style.height = Math.max(44, Math.min(el.scrollHeight, 300)) + 'px'
-  }, [internalReplyText])
+    el.style.height = composerHeight(el.scrollHeight, composerCap) + 'px'
+  }, [internalReplyText, composerCap])
 
   useEffect(() => {
     const el = editTextareaRef.current
@@ -2645,6 +2649,10 @@ export default function PortalChatsPage() {
   const closedTargetName = selectedAccountId
     ? (currentThreadForGuard?.company_name ?? 'This company')
     : (selectedClosedCompany?.name ?? 'This company')
+  // "Who else reads this" notice. Shown as a yellow card above the message box on the website, and ONLY inside the Before-you-send pop-up in
+  // the app (dev job cb02b03d: the card took a quarter of the visible screen on the iPad). Same trigger for both so the warning never
+  // appears in one place and goes missing in the other.
+  const showAudienceNotice = !sendingToClosedAccount && !!audienceTargetId && (audienceTotal > 1 || selectedThreadMembers.length > 1 || addressedToOptions.length > 1)
 
   // Leaving a conversation clears everything that belonged to it (shared by the computer "← Back" and the phone's back arrow)
   const leaveConversation = () => {
@@ -5328,7 +5336,9 @@ export default function PortalChatsPage() {
                 account_contacts also happened to undercount that account:
                 the inner fix could never be reached from those paths for a
                 meaningful share of real multi-member accounts. */}
-            {!sendingToClosedAccount && !!audienceTargetId && (audienceTotal > 1 || selectedThreadMembers.length > 1 || addressedToOptions.length > 1) && (
+            {/* In the app this card is NOT drawn (dev job cb02b03d): on the iPad with the keyboard open it took a quarter of the visible
+                screen. The same notice sits in the Before-you-send pop-up there instead (data-testid="send-audience-notice"). */}
+            {!appMode && showAudienceNotice && (
               <div className="px-3 py-2 border-t bg-amber-50 flex flex-col gap-1.5 shrink-0">
                 <div className="flex items-start gap-2">
                   <AlertCircle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
@@ -6043,7 +6053,7 @@ export default function PortalChatsPage() {
                       Personal
                     </button>
                   </div>
-                  {!sendingToClosedAccount && !!audienceTargetId && audienceTotal > 1 && (
+                  {!appMode && !sendingToClosedAccount && !!audienceTargetId && audienceTotal > 1 && (
                     <p className="text-[11px] text-amber-700 mt-1.5">
                       Visible to everyone in {audienceTargetName}: {sendAudience?.contact_count ?? 0} member{(sendAudience?.contact_count ?? 0) === 1 ? '' : 's'}
                       {(sendAudience?.chat_teammate_count ?? 0) > 0 ? ` + ${sendAudience?.chat_teammate_count} portal teammate${(sendAudience?.chat_teammate_count ?? 0) === 1 ? '' : 's'}` : ''}.
@@ -6116,6 +6126,29 @@ export default function PortalChatsPage() {
                     ))}
                   </div>
                   <p className="text-[11px] text-zinc-400 mt-1.5">Label only — the whole company still sees this message.</p>
+                </div>
+              )}
+
+              {/* App only (dev job cb02b03d): the "who sees this" number that the website shows in the yellow card above the message box.
+                  The keyboard is closed by the time this pop-up opens, so there is room for it here. Same trigger as the card. */}
+              {appMode && showAudienceNotice && (
+                <div data-testid="send-audience-notice" className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-2 text-[13px] leading-snug text-amber-800">
+                  <AlertCircle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+                  <p>
+                    {audienceTotal > 1 ? (
+                      <>
+                        <span className="font-semibold">{audienceTotal} people see this:</span>{' '}
+                        {sendAudience?.contact_count ?? 0} member{(sendAudience?.contact_count ?? 0) === 1 ? '' : 's'}
+                        {(sendAudience?.chat_teammate_count ?? 0) > 0 && (
+                          <> + {sendAudience?.chat_teammate_count} portal teammate{(sendAudience?.chat_teammate_count ?? 0) === 1 ? '' : 's'}</>
+                        )}
+                        .
+                      </>
+                    ) : (
+                      <>Everyone in <span className="font-semibold">{audienceTargetName}</span> sees this message.</>
+                    )}
+                    {!selectedAccountId && ' Use “Personal” for anything meant for one person.'}
+                  </p>
                 </div>
               )}
 
