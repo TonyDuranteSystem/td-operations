@@ -48,6 +48,7 @@ import { HelpDot } from '@/components/help/help-dot'
 import { useAppMode } from '@/lib/app-mode/app-mode-context'
 import { useVisibleHeight } from '@/lib/app-mode/use-visible-height'
 import { composerMaxHeight, composerHeight } from '@/lib/portal-chats/composer-height'
+import { defaultReplyCompanyId } from '@/lib/portal-chats/default-reply-company'
 import { AppYouButton } from '@/components/app-mode/app-you-button'
 import { PhoneConvNav, PhoneViewStrip, PhoneMoreSheet, PhoneReplyToLine, PhoneReplyToSheet, PhonePlusButton, PhonePlusSheet } from '@/components/portal-chats/app-phone-chrome'
 import { AttachChoiceMenu } from '@/components/scan/attach-choice-menu'
@@ -643,6 +644,10 @@ export default function PortalChatsPage() {
   const [unreadBelowCount, setUnreadBelowCount] = useState(0)
   const internalMessagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  // "Send as" (a person's chat): staff's own pick is kept until they open another conversation. Until they pick, the reply starts where the client's
+  // latest message was written (dev job 8d077f3b, Antonio's choice "A1"; see lib/portal-chats/default-reply-company.ts).
+  const companyPickedRef = useRef(false)
+  const chooseCompany = (id: string | null) => { companyPickedRef.current = true; setSelectedCompanyId(id) }
   const adminFileRef = useRef<HTMLInputElement>(null)
   // the paperclip opens a small menu: Scan document (camera -> one PDF) or Photo or file
   const [attachMenu, setAttachMenu] = useState(false)
@@ -1056,6 +1061,19 @@ export default function PortalChatsPage() {
     () => (olderMessages.length ? [...olderMessages, ...(messages ?? [])] : (messages ?? [])),
     [olderMessages, messages],
   )
+
+  // A new conversation starts with nobody's pick: the reply follows the client again (dev job 8d077f3b).
+  useEffect(() => { companyPickedRef.current = false }, [selectedAccountId, selectedContactId])
+
+  // Person's chat only: until staff pick, the reply starts on the company (or Personal) of the client's LATEST message. A company's own chat has
+  // nothing to choose. Re-runs when a newer client message arrives, so the default keeps following the client; an explicit pick always wins, and
+  // while a reply is being typed the target is left alone (it must not move under the words being written).
+  const replyIsBeingTyped = replyText.trim().length > 0
+  useEffect(() => {
+    if (!selectedContactId || selectedAccountId || companyPickedRef.current || replyIsBeingTyped) return
+    const fallback = defaultReplyCompanyId((messages ?? []).filter(m => m.contact_id === selectedContactId), selectedThreadCompanies)
+    setSelectedCompanyId(prev => (prev === fallback ? prev : fallback))
+  }, [messages, selectedThreadCompanies, selectedContactId, selectedAccountId, replyIsBeingTyped])
 
   // Reset pagination whenever the selected thread changes.
   useEffect(() => {
@@ -4150,7 +4168,7 @@ export default function PortalChatsPage() {
                   onClose={() => setAppSheet(null)}
                   companies={selectedThreadCompanies.length > 0 && !selectedAccountId ? selectedThreadCompanies.map(c => ({ id: c.id, name: c.name, closed: c.closed })) : null}
                   selectedCompanyId={selectedCompanyId}
-                  onCompany={setSelectedCompanyId}
+                  onCompany={chooseCompany}
                   topics={adminTopicOrder.map(key => ({ key, label: key === '' ? 'General' : key, unread: adminUnreadByTopic[key] ?? 0 }))}
                   activeTopic={adminActiveTopic ?? ''}
                   onTopic={key => setAdminActiveTopic(key === '' ? null : key)}
@@ -4836,9 +4854,11 @@ export default function PortalChatsPage() {
                             </span>
                           )
                         })()}
-                        {/* Sender label for admin messages — always "TD Team", never a staff/member name */}
+                        {/* Sender label for admin messages: the team member's first name (Antonio, Luca, Jodi) when we know who wrote it, else "TD Team".
+                            Never a company member's name: on a staff send the row's contact is only a routing tag (dev job 8d077f3b; the server
+                            sets sender_name for staff rows from the sender's own login, never from that contact). */}
                         {isAdmin && (
-                          <p className="text-[10px] font-semibold text-blue-100 mb-0.5">TD Team</p>
+                          <p className="text-[10px] font-semibold text-blue-100 mb-0.5" data-testid="staff-sender-name">{msg.sender_name?.trim() || 'TD Team'}</p>
                         )}
                         {/* Sender name for client messages (shows member name in MMLLC) */}
                         {!isAdmin && msg.sender_name && (
@@ -5275,7 +5295,7 @@ export default function PortalChatsPage() {
                     <FastTooltip key={c.id} label={c.closed ? `${c.name} — CLOSED company. The client cannot see messages sent here.` : c.name}>
                       <button
                         type="button"
-                        onClick={() => setSelectedCompanyId(c.id)}
+                        onClick={() => chooseCompany(c.id)}
                         className={cn(
                           'px-2.5 py-0.5 text-[11px] rounded-full transition-colors max-w-[200px] truncate inline-flex items-center gap-1',
                           c.closed
@@ -5297,7 +5317,7 @@ export default function PortalChatsPage() {
                   <FastTooltip label="Only this person (and staff) can see the reply — no company thread.">
                     <button
                       type="button"
-                      onClick={() => setSelectedCompanyId(null)}
+                      onClick={() => chooseCompany(null)}
                       className={cn(
                         'px-2.5 py-0.5 text-[11px] rounded-full transition-colors',
                         !selectedCompanyId
@@ -6031,7 +6051,7 @@ export default function PortalChatsPage() {
                       <button
                         key={c.id}
                         type="button"
-                        onClick={() => setSelectedCompanyId(c.id)}
+                        onClick={() => chooseCompany(c.id)}
                         className={cn(
                           'px-3 py-1.5 text-sm rounded-full border transition-colors max-w-[220px] truncate',
                           c.closed
@@ -6044,7 +6064,7 @@ export default function PortalChatsPage() {
                     ))}
                     <button
                       type="button"
-                      onClick={() => setSelectedCompanyId(null)}
+                      onClick={() => chooseCompany(null)}
                       className={cn(
                         'px-3 py-1.5 text-sm rounded-full border transition-colors',
                         !selectedCompanyId ? 'bg-zinc-900 text-white border-zinc-900' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'
