@@ -7,9 +7,12 @@ import { daysWaiting } from '@/lib/portal-chats/waiting'
 import {
   defaultOwnerFilter,
   ownerCounts,
-  waitingUsForCard,
+  waitingForCard,
+  waitingOwnerOf,
+  waitingSinceOf,
   type OwnedThread,
   type OwnerFilter,
+  type WaitingKind,
   type WaitingStaff,
 } from '@/lib/portal-chats/waiting-owner'
 
@@ -49,15 +52,37 @@ const dayLabel = (since: string) => {
   return d === 0 ? 'today' : d === 1 ? '1 day' : `${d} days`
 }
 
+/** What each card says. "us" = the client waits for the team; "client" = the team waits for the client. */
+const CARD_TEXT: Record<WaitingKind, { title: string; titleClass: string; dayClass: string; sub: string; who: string; mine: string }> = {
+  us: {
+    title: 'Waiting on us',
+    titleClass: 'text-rose-600',
+    dayClass: 'text-rose-600',
+    sub: 'The client is waiting for our answer. Longest first.',
+    who: 'Who answers',
+    mine: 'Nothing is waiting on you.',
+  },
+  client: {
+    title: 'Waiting for client',
+    titleClass: 'text-amber-600',
+    dayClass: 'text-amber-600',
+    sub: 'We are waiting for the client\'s answer. Longest first.',
+    who: 'Who follows up',
+    mine: 'You are not following up any conversation.',
+  },
+}
+
 /**
- * The pop-up under the "Waiting on us" chip (Antonio, 2026-11-25): every conversation the client is waiting on us for, with the team
- * member it belongs to and a small filter per team member. It opens on the viewer's own conversations. The owner of a line is changed
- * with the small menu on that line; clicking the name opens the conversation.
+ * The pop-up under the "Waiting on us" chip (Antonio, 2026-11-25) and, since the same day's follow-up, under the "Waiting for client" chip:
+ * every conversation marked that way, with the team member it belongs to and a small filter per team member. It opens on the viewer's
+ * own conversations. The owner of a line is changed with the small menu on that line; clicking the name opens the conversation.
  */
-export function WaitingOnUsCard({
-  threads, staff, viewerId, loading, onOpen, onAssign, onClose,
+export function WaitingOwnersCard({
+  kind, threads, staff, viewerId, loading, onOpen, onAssign, onClose,
 }: {
-  /** Every loaded conversation (the card picks the ones waiting on us). */
+  /** Which chip's card this is. */
+  kind: WaitingKind
+  /** Every loaded conversation (the card picks the ones marked with this kind). */
   threads: ReadonlyArray<WaitingCardThread>
   staff: ReadonlyArray<WaitingStaff>
   viewerId: string | null
@@ -67,11 +92,12 @@ export function WaitingOnUsCard({
   onAssign: (t: WaitingCardThread, ownerId: string | null) => void
   onClose: () => void
 }) {
+  const text = CARD_TEXT[kind]
   const [picked, setPicked] = useState<OwnerFilter | null>(null)
   // Until the person picks a pill, the card shows their own conversations (or everyone's when they are not on the team list).
   const filter: OwnerFilter = picked ?? defaultOwnerFilter(viewerId, staff)
-  const counts = ownerCounts(threads)
-  const shown = waitingUsForCard(threads, filter)
+  const counts = ownerCounts(threads, kind)
+  const shown = waitingForCard(threads, filter, kind)
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -96,27 +122,27 @@ export function WaitingOnUsCard({
     <div
       ref={ref}
       role="dialog"
-      aria-label="Waiting on us"
-      data-testid="waiting-us-card"
+      aria-label={text.title}
+      data-testid={`waiting-${kind}-card`}
       className="absolute left-2 right-2 top-full z-30 mt-1 flex max-h-[min(440px,70vh)] flex-col rounded-xl border border-zinc-200 bg-white shadow-xl"
     >
       <div className="flex items-start justify-between gap-2 px-3.5 pb-2 pt-3">
         <div>
-          <p className="text-sm font-semibold text-rose-600">Waiting on us</p>
-          <p className="text-xs text-zinc-500">The client is waiting for our answer. Longest first.</p>
+          <p className={cn('text-sm font-semibold', text.titleClass)}>{text.title}</p>
+          <p className="text-xs text-zinc-500">{text.sub}</p>
         </div>
         <button type="button" onClick={onClose} aria-label="Close" className="rounded-md p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600">
           <X className="h-4 w-4" />
         </button>
       </div>
 
-      <div className="flex flex-wrap gap-1.5 border-b border-zinc-200 px-3.5 pb-2.5" data-testid="waiting-us-filter">
+      <div className="flex flex-wrap gap-1.5 border-b border-zinc-200 px-3.5 pb-2.5" data-testid={`waiting-${kind}-filter`}>
         {pills.map(p => (
           <button
             key={p.id}
             type="button"
             aria-pressed={filter === p.id}
-            data-testid={`waiting-us-pill-${p.id}`}
+            data-testid={`waiting-${kind}-pill-${p.id}`}
             onClick={() => setPicked(p.id)}
             className={cn(
               'inline-flex items-center gap-1.5 rounded-full border py-0.5 pr-2.5 text-xs transition-colors',
@@ -130,25 +156,25 @@ export function WaitingOnUsCard({
         ))}
       </div>
 
-      <div className="overflow-y-auto" data-testid="waiting-us-items">
+      <div className="overflow-y-auto" data-testid={`waiting-${kind}-items`}>
         {shown.length === 0 ? (
           <p className="px-3.5 py-6 text-center text-sm text-zinc-400">
-            {loading ? 'Loading…' : filter === viewerId ? 'Nothing is waiting on you.' : 'Nothing is waiting here.'}
+            {loading ? 'Loading…' : filter === viewerId ? text.mine : 'Nothing is waiting here.'}
           </p>
         ) : shown.map(t => {
           const key = t.account_id ?? t.contact_id ?? ''
-          const owner = t.waiting_us_owner ?? ''
+          const owner = waitingOwnerOf(t, kind) ?? ''
           const ownerKnown = !owner || staff.some(s => s.id === owner)
           return (
-            <div key={key} data-testid="waiting-us-item" className="flex items-center gap-2.5 border-b border-zinc-100 px-3.5 py-2.5 hover:bg-zinc-50">
-              <OwnerBadge staff={staff} ownerId={t.waiting_us_owner} />
+            <div key={key} data-testid={`waiting-${kind}-item`} className="flex items-center gap-2.5 border-b border-zinc-100 px-3.5 py-2.5 hover:bg-zinc-50">
+              <OwnerBadge staff={staff} ownerId={owner || null} />
               <button type="button" onClick={() => onOpen(t)} className="min-w-0 flex-1 text-left">
                 <span className="block truncate text-[13px] font-medium text-zinc-900">{t.contact_name || t.company_name}</span>
                 <span className="block truncate text-xs text-zinc-400">{t.last_message}</span>
               </button>
-              <span className="whitespace-nowrap text-[11px] font-bold text-rose-600">{dayLabel(t.waiting_us_since as string)}</span>
+              <span className={cn('whitespace-nowrap text-[11px] font-bold', text.dayClass)}>{dayLabel(waitingSinceOf(t, kind) as string)}</span>
               <select
-                aria-label={`Who answers ${t.contact_name || t.company_name}`}
+                aria-label={`${text.who} ${t.contact_name || t.company_name}`}
                 value={owner}
                 onChange={e => onAssign(t, e.target.value || null)}
                 className="max-w-[120px] rounded-md border border-zinc-200 bg-white px-1.5 py-1 text-xs text-zinc-700"
