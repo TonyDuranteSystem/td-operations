@@ -25,7 +25,8 @@ final class WebHost: NSObject, ObservableObject, WKNavigationDelegate, WKUIDeleg
     let path: String
     private(set) var started = false
 
-    init(path: String, loadNow: Bool = true) {
+    /// `firstPage`: the page the first load opens when it is not the tab's own (a tapped alert's exact page); `path` stays the tab's own page for reload / startIfNeeded.
+    init(path: String, loadNow: Bool = true, firstPage: String? = nil) {
         self.path = path
         let cfg = WKWebViewConfiguration()
         cfg.websiteDataStore = WKWebsiteDataStore.default()
@@ -49,7 +50,7 @@ final class WebHost: NSObject, ObservableObject, WKNavigationDelegate, WKUIDeleg
             webView.observe(\.canGoBack, options: [.initial, .new]) { [weak self] web, _ in Task { @MainActor in self?.canGoBack = web.canGoBack } },
             webView.observe(\.url, options: [.initial, .new]) { [weak self] web, _ in Task { @MainActor in self?.currentPath = web.url?.path } },
         ]
-        if loadNow { load(path) }
+        if loadNow { load(firstPage ?? path) }
     }
 
     /// starts the first load if it has not started (a tab that waited is opened, or its turn in the background came)

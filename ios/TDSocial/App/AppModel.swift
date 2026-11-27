@@ -24,6 +24,7 @@ final class AppModel: ObservableObject {
     private var hosts: [String: WebHost] = [:]
     private let monitor = NWPathMonitor()
     private var checking = false
+    private var pendingAlert: PendingAlert?   // an alert tapped before the tab list was known (see openFromAlert)
     private var prefsEdits = 0   // counts switch changes on the You screen; a check that began before one is out of date
     private var warmed = false   // the waiting tabs' pages have been started (reset when the person signs out)
     private let askedKey = "alertsAsked.\(AppConfig.bundleId)"
@@ -63,8 +64,16 @@ final class AppModel: ObservableObject {
     private func apply(_ me: AppMe) {
         self.me = me
         if me.notSetUp { screen = .noAccess; return }
-        if selectedTab == "" || !me.tabs.contains(where: { $0.id == selectedTab }) { selectedTab = me.tabs.first?.id ?? "" }
+        // an alert tapped while the app was closed (or before the sign-in) waited for this moment: its tab wins over the default first tab
+        var alertTarget: AlertTarget?
+        if let waiting = pendingAlert {
+            pendingAlert = nil
+            alertTarget = waiting.target(tabs: me.tabs.map { $0.id }, now: Date())
+        }
+        if let t = alertTarget { selectedTab = t.tab }
+        else if selectedTab == "" || !me.tabs.contains(where: { $0.id == selectedTab }) { selectedTab = me.tabs.first?.id ?? "" }
         if screen != .ready { screen = .ready }
+        if let t = alertTarget { show(t) }
         #if DEBUG
         if let open = API.takeDevOpen(), me.tabs.contains(where: { $0.id == open.tab }) { selectedTab = open.tab; host(for: open.tab).load(open.path) }   // simulator tests only
         #endif
@@ -83,10 +92,10 @@ final class AppModel: ObservableObject {
     }
 
     /// Only the tab on screen starts loading when the app opens; the others wait (TabLoading) so the first screen has the phone's connection to itself.
-    func host(for tabId: String) -> WebHost {
+    func host(for tabId: String, firstPage: String? = nil) -> WebHost {
         if let h = hosts[tabId] { return h }
         let first = TabLoading.loadsAtOnce(tabId: tabId, selected: selectedTab)
-        let h = WebHost(path: TabPath.path(for: tabId) ?? "/", loadNow: first)
+        let h = WebHost(path: TabPath.path(for: tabId) ?? "/", loadNow: first, firstPage: firstPage)
         if first {
             // when the first page is in, the others start a moment later; if it never gets in, they start anyway after a while
             h.onFinish = { [weak self] in Task { @MainActor in self?.scheduleWarming(after: TabLoading.warmDelay) } }
@@ -148,11 +157,24 @@ final class AppModel: ObservableObject {
         if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
     }
 
-    /// The person tapped an alert: open the tab it belongs to (and the exact page when the alert carried a safe link)
+    /// The person tapped an alert: open the tab it belongs to (and the exact page when the alert carried a safe link).
+    /// A tap that STARTS the closed app arrives before the server has said which tabs this person has (or before they have signed in): it is kept
+    /// (PendingAlert) and used by `apply` the moment the tab list is known. It used to be thrown away, and the app opened on TD Talk whatever the alert was.
     func openFromAlert(url: String?, thread: String?) {
-        guard let tab = AlertRouting.tab(url: url, thread: thread), me?.tabs.contains(where: { $0.id == tab }) == true else { return }
-        selectedTab = tab
-        if let path = AlertRouting.pagePath(url: url) { host(for: tab).load(path) }
+        guard AlertRouting.tab(url: url, thread: thread) != nil else { return }   // an alert that names no tab opens nothing special
+        let alert = PendingAlert(url: url, thread: thread, receivedAt: Date())
+        if screen == .ready, let me {
+            if let t = alert.target(tabs: me.tabs.map { $0.id }, now: Date()) { show(t) }
+        } else {
+            pendingAlert = alert
+        }
+    }
+
+    /// Select the alert's tab and open its page: a tab that has no web view yet starts on that page, one that has one loads it.
+    private func show(_ t: AlertTarget) {
+        selectedTab = t.tab
+        if let existing = hosts[t.tab] { if let path = t.path { existing.load(path) } }
+        else { _ = host(for: t.tab, firstPage: t.path) }
     }
 
     // MARK: alerts permission and the phone registration
@@ -218,6 +240,7 @@ final class AppModel: ObservableObject {
         let store = WKWebsiteDataStore.default()
         await store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast)
         UNUserNotificationCenter.current().setBadgeCount(0) { _ in }
+        pendingAlert = nil   // a tap kept for this person must never open a chat for whoever signs in next
         selectedTab = ""
         enterSignedOut()
     }
