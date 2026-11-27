@@ -5,6 +5,8 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { getTeammateScopeOrNull, requirePortalCapability } from '@/lib/portal/team/gate'
 import { pickChatSenderName } from '@/lib/portal/chat-sender-name'
+import { adminSenderName, senderIdsToName, staffFirstName, staffRowSenderName } from '@/lib/portal/staff-display-name'
+import { staffLabelsFor } from '@/lib/portal/staff-labels'
 import { createPortalNotification, notifyClientOfAdminMessage, waitForClientAlert } from '@/lib/portal/notifications'
 import { isPortalAdminEmailEnabled } from '@/lib/settings'
 import { checkRateLimit, getRateLimitKey } from '@/lib/portal/rate-limit'
@@ -335,6 +337,14 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // Which team member wrote each staff message (dev job 8d077f3b). Older staff rows carry a sender_id but no name: name them from the login
+  // (remembered ten minutes). Looked up only for staff rows that have no stored name, so a page of recent messages costs nothing extra.
+  // The shared automation sender id is left out (reminders, welcome notes, Claude's MCP send, the AI worker … all post under it, so those rows stay
+  // "TD Team"); a message a person typed stores their name at send time instead.
+  const staffNames = await staffLabelsFor(
+    senderIdsToName((data ?? []).map(m => ({ sender_type: m.sender_type, sender_id: m.sender_id, sender_name: (m as { sender_name?: string | null }).sender_name }))),
+  )
+
   // Flatten contact name into sender_name for display
   const messages = (data ?? []).map(msg => {
     const contact = msg.contacts as unknown as { full_name: string } | null
@@ -359,7 +369,11 @@ export async function GET(request: NextRequest) {
       ...(isClientUser ? restWithoutAddressedTo : rest),
       // Contact name for client/owner messages; stored sender_name (the teammate's
       // display name) when there's no contact; null → UI shows its generic label.
-      sender_name: pickChatSenderName(contact?.full_name, (rest as { sender_name?: string | null }).sender_name),
+      // A STAFF row never takes the contact's name: on a staff send that contact is only a routing tag (one of the company's members), not the
+      // author. It shows the sender's first name (stored at send time, else worked out from the login) or nothing, and the screen says "TD Team".
+      sender_name: msg.sender_type === 'admin'
+        ? staffRowSenderName({ sender_id: msg.sender_id, sender_name: (rest as { sender_name?: string | null }).sender_name }, staffNames)
+        : pickChatSenderName(contact?.full_name, (rest as { sender_name?: string | null }).sender_name),
       // "Addressed to" label (dev job 08a8be62; frozen-snapshot column added
       // dev job 34bd9009) — staff-facing display of who a company-scoped
       // message was addressed to. Prefers the frozen addressed_to_label
@@ -487,6 +501,10 @@ export async function POST(request: NextRequest) {
   // Determine sender type
   const isClientUser = user.app_metadata?.role === 'client'
   const senderType = isClientUser ? 'client' : 'admin'
+  // The first name shown on a staff message instead of "TD Team" (Antonio, 2026-11-26): from the logged-in staff member. null for a shared login.
+  const staffSenderName = senderType === 'admin'
+    ? staffFirstName((user.user_metadata as { full_name?: unknown } | null)?.full_name as string | null | undefined, user.email ?? null)
+    : null
 
   // Resolve contact_id — always set (from body, or from auth user).
   // For admin senders with only account_id, look up the primary contact so the
@@ -665,7 +683,10 @@ export async function POST(request: NextRequest) {
       contact_id: resolvedContactId || null,
       sender_type: senderType,
       sender_id: user.id,
-      ...(teammateSenderName ? { sender_name: teammateSenderName } : {}),
+      ...(teammateSenderName
+        ? { sender_name: teammateSenderName }
+        // a staff message keeps the sender's first name on the row, so a message that arrives live already carries it (dev job 8d077f3b)
+        : staffSenderName ? { sender_name: staffSenderName } : {}),
       sender_context,
       topic,
       message: (message || '').trim(),
@@ -687,7 +708,12 @@ export async function POST(request: NextRequest) {
   // Flatten sender_name
   const contact = data.contacts as unknown as { full_name: string } | null
   const { contacts: _contacts, ...msgData } = data
-  const responseMsg = { ...msgData, sender_name: pickChatSenderName(contact?.full_name, (msgData as { sender_name?: string | null }).sender_name) }
+  const responseMsg = {
+    ...msgData,
+    sender_name: senderType === 'admin'
+      ? adminSenderName((msgData as { sender_name?: string | null }).sender_name, staffSenderName)
+      : pickChatSenderName(contact?.full_name, (msgData as { sender_name?: string | null }).sender_name),
+  }
 
   // Staff reply = read (WhatsApp semantics): clear this conversation's client
   // unread so the staff red dot goes away the moment we answer — reliably, on

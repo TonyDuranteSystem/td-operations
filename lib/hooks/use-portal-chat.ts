@@ -6,6 +6,7 @@ import type { PortalMessage, ChatAttachment } from '@/lib/types'
 import { buildChatQueryPlan, messageVisibleInPlan, type ChatQueryPlan } from '@/lib/portal/chat-scope'
 import { mergeRefreshedMessages, parseTimestamp, sortMessagesAscending } from '@/lib/portal/chat-refresh-merge'
 import { useWakeSignal } from '@/lib/hooks/use-wake-signal'
+import { mergeLiveUpdate } from '@/lib/portal-chats/merge-live-update'
 import {
   TOPIC_OLDER_PAGE_SIZE,
   TOPIC_PAGE_SIZE,
@@ -450,8 +451,8 @@ export function usePortalChat(scope: ChatScope, accountId: string | null, contac
       }
       if (!belongs(updated)) return
       // Content edit: update the message in place so the client sees the corrected text.
-      setMessages(prev => prev.map(m => m.id === updated.id ? { ...m, ...updated } : m))
-      setTab(prev => ({ ...prev, first: prev.first ? prev.first.map(m => m.id === updated.id ? { ...m, ...updated } : m) : prev.first, older: prev.older.map(m => m.id === updated.id ? { ...m, ...updated } : m) }))
+      setMessages(prev => prev.map(m => m.id === updated.id ? mergeLiveUpdate(m, updated) : m))
+      setTab(prev => ({ ...prev, first: prev.first ? prev.first.map(m => m.id === updated.id ? mergeLiveUpdate(m, updated) : m) : prev.first, older: prev.older.map(m => m.id === updated.id ? mergeLiveUpdate(m, updated) : m) }))
     }
 
     // One subscription per scope filter (account_id and/or contact_id). The

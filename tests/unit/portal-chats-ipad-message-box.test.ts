@@ -79,7 +79,8 @@ describe('wiring in the Portal Chats page', () => {
 
   it('the yellow card above the box is drawn only on the website, from the same trigger as the pop-up notice', () => {
     expect(page).toContain('{!appMode && showAudienceNotice && (')
-    expect(page).toContain('const showAudienceNotice = !sendingToClosedAccount && !!audienceTargetId && (audienceTotal > 1 || selectedThreadMembers.length > 1 || addressedToOptions.length > 1)')
+    // one shared rule (lib/portal-chats/audience-count.ts, tested for behaviour in portal-chats-review-fixes.test.ts)
+    expect(page).toContain('const showAudienceNotice = shouldShowAudienceNotice({ closed: sendingToClosedAccount, hasTarget: !!audienceTargetId, total: audienceTotal,')
   })
 
   it('the Before-you-send pop-up carries the head-count in the app, for company chats as well as a person\'s chat', () => {
@@ -91,7 +92,7 @@ describe('wiring in the Portal Chats page', () => {
   })
 
   it('the notice never appears for a closed company (sending is blocked there anyway)', () => {
-    expect(page).toMatch(/const showAudienceNotice = !sendingToClosedAccount &&/)
+    expect(page).toMatch(/const showAudienceNotice = shouldShowAudienceNotice\(\{ closed: sendingToClosedAccount,/)
   })
 })
 

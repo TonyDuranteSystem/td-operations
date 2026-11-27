@@ -1264,7 +1264,8 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                     )}
                     {!isOwn && (
                       <p className="text-[10px] font-medium text-zinc-500 mb-0.5">
-                        {msg.sender_type === 'admin' || msg.sender_type === 'system' ? t('chat.team') : (msg.sender_name || t('chat.you'))}
+                        {/* a staff message shows the team member's first name when the server knows it, else "Team" (Antonio, 2026-11-26) */}
+                        {msg.sender_type === 'admin' ? (msg.sender_name?.trim() || t('chat.team')) : msg.sender_type === 'system' ? t('chat.team') : (msg.sender_name || t('chat.you'))}
                       </p>
                     )}
                     {isOwn && msg.sender_name && msg.sender_id !== userId && (
@@ -1284,7 +1285,7 @@ export function PortalChat({ scope, accountId, contactId, userId, locale = 'en',
                         onClick={() => scrollToPinned(replyMsg.id)}
                       >
                         <p className="font-medium text-[10px] mb-0.5">
-                          {replyMsg.sender_type === 'admin' ? t('chat.team') : (replyMsg.sender_name || t('chat.you'))}
+                          {replyMsg.sender_type === 'admin' ? (replyMsg.sender_name?.trim() || t('chat.team')) : (replyMsg.sender_name || t('chat.you'))}
                         </p>
                         <p className="line-clamp-2">{replyMsg.message || (hasVoiceAttachment(replyMsg.attachments) ? `🎤 ${t('portalChat.voice.note')}` : '[Attachment]')}</p>
                       </div>

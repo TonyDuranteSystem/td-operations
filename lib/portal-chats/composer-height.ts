@@ -29,3 +29,9 @@ export function composerHeight(scrollHeight: number, cap: number): number {
 export function bucketVisibleHeight(height: number): number {
   return Math.max(10, Math.round(height / 10) * 10)
 }
+
+/** A usable, rounded reading of the visible height, or null when the reading says nothing (0, negative, not a number: page hidden or not laid out yet). */
+export function usableVisibleHeight(raw: unknown): number | null {
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) return null
+  return bucketVisibleHeight(raw)
+}

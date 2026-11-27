@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { bucketVisibleHeight } from '@/lib/portal-chats/composer-height'
+import { usableVisibleHeight } from '@/lib/portal-chats/composer-height'
 
 /**
  * The height of what the person can actually see right now, in px (null until measured, and always null when `enabled` is false).
@@ -15,7 +15,11 @@ export function useVisibleHeight(enabled: boolean): number | null {
       return
     }
     const vv = window.visualViewport
-    const read = () => setHeight(bucketVisibleHeight(vv?.height ?? window.innerHeight))
+    const read = () => {
+      // a zero / missing reading (page hidden, not laid out yet) says nothing about the screen: keep the last good value instead of squeezing the box
+      const usable = usableVisibleHeight(vv?.height ?? window.innerHeight)
+      if (usable !== null) setHeight(usable)
+    }
     read()
     vv?.addEventListener('resize', read)
     window.addEventListener('resize', read)

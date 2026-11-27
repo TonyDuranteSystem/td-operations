@@ -48,6 +48,9 @@ import { HelpDot } from '@/components/help/help-dot'
 import { useAppMode } from '@/lib/app-mode/app-mode-context'
 import { useVisibleHeight } from '@/lib/app-mode/use-visible-height'
 import { composerMaxHeight, composerHeight } from '@/lib/portal-chats/composer-height'
+import { defaultReplyCompanyId, replyTargetIsFrozen, savedDraftKeepsPersonal } from '@/lib/portal-chats/default-reply-company'
+import { audienceHeadCount, shouldShowAudienceNotice } from '@/lib/portal-chats/audience-count'
+import { mergeLiveUpdate } from '@/lib/portal-chats/merge-live-update'
 import { AppYouButton } from '@/components/app-mode/app-you-button'
 import { PhoneConvNav, PhoneViewStrip, PhoneMoreSheet, PhoneReplyToLine, PhoneReplyToSheet, PhonePlusButton, PhonePlusSheet } from '@/components/portal-chats/app-phone-chrome'
 import { AttachChoiceMenu } from '@/components/scan/attach-choice-menu'
@@ -643,6 +646,10 @@ export default function PortalChatsPage() {
   const [unreadBelowCount, setUnreadBelowCount] = useState(0)
   const internalMessagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  // "Send as" (a person's chat): staff's own pick is kept until they open another conversation. Until they pick, the reply starts where the client's
+  // latest message was written (dev job 8d077f3b, Antonio's choice "A1"; see lib/portal-chats/default-reply-company.ts).
+  const companyPickedRef = useRef(false)
+  const chooseCompany = (id: string | null) => { companyPickedRef.current = true; setSelectedCompanyId(id) }
   const adminFileRef = useRef<HTMLInputElement>(null)
   // the paperclip opens a small menu: Scan document (camera -> one PDF) or Photo or file
   const [attachMenu, setAttachMenu] = useState(false)
@@ -1057,6 +1064,24 @@ export default function PortalChatsPage() {
     [olderMessages, messages],
   )
 
+  // A new conversation starts with nobody's pick, so the reply follows the client (dev job 8d077f3b) — EXCEPT when it reopens with an unsent
+  // saved draft: then it keeps the safe Personal start (the draft was written before the target was remembered). Declared after the draft-restore
+  // effect above, so the restored draft is already in the map when this runs.
+  useEffect(() => {
+    companyPickedRef.current = savedDraftKeepsPersonal(clientThreadKey ? clientDraftsRef.current?.get(clientThreadKey) : null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAccountId, selectedContactId])
+
+  // Person's chat only: until staff pick, the reply starts on the company (or Personal) of the client's LATEST message. A company's own chat has
+  // nothing to choose. Re-runs when a newer client message arrives, so the default keeps following the client; an explicit pick always wins, and
+  // while a reply is in progress (typed words, a staged file or voice note, a recording, the open pop-up) the target is left alone.
+  const replyTargetFrozen = replyTargetIsFrozen({ replyText, stagedFileCount: pendingAdminFiles.length, recording: isRecording, sendPopupOpen: sendConfirmOpen })
+  useEffect(() => {
+    if (!selectedContactId || selectedAccountId || companyPickedRef.current || replyTargetFrozen) return
+    const fallback = defaultReplyCompanyId((messages ?? []).filter(m => m.contact_id === selectedContactId), selectedThreadCompanies)
+    setSelectedCompanyId(prev => (prev === fallback ? prev : fallback))
+  }, [messages, selectedThreadCompanies, selectedContactId, selectedAccountId, replyTargetFrozen])
+
   // Reset pagination whenever the selected thread changes.
   useEffect(() => {
     setOlderMessages([])
@@ -1460,15 +1485,15 @@ export default function PortalChatsPage() {
       const updated = payload.new as ChatMessage
       queryClient.setQueryData<ChatMessage[]>(
         ['portal-chat-messages', threadId],
-        (prev) => prev ? prev.map(m => m.id === updated.id ? { ...m, ...updated } : m) : prev
+        (prev) => prev ? prev.map(m => m.id === updated.id ? mergeLiveUpdate(m, updated) : m) : prev
       )
       // The same change for the topic tabs' own pages (a delete / pin / edit / read of a message older than the window), and a coalesced
       // reload of the topic list (its unread counts and tabs can change).
       queryClient.setQueriesData<ChatMessage[]>(
         { queryKey: ['portal-chat-messages', threadId, 'topic'] },
-        (prev) => prev ? prev.map(m => m.id === updated.id ? { ...m, ...updated } : m) : prev,
+        (prev) => prev ? prev.map(m => m.id === updated.id ? mergeLiveUpdate(m, updated) : m) : prev,
       )
-      setTabOlder(prev => prev.pages.some(m => m.id === updated.id) ? { ...prev, pages: prev.pages.map(m => m.id === updated.id ? { ...m, ...updated } : m) } : prev)
+      setTabOlder(prev => prev.pages.some(m => m.id === updated.id) ? { ...prev, pages: prev.pages.map(m => m.id === updated.id ? mergeLiveUpdate(m, updated) : m) } : prev)
       // A read mark on a topic that already shows 0 unread (we zeroed it ourselves when we marked it read) changes nothing in the list.
       const listed = queryClient.getQueryData<TopicSummaryEntry[] | null>(['portal-chat-topics', threadId])?.find(e => e.topic === topicKeyOf(updated.topic))
       if (updated.deleted_at || !listed || listed.unread > 0) {
@@ -2584,13 +2609,18 @@ export default function PortalChatsPage() {
   // (2026-08-07 leak review, dev job 4bad3094). Person-scope sends (no chip,
   // no account thread) have no target here and show no warning.
   const audienceTargetId = selectedAccountId || selectedCompanyId
-  const { data: sendAudience } = useQuery<{ contact_count: number; chat_teammate_count: number }>({
+  const { data: sendAudience } = useQuery<{ contact_count: number; member_count?: number; chat_teammate_count: number }>({
     queryKey: ['portal-chat-audience', audienceTargetId],
     queryFn: () => fetch(`/api/portal/chat/audience?account_id=${audienceTargetId}`).then(r => r.json()),
     enabled: !!audienceTargetId,
     staleTime: 5 * 60_000,
   })
-  const audienceTotal = (sendAudience?.contact_count ?? 0) + (sendAudience?.chat_teammate_count ?? 0)
+  // The number of members is the LARGER of the linked contacts and the real roster (dev job 8d077f3b): a company can have a thinner link list
+  // than roster, and a person's reply that defaults to such a company must still warn.
+  const audienceHeads = audienceHeadCount(sendAudience)
+  const audienceMembers = audienceHeads.members
+  const audienceTeammates = audienceHeads.teammates
+  const audienceTotal = audienceHeads.total
   const audienceTargetName = selectedAccountId
     ? (selectedName?.company ?? 'this company')
     : (selectedThreadCompanies.find(c => c.id === selectedCompanyId)?.name ?? 'this company')
@@ -2652,7 +2682,7 @@ export default function PortalChatsPage() {
   // "Who else reads this" notice. Shown as a yellow card above the message box on the website, and ONLY inside the Before-you-send pop-up in
   // the app (dev job cb02b03d: the card took a quarter of the visible screen on the iPad). Same trigger for both so the warning never
   // appears in one place and goes missing in the other.
-  const showAudienceNotice = !sendingToClosedAccount && !!audienceTargetId && (audienceTotal > 1 || selectedThreadMembers.length > 1 || addressedToOptions.length > 1)
+  const showAudienceNotice = shouldShowAudienceNotice({ closed: sendingToClosedAccount, hasTarget: !!audienceTargetId, total: audienceTotal, threadMembers: selectedThreadMembers.length, addressedToOptions: addressedToOptions.length })
 
   // Leaving a conversation clears everything that belonged to it (shared by the computer "← Back" and the phone's back arrow)
   const leaveConversation = () => {
@@ -4150,7 +4180,7 @@ export default function PortalChatsPage() {
                   onClose={() => setAppSheet(null)}
                   companies={selectedThreadCompanies.length > 0 && !selectedAccountId ? selectedThreadCompanies.map(c => ({ id: c.id, name: c.name, closed: c.closed })) : null}
                   selectedCompanyId={selectedCompanyId}
-                  onCompany={setSelectedCompanyId}
+                  onCompany={chooseCompany}
                   topics={adminTopicOrder.map(key => ({ key, label: key === '' ? 'General' : key, unread: adminUnreadByTopic[key] ?? 0 }))}
                   activeTopic={adminActiveTopic ?? ''}
                   onTopic={key => setAdminActiveTopic(key === '' ? null : key)}
@@ -4836,9 +4866,11 @@ export default function PortalChatsPage() {
                             </span>
                           )
                         })()}
-                        {/* Sender label for admin messages — always "TD Team", never a staff/member name */}
+                        {/* Sender label for admin messages: the team member's first name (Antonio, Luca, Jodi) when we know who wrote it, else "TD Team".
+                            Never a company member's name: on a staff send the row's contact is only a routing tag (dev job 8d077f3b; the server
+                            sets sender_name for staff rows from the sender's own login, never from that contact). */}
                         {isAdmin && (
-                          <p className="text-[10px] font-semibold text-blue-100 mb-0.5">TD Team</p>
+                          <p className="text-[10px] font-semibold text-blue-100 mb-0.5" data-testid="staff-sender-name">{msg.sender_name?.trim() || 'TD Team'}</p>
                         )}
                         {/* Sender name for client messages (shows member name in MMLLC) */}
                         {!isAdmin && msg.sender_name && (
@@ -5275,7 +5307,7 @@ export default function PortalChatsPage() {
                     <FastTooltip key={c.id} label={c.closed ? `${c.name} — CLOSED company. The client cannot see messages sent here.` : c.name}>
                       <button
                         type="button"
-                        onClick={() => setSelectedCompanyId(c.id)}
+                        onClick={() => chooseCompany(c.id)}
                         className={cn(
                           'px-2.5 py-0.5 text-[11px] rounded-full transition-colors max-w-[200px] truncate inline-flex items-center gap-1',
                           c.closed
@@ -5297,7 +5329,7 @@ export default function PortalChatsPage() {
                   <FastTooltip label="Only this person (and staff) can see the reply — no company thread.">
                     <button
                       type="button"
-                      onClick={() => setSelectedCompanyId(null)}
+                      onClick={() => chooseCompany(null)}
                       className={cn(
                         'px-2.5 py-0.5 text-[11px] rounded-full transition-colors',
                         !selectedCompanyId
@@ -5344,9 +5376,9 @@ export default function PortalChatsPage() {
                   <AlertCircle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
                   <p className="text-[12px] text-amber-800 leading-snug">
                     Visible to everyone in <span className="font-semibold">{audienceTargetName}</span>:{' '}
-                    {sendAudience?.contact_count ?? 0} member{(sendAudience?.contact_count ?? 0) === 1 ? '' : 's'}
-                    {(sendAudience?.chat_teammate_count ?? 0) > 0 && (
-                      <> + {sendAudience?.chat_teammate_count} portal teammate{(sendAudience?.chat_teammate_count ?? 0) === 1 ? '' : 's'}</>
+                    {audienceMembers} member{audienceMembers === 1 ? '' : 's'}
+                    {audienceTeammates > 0 && (
+                      <> + {audienceTeammates} portal teammate{audienceTeammates === 1 ? '' : 's'}</>
                     )}
                     . Don&apos;t send anything meant only for one person{selectedAccountId ? '' : ' — use “Personal” for that'}.
                   </p>
@@ -6031,7 +6063,7 @@ export default function PortalChatsPage() {
                       <button
                         key={c.id}
                         type="button"
-                        onClick={() => setSelectedCompanyId(c.id)}
+                        onClick={() => chooseCompany(c.id)}
                         className={cn(
                           'px-3 py-1.5 text-sm rounded-full border transition-colors max-w-[220px] truncate',
                           c.closed
@@ -6044,7 +6076,7 @@ export default function PortalChatsPage() {
                     ))}
                     <button
                       type="button"
-                      onClick={() => setSelectedCompanyId(null)}
+                      onClick={() => chooseCompany(null)}
                       className={cn(
                         'px-3 py-1.5 text-sm rounded-full border transition-colors',
                         !selectedCompanyId ? 'bg-zinc-900 text-white border-zinc-900' : 'border-zinc-300 text-zinc-700 hover:bg-zinc-50'
@@ -6055,8 +6087,8 @@ export default function PortalChatsPage() {
                   </div>
                   {!appMode && !sendingToClosedAccount && !!audienceTargetId && audienceTotal > 1 && (
                     <p className="text-[11px] text-amber-700 mt-1.5">
-                      Visible to everyone in {audienceTargetName}: {sendAudience?.contact_count ?? 0} member{(sendAudience?.contact_count ?? 0) === 1 ? '' : 's'}
-                      {(sendAudience?.chat_teammate_count ?? 0) > 0 ? ` + ${sendAudience?.chat_teammate_count} portal teammate${(sendAudience?.chat_teammate_count ?? 0) === 1 ? '' : 's'}` : ''}.
+                      Visible to everyone in {audienceTargetName}: {audienceMembers} member{audienceMembers === 1 ? '' : 's'}
+                      {audienceTeammates > 0 ? ` + ${audienceTeammates} portal teammate${audienceTeammates === 1 ? '' : 's'}` : ''}.
                     </p>
                   )}
                 </div>
@@ -6138,9 +6170,9 @@ export default function PortalChatsPage() {
                     {audienceTotal > 1 ? (
                       <>
                         <span className="font-semibold">{audienceTotal} people see this:</span>{' '}
-                        {sendAudience?.contact_count ?? 0} member{(sendAudience?.contact_count ?? 0) === 1 ? '' : 's'}
-                        {(sendAudience?.chat_teammate_count ?? 0) > 0 && (
-                          <> + {sendAudience?.chat_teammate_count} portal teammate{(sendAudience?.chat_teammate_count ?? 0) === 1 ? '' : 's'}</>
+                        {audienceMembers} member{audienceMembers === 1 ? '' : 's'}
+                        {audienceTeammates > 0 && (
+                          <> + {audienceTeammates} portal teammate{audienceTeammates === 1 ? '' : 's'}</>
                         )}
                         .
                       </>
