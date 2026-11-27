@@ -1,0 +1,6 @@
+{
+  "title": "Portal Chats: an unsent reply is better protected when you leave a chat and come back",
+  "tag": "behind-the-scenes",
+  "text": "A safeguard so the reply you were typing in a chat is never overwritten by an empty box when the chat reopens, and so words typed in one chat can never be saved under another. Found while testing, where it showed up when returning to Portal Chats after opening a contact page; nothing changes on screen.",
+  "points": []
+}

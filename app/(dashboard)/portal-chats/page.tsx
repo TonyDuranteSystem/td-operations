@@ -51,6 +51,7 @@ import { composerMaxHeight, composerHeight } from '@/lib/portal-chats/composer-h
 import { defaultReplyCompanyId, replyTargetIsFrozen, savedDraftKeepsPersonal } from '@/lib/portal-chats/default-reply-company'
 import { audienceHeadCount, shouldShowAudienceNotice } from '@/lib/portal-chats/audience-count'
 import { mergeLiveUpdate } from '@/lib/portal-chats/merge-live-update'
+import { restoreClientDraft, persistClientDraft } from '@/lib/portal-chats/draft-memory'
 import { AppYouButton } from '@/components/app-mode/app-you-button'
 import { PhoneConvNav, PhoneViewStrip, PhoneMoreSheet, PhoneReplyToLine, PhoneReplyToSheet, PhonePlusButton, PhonePlusSheet } from '@/components/portal-chats/app-phone-chrome'
 import { AttachChoiceMenu } from '@/components/scan/attach-choice-menu'
@@ -819,19 +820,15 @@ export default function PortalChatsPage() {
   }, [clientThreadKey, chatViewMode, sidebarView, cancelRecording])
   useEffect(() => {
     const draftsMap = clientDraftsRef.current!
-    let saved = clientThreadKey ? draftsMap.get(clientThreadKey) : undefined
-    // Not yet touched this tab-session — check this ONE conversation's own
-    // localStorage key (per-conversation storage, 2026-08-30 redesign).
-    if (!saved && clientThreadKey) {
-      const persisted = loadPersistedChatDraft(clientThreadKey)
-      if (persisted) {
-        saved = { replyText: persisted.replyText, replyToMsg: persisted.replyToMsg, pendingAdminFiles: [] }
-        draftsMap.set(clientThreadKey, saved)
-      }
-    }
-    setReplyText(saved?.replyText ?? '')
-    setReplyToMsg(saved?.replyToMsg ?? null)
-    setPendingAdminFiles(saved?.pendingAdminFiles ?? [])
+    // The in-memory draft, else this ONE conversation's own localStorage key (per-conversation storage, 2026-08-30 redesign).
+    const restored = restoreClientDraft(clientThreadKey, draftsMap, loadPersistedChatDraft)
+    setReplyText(restored.replyText)
+    setReplyToMsg(restored.replyToMsg)
+    setPendingAdminFiles(restored.pendingAdminFiles)
+    // The snapshot the cleanup below saves is refreshed only AFTER the next render, so until then it still holds the previous render's words
+    // (empty on a fresh page). React runs that cleanup once right after every mount in development (strict mode): it used to save the stale
+    // snapshot over the real draft, erasing it (dev job f1f72ce2). Put the restored draft into the snapshot now so the cleanup saves it as it is.
+    clientDraftSnapshotRef.current = restored
     // AI output is regenerable, not user-authored — never carry a stale
     // suggestion (or a stale "still generating" spinner) into a different
     // client's box. handleSuggest/handlePolish additionally guard their own
@@ -844,12 +841,7 @@ export default function PortalChatsPage() {
     // chat composer already uses (components/portal/portal-chat.tsx) for the
     // identical problem, so a true unload is still caught even when the
     // switch-away cleanup below doesn't get to run in time.
-    const persistCurrentDraft = () => {
-      if (!clientThreadKey) return
-      const snapshot = { ...clientDraftSnapshotRef.current }
-      draftsMap.set(clientThreadKey, snapshot)
-      savePersistedChatDraft(clientThreadKey, { replyText: snapshot.replyText, replyToMsg: snapshot.replyToMsg })
-    }
+    const persistCurrentDraft = () => persistClientDraft(clientThreadKey, draftsMap, clientDraftSnapshotRef.current, savePersistedChatDraft)
     window.addEventListener('beforeunload', persistCurrentDraft)
     return () => {
       window.removeEventListener('beforeunload', persistCurrentDraft)
@@ -868,6 +860,8 @@ export default function PortalChatsPage() {
     const saved = selectedThreadId ? draftsMap.get(selectedThreadId) : undefined
     setInternalReplyText(saved?.internalReplyText ?? '')
     setInternalPendingFile(saved?.internalPendingFile ?? null)
+    // same reason as the client composer above: the cleanup must save the draft that was just restored, not the previous render's stale snapshot
+    internalDraftSnapshotRef.current = { internalReplyText: saved?.internalReplyText ?? '', internalPendingFile: saved?.internalPendingFile ?? null }
     return () => {
       if (selectedThreadId) {
         draftsMap.set(selectedThreadId, { ...internalDraftSnapshotRef.current })
