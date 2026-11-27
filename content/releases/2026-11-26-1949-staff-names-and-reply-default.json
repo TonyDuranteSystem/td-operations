@@ -1,7 +1,7 @@
 {
   "title": "Portal Chats: each reply shows who wrote it, and starts where the client wrote",
   "tag": "new",
-  "text": "Staff messages now show the first name of the team member who sent them (Antonio, Luca or Jodi) instead of \"TD Team\", in the CRM, in TD Social and in the client's own portal chat. Older messages show the name too. Messages from the shared support login stay \"TD Team\", and WhatsApp replies are unchanged. In a person's chat, the reply now starts on the company or Personal where the client's latest message was written, instead of always Personal. It follows the client until you pick one yourself, and it never moves while you are typing.",
+  "text": "Staff messages now show the first name of the team member who sent them (Antonio, Luca or Jodi) instead of \"TD Team\", in the CRM, in TD Social and in the client's own portal chat. New messages carry the sender's name, and older ones from Luca and Jodi show theirs. Automatic messages and older messages from the shared logins stay \"TD Team\", and WhatsApp replies are unchanged. In a person's chat, the reply now starts on the company or Personal where the client last wrote, follows the client until you pick one yourself, and never moves while you write. The \"who sees this\" notice now counts everyone on the company's member list.",
   "points": [
     "Open a chat: staff messages show Antonio, Luca or Jodi",
     "Open a person's chat: \"Send as\" starts where the client last wrote",

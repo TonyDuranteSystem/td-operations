@@ -45,3 +45,31 @@ export function defaultReplyCompanyId(
   if (!company || company.closed) return null
   return company.id
 }
+
+export interface ReplyInProgress {
+  /** what is typed in the reply box */
+  replyText: string
+  /** files and voice notes waiting to be sent (a voice note is a staged file) */
+  stagedFileCount: number
+  /** a voice note is being recorded right now */
+  recording: boolean
+  /** the "Before you send" pop-up is open */
+  sendPopupOpen: boolean
+}
+
+/**
+ * True while staff are in the middle of a reply: the default must not move the target under words, a file, a recording or an open pop-up
+ * (Bug-Hunter 2026-11-26: the first version only looked at typed text, so a voice note or a file could change where it was going).
+ */
+export function replyTargetIsFrozen(r: ReplyInProgress): boolean {
+  return r.replyText.trim().length > 0 || r.stagedFileCount > 0 || r.recording || r.sendPopupOpen
+}
+
+/**
+ * A conversation reopened with an unsent draft keeps the safe Personal start instead of the client-follows default: the draft was written
+ * before the target was remembered, so jumping it to a company under the saved words would be a silent change (Bug-Hunter 2026-11-26).
+ */
+export function savedDraftKeepsPersonal(draft: { replyText?: string | null; pendingAdminFiles?: readonly unknown[] | null } | null | undefined): boolean {
+  if (!draft) return false
+  return (draft.replyText ?? '').trim().length > 0 || (draft.pendingAdminFiles?.length ?? 0) > 0
+}

@@ -5,7 +5,7 @@ import { supabaseAdmin } from '@/lib/supabase-admin'
 import { getClientContactId, getClientAccountIds } from '@/lib/portal-auth'
 import { getTeammateScopeOrNull, requirePortalCapability } from '@/lib/portal/team/gate'
 import { pickChatSenderName } from '@/lib/portal/chat-sender-name'
-import { adminSenderName, staffFirstName } from '@/lib/portal/staff-display-name'
+import { adminSenderName, senderIdsToName, staffFirstName, staffRowSenderName } from '@/lib/portal/staff-display-name'
 import { staffLabelsFor } from '@/lib/portal/staff-labels'
 import { createPortalNotification, notifyClientOfAdminMessage, waitForClientAlert } from '@/lib/portal/notifications'
 import { isPortalAdminEmailEnabled } from '@/lib/settings'
@@ -339,10 +339,10 @@ export async function GET(request: NextRequest) {
 
   // Which team member wrote each staff message (dev job 8d077f3b). Older staff rows carry a sender_id but no name: name them from the login
   // (remembered ten minutes). Looked up only for staff rows that have no stored name, so a page of recent messages costs nothing extra.
+  // The shared automation sender id is left out (reminders, welcome notes, Claude's MCP send, the AI worker … all post under it, so those rows stay
+  // "TD Team"); a message a person typed stores their name at send time instead.
   const staffNames = await staffLabelsFor(
-    (data ?? [])
-      .filter(m => m.sender_type === 'admin' && !String((m as { sender_name?: string | null }).sender_name ?? '').trim())
-      .map(m => m.sender_id as string | null),
+    senderIdsToName((data ?? []).map(m => ({ sender_type: m.sender_type, sender_id: m.sender_id, sender_name: (m as { sender_name?: string | null }).sender_name }))),
   )
 
   // Flatten contact name into sender_name for display
@@ -372,7 +372,7 @@ export async function GET(request: NextRequest) {
       // A STAFF row never takes the contact's name: on a staff send that contact is only a routing tag (one of the company's members), not the
       // author. It shows the sender's first name (stored at send time, else worked out from the login) or nothing, and the screen says "TD Team".
       sender_name: msg.sender_type === 'admin'
-        ? adminSenderName((rest as { sender_name?: string | null }).sender_name, staffNames.get(msg.sender_id as string) ?? null)
+        ? staffRowSenderName({ sender_id: msg.sender_id, sender_name: (rest as { sender_name?: string | null }).sender_name }, staffNames)
         : pickChatSenderName(contact?.full_name, (rest as { sender_name?: string | null }).sender_name),
       // "Addressed to" label (dev job 08a8be62; frozen-snapshot column added
       // dev job 34bd9009) — staff-facing display of who a company-scoped

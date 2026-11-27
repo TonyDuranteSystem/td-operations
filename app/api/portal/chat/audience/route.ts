@@ -12,6 +12,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { isDashboardUser } from '@/lib/auth'
 import { accountAudience } from '@/lib/portal/admin-send-scope'
+import { accountMemberCount } from '@/lib/portal/account-member-count'
 
 export async function GET(request: NextRequest) {
   const supabase = createClient()
@@ -25,9 +26,11 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'account_id required' }, { status: 400 })
   }
 
-  const audience = await accountAudience(accountId)
+  const [audience, memberCount] = await Promise.all([accountAudience(accountId), accountMemberCount(accountId)])
   return NextResponse.json({
     contact_count: audience.contactCount,
+    // the real roster (members): a company can have more members than linked contacts, and the notice must not say less than the roster does
+    member_count: memberCount,
     chat_teammate_count: audience.chatTeammateCount,
   })
 }

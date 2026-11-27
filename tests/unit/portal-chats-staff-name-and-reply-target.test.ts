@@ -152,8 +152,11 @@ describe('wiring', () => {
 
   it('reading messages: a staff row takes its name from the row or the login, never from the row\'s contact', () => {
     expect(route).toContain("msg.sender_type === 'admin'")
-    expect(route).toContain('adminSenderName((rest as { sender_name?: string | null }).sender_name, staffNames.get(msg.sender_id as string) ?? null)')
+    // the name comes from staffRowSenderName (stored name, else the row's own login, never the automation sender id, never the contact);
+    // behaviour is tested in portal-chats-review-fixes.test.ts
+    expect(route).toContain('staffRowSenderName({ sender_id: msg.sender_id, sender_name: (rest as { sender_name?: string | null }).sender_name }, staffNames)')
     expect(route).toContain('await staffLabelsFor(')
+    expect(route).toContain('senderIdsToName(')
   })
 
   it('sending: the staff member\'s first name is kept on the row and returned, so a live message already carries it', () => {
@@ -176,8 +179,9 @@ describe('wiring', () => {
     expect(page).toContain('const chooseCompany = (id: string | null) => { companyPickedRef.current = true; setSelectedCompanyId(id) }')
     expect((page.match(/chooseCompany\(/g) ?? []).length).toBe(4) // two company chips + two Personal chips (the website row and the pop-up)
     expect(page).toContain('onCompany={chooseCompany}')
-    expect(page).toContain('useEffect(() => { companyPickedRef.current = false }, [selectedAccountId, selectedContactId])')
-    expect(page).toContain('if (!selectedContactId || selectedAccountId || companyPickedRef.current || replyIsBeingTyped) return')
+    expect(page).toContain('companyPickedRef.current = savedDraftKeepsPersonal(clientThreadKey ? clientDraftsRef.current?.get(clientThreadKey) : null)')
+    expect(page).toContain('if (!selectedContactId || selectedAccountId || companyPickedRef.current || replyTargetFrozen) return')
+    expect(page).toContain('replyTargetIsFrozen({ replyText, stagedFileCount: pendingAdminFiles.length, recording: isRecording, sendPopupOpen: sendConfirmOpen })')
     expect(page).toContain('defaultReplyCompanyId((messages ?? []).filter(m => m.contact_id === selectedContactId), selectedThreadCompanies)')
   })
 
