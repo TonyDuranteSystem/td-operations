@@ -1,0 +1,18 @@
+{
+  "title": "Booking: a new \"People\" choice for someone who is just a contact",
+  "tag": "new",
+  "text": "On Booking, Make a link, there is a new choice, People, for someone who is just a contact (no lead, no company). Write their name and email: making the link saves them as a contact, or finds them if they already are one. Their booked call is saved on their contact page, under Calls, once the Booking switch is fully on (until then only the link and the contact are made). Someone new no longer offers Client, because a brand-new person cannot already be a client. A contact picked from the list who is only a contact is now offered People instead of Lead.",
+  "points": [
+    "Make a link, then choose People under Who is it for",
+    "Write the name and the email, then Make the link",
+    "The person appears in Contacts, with no lead and no company",
+    "Under Someone new, the Client kind is gone"
+  ],
+  "stepsTitle": "Making a link for someone who is just a contact",
+  "steps": [
+    { "name": "Choose People", "detail": "Under Who is it for, next to Someone new." },
+    { "name": "Name and email", "detail": "Both are needed: the email matches their booking to them." },
+    { "name": "Contact saved", "detail": "No lead and no company. If they already are a contact, that one is used.", "flag": "new" },
+    { "name": "Call saved", "detail": "Their booked call goes on their contact page, under Calls." }
+  ]
+}

@@ -42,6 +42,15 @@ export function parseKindRule(metadata: unknown): KindParse {
   }
 }
 
+/**
+ * Is this kind offered when the link is for SOMEONE NEW (not yet in the system)? An optional extra in the kind's metadata, `for_new_person: false` = no.
+ * Client and People say no: a brand-new person cannot already be a client, and a "People" link is for a person who is only a contact. Anything else (absent,
+ * true, a kind added through a generic tool) is offered. It lives beside the rule, NOT inside it, so it is never pinned on a link and the webhook never reads it.
+ */
+export function kindOfferedToNewPerson(metadata: unknown): boolean {
+  return !(isRec(metadata) && metadata.for_new_person === false)
+}
+
 /** What is stored on the link row. `v` lets a later change of the rule's shape be told apart. */
 export interface RuleSnapshot {
   v: 1
