@@ -1,0 +1,10 @@
+{
+  "title": "TD Social on the iPad and iPhone: the message box stays in view while you type",
+  "tag": "fixed",
+  "text": "With the keyboard open, the message box now stops growing at about a third of the screen above the keyboard and scrolls inside itself, so the line you are typing is always visible. In the app, the yellow \"Visible to everyone\" card above the box is gone, which gives the messages you are answering more room. The same warning, with how many people will see the message, now shows in the \"Before you send\" window next to \"Addressed to\". The website on a computer is unchanged.",
+  "points": [
+    "Type a long message: the box scrolls and the last line stays in view",
+    "Tap send: \"Before you send\" shows how many people will see the message"
+  ],
+  "screenshot": "ipad-message-box.png"
+}
